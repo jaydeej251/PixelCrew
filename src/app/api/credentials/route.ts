@@ -7,13 +7,18 @@ export async function POST(req: Request) {
   const body = await req.json();
   const { workspaceId, provider, label, apiKey, baseUrl } = body;
 
+  const trimmedKey = apiKey?.trim();
+  if (provider !== "ollama" && !trimmedKey) {
+    return NextResponse.json({ error: "API key is required" }, { status: 400 });
+  }
+
   const cred = await prisma.providerCredential.create({
     data: {
       workspaceId,
       provider: provider as ProviderType,
       label: label ?? provider,
-      encryptedKey: apiKey ? encrypt(apiKey) : null,
-      baseUrl: baseUrl ?? null,
+      encryptedKey: trimmedKey ? encrypt(trimmedKey) : null,
+      baseUrl: baseUrl?.trim() ?? null,
     },
   });
 
@@ -29,4 +34,11 @@ export async function GET(req: Request) {
     select: { id: true, provider: true, label: true, baseUrl: true, createdAt: true },
   });
   return NextResponse.json(creds);
+}
+
+export async function DELETE(req: Request) {
+  const id = new URL(req.url).searchParams.get("id");
+  if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
+  await prisma.providerCredential.delete({ where: { id } });
+  return NextResponse.json({ ok: true });
 }

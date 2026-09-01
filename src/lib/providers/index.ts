@@ -1,34 +1,29 @@
 import type { ProviderType } from "@prisma/client";
-import { decrypt } from "../crypto";
+import { resolveApiKey, getEnvProviderKey } from "../run-setup";
 import { MockProvider } from "./mock";
 import { createOpenAICompatible } from "./openai-compatible";
 import type { LLMProvider, ProviderConfig } from "./types";
 export { estimateCost } from "./types";
-
-function getDecryptedKey(encrypted?: string | null): string | undefined {
-  if (!encrypted) return undefined;
-  return decrypt(encrypted);
-}
 
 export function resolveProviderConfig(
   provider: ProviderType,
   model: string,
   credential?: { encryptedKey?: string | null; baseUrl?: string | null },
 ): ProviderConfig {
-  const decryptKey = getDecryptedKey(credential?.encryptedKey);
+  const { key: apiKey } = resolveApiKey(provider, credential);
 
   switch (provider) {
     case "openrouter":
       return {
         provider,
-        apiKey: decryptKey ?? process.env.OPENROUTER_API_KEY,
+        apiKey,
         baseUrl: "https://openrouter.ai/api/v1",
         model,
       };
     case "google":
       return {
         provider,
-        apiKey: decryptKey ?? process.env.GOOGLE_API_KEY,
+        apiKey,
         baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
         model,
       };
@@ -36,14 +31,18 @@ export function resolveProviderConfig(
       return {
         provider,
         apiKey: "ollama",
-        baseUrl: credential?.baseUrl ?? process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434/v1",
+        baseUrl:
+          credential?.baseUrl?.trim() ||
+          getEnvProviderKey("ollama") ||
+          process.env.OLLAMA_BASE_URL?.trim() ||
+          "http://127.0.0.1:11434/v1",
         model,
       };
     case "openai_compatible":
     case "anthropic":
       return {
         provider,
-        apiKey: decryptKey ?? process.env.OPENAI_API_KEY,
+        apiKey,
         baseUrl: credential?.baseUrl ?? undefined,
         model,
       };
@@ -60,5 +59,13 @@ export function createProvider(
   if (config.provider === "mock") {
     return new MockProvider(position, taskTitle);
   }
-  return createOpenAICompatible(config);
+
+  const key = config.apiKey?.trim();
+  if (config.provider !== "ollama" && (!key || key.length < 8)) {
+    throw new Error(
+      `No valid API key for ${config.provider}. Add OPENROUTER_API_KEY or OPEN_ROUTER_KEY to .env.local and restart the dev server, or save a key in the sidebar.`,
+    );
+  }
+
+  return createOpenAICompatible({ ...config, apiKey: key });
 }

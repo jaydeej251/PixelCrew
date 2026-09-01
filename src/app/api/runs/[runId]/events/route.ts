@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 
 export async function GET(
@@ -7,21 +6,50 @@ export async function GET(
 ) {
   const { runId } = await params;
   const encoder = new TextEncoder();
-  let lastId: string | null = null;
+  let lastCreatedAt: Date | null = null;
+  let lastId = "";
 
   const stream = new ReadableStream({
     async start(controller) {
-      const send = (data: unknown) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+      let closed = false;
+      let interval: ReturnType<typeof setInterval> | null = null;
+
+      const safeClose = () => {
+        if (closed) return;
+        closed = true;
+        if (interval) clearInterval(interval);
+        try {
+          controller.close();
+        } catch {
+          // Stream already closed (e.g. client navigated away)
+        }
       };
 
-      const poll = async () => {
+      const send = (data: unknown) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+        } catch {
+          safeClose();
+        }
+      };
+
+      const poll = async (): Promise<boolean> => {
+        if (closed) return true;
+
         const events = await prisma.runEvent.findMany({
           where: {
             runId,
-            ...(lastId ? { createdAt: { gt: (await prisma.runEvent.findUnique({ where: { id: lastId } }))?.createdAt ?? new Date(0) } } : {}),
+            ...(lastCreatedAt
+              ? {
+                  OR: [
+                    { createdAt: { gt: lastCreatedAt } },
+                    { createdAt: lastCreatedAt, id: { gt: lastId } },
+                  ],
+                }
+              : {}),
           },
-          orderBy: { createdAt: "asc" },
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         });
 
         for (const e of events) {
@@ -32,31 +60,39 @@ export async function GET(
             agentId: e.agentId,
             createdAt: e.createdAt.toISOString(),
           });
+          lastCreatedAt = e.createdAt;
           lastId = e.id;
         }
 
         const run = await prisma.run.findUnique({ where: { id: runId } });
-        if (run && ["completed", "cancelled", "failed"].includes(run.status)) {
+        if (run && ["completed", "cancelled", "failed", "paused"].includes(run.status)) {
           send({ type: "STREAM_END", runStatus: run.status });
-          controller.close();
-          return;
+          safeClose();
+          return true;
         }
+
+        return false;
       };
 
-      await poll();
-      const interval = setInterval(async () => {
-        try {
-          await poll();
-        } catch {
-          clearInterval(interval);
-          controller.close();
-        }
-      }, 800);
+      try {
+        const done = await poll();
+        if (done || closed) return;
 
-      req.signal.addEventListener("abort", () => {
-        clearInterval(interval);
-        controller.close();
-      });
+        interval = setInterval(async () => {
+          try {
+            const finished = await poll();
+            if (finished) safeClose();
+          } catch (err) {
+            console.warn("[PixelCrew] SSE poll error:", err);
+            safeClose();
+          }
+        }, 800);
+      } catch (err) {
+        console.warn("[PixelCrew] SSE start error:", err);
+        safeClose();
+      }
+
+      req.signal.addEventListener("abort", safeClose);
     },
   });
 

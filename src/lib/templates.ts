@@ -17,40 +17,46 @@ export type TeamTemplate = {
 
 export const TEAM_TEMPLATES: TeamTemplate[] = [
   {
-    id: "startup",
-    name: "Startup Product Team",
-    description: "PM, architect, 2 frontend, 2 backend, 2 QA — parallel by default.",
+    id: "lean",
+    name: "Planning council",
+    description:
+      "Workspace AI staffs Product, Senior Dev, and UI/UX to brainstorm, then an engineer builds after you publish.",
     agents: [
+      { name: "Avery", position: "dispatcher", department: "Product", room: "Executive" },
       { name: "Alex Chen", position: "project_manager", department: "Product", room: "Product" },
       { name: "Jordan Lee", position: "tech_architect", department: "Engineering", room: "Engineering" },
+      { name: "Drew Santos", position: "designer", department: "Product", room: "Product" },
+      { name: "Sam Rivera", position: "engineer", department: "Engineering", room: "Engineering" },
+    ],
+  },
+  {
+    id: "startup",
+    name: "Startup Product Team",
+    description: "Council plus specialized FE/BE and QA. Workspace AI still staffs and they still brainstorm first.",
+    agents: [
+      { name: "Avery", position: "dispatcher", department: "Product", room: "Executive" },
+      { name: "Alex Chen", position: "project_manager", department: "Product", room: "Product" },
+      { name: "Jordan Lee", position: "tech_architect", department: "Engineering", room: "Engineering" },
+      { name: "Drew Santos", position: "designer", department: "Product", room: "Product" },
       { name: "Sam Rivera", position: "frontend_engineer", department: "Engineering", room: "Engineering" },
       { name: "Casey Kim", position: "frontend_engineer", department: "Engineering", room: "Engineering" },
       { name: "Morgan Patel", position: "backend_engineer", department: "Engineering", room: "Engineering" },
       { name: "Riley Nguyen", position: "backend_engineer", department: "Engineering", room: "Engineering" },
       { name: "Taylor Brooks", position: "qa_engineer", department: "QA", room: "QA" },
-      { name: "Jamie Ortiz", position: "qa_engineer", department: "QA", room: "QA" },
     ],
   },
   {
     id: "agency",
     name: "Agency Delivery",
-    description: "PM, designer, frontend, backend for client deliverables.",
+    description: "Council plus FE/BE/QA. Same rule: the goal gets staffed and realized.",
     agents: [
+      { name: "Avery", position: "dispatcher", department: "Product", room: "Executive" },
       { name: "Avery Walsh", position: "project_manager", department: "Product", room: "Product" },
+      { name: "Jordan Lee", position: "tech_architect", department: "Engineering", room: "Engineering" },
       { name: "Drew Santos", position: "designer", department: "Product", room: "Product" },
       { name: "Quinn Hayes", position: "frontend_engineer", department: "Engineering", room: "Engineering" },
       { name: "Blake Foster", position: "backend_engineer", department: "Engineering", room: "Engineering" },
       { name: "Skyler Reed", position: "qa_engineer", department: "QA", room: "QA" },
-    ],
-  },
-  {
-    id: "research",
-    name: "Research Lab",
-    description: "PM and architect focused on discovery and documentation.",
-    agents: [
-      { name: "Eden Park", position: "project_manager", department: "Product", room: "Product" },
-      { name: "Harper Lin", position: "tech_architect", department: "Engineering", room: "Engineering" },
-      { name: "Reese Morgan", position: "qa_engineer", department: "QA", room: "QA" },
     ],
   },
 ];
