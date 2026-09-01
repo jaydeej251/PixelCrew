@@ -1,15 +1,26 @@
 import type { LLMProvider, ChatMessage, StreamChunk } from "./types";
 
 const MOCK_RESPONSES: Record<string, string[]> = {
+  dispatcher: [
+    "Got it — we'll treat this as a real product goal and staff a planning council.",
+    "Product, Senior Dev, and UI/UX will brainstorm; I'll merge their takes for you.",
+    "```json\n{\"needed\":[\"project_manager\",\"tech_architect\",\"designer\",\"engineer\"]}\n```",
+  ],
   project_manager: [
-    "Breaking down the CEO goal into a PRD outline...",
-    "Creating user stories and acceptance criteria.",
-    "Queuing frontend and backend tasks for parallel execution.",
+    "Product take: simple budget tracker for one person, weekly spend vs budget.",
+    "Features: accounts, categories, add expense, month view. Stack suggestion: Next.js + Postgres.",
   ],
   tech_architect: [
-    "Selecting Next.js + Postgres for the stack.",
-    "Defining folder structure and API contracts.",
-    "Documenting architecture decisions.",
+    "Senior take: Next.js + Postgres + Prisma. One deploy, SQLite later if we must go local.",
+    "Keep auth optional in v1 so the CEO can try it same day.",
+  ],
+  designer: [
+    "UX take: onboarding → today's spend → add expense sheet → month chart.",
+    "Empty state: 'No expenses yet — add coffee or rent to see the month.'",
+  ],
+  engineer: [
+    "Implementing the assigned work from the published plan.",
+    "Covering frontend and backend as needed for this roster.",
   ],
   frontend_engineer: [
     "Scaffolding the dashboard layout component.",
@@ -26,10 +37,9 @@ const MOCK_RESPONSES: Record<string, string[]> = {
     "Reviewing API contract against PRD requirements.",
     "Filing issues for edge cases in date handling.",
   ],
-  designer: [
-    "Sketching onboarding flow wireframes.",
-    "Defining color tokens and typography scale.",
-    "Creating component spacing guidelines.",
+  executive: [
+    "Clarifying the CEO goal and success criteria.",
+    "Drafting a concise company plan for the team.",
   ],
 };
 
@@ -46,8 +56,7 @@ export class MockProvider implements LLMProvider {
     const lines =
       MOCK_RESPONSES[this.position] ?? [
         `Working on: ${this.taskTitle}`,
-        "Staying within my job boundary.",
-        "Ready to hand off if needed.",
+        "Making a useful default so the CEO goal still moves.",
       ];
     let full = "";
     for (const line of lines) {

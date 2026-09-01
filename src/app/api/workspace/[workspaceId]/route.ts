@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { applyTemplate } from "@/lib/seed";
-import { AVATAR_COLORS } from "@/lib/constants";
-import { getJobBoundary, getPositionLabel } from "@/lib/templates";
+import { POSITIONS } from "@/lib/constants";
+import { createHiredAgent, isPositionKey } from "@/lib/hire";
 import type { PositionKey } from "@/lib/constants";
 
 export async function POST(
@@ -18,25 +18,29 @@ export async function POST(
   }
 
   if (body.action === "hire") {
-    const desks = await prisma.desk.findMany({ where: { workspaceId } });
-    const count = await prisma.agent.count({ where: { workspaceId } });
-    const desk = desks[count % desks.length];
     const position = body.position as PositionKey;
+    if (!isPositionKey(position) || !(position in POSITIONS)) {
+      return NextResponse.json({ error: "Invalid position" }, { status: 400 });
+    }
+    const name = String(body.name ?? "").trim();
+    if (!name) return NextResponse.json({ error: "Name is required" }, { status: 400 });
 
-    const agent = await prisma.agent.create({
-      data: {
-        name: body.name,
-        position,
-        positionLabel: getPositionLabel(position),
-        jobBoundary: body.jobBoundary ?? getJobBoundary(position),
-        avatarColor: AVATAR_COLORS[count % AVATAR_COLORS.length],
+    try {
+      const agent = await createHiredAgent({
         workspaceId,
-        deskId: desk?.id,
+        position,
+        name,
+        jobBoundary: body.jobBoundary,
         provider: body.provider ?? "mock",
         model: body.model ?? "mock",
-      },
-    });
-    return NextResponse.json(agent);
+      });
+      return NextResponse.json(agent);
+    } catch (err) {
+      return NextResponse.json(
+        { error: err instanceof Error ? err.message : "Hire failed" },
+        { status: 400 },
+      );
+    }
   }
 
   if (body.action === "update_goal") {

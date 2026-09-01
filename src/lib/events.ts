@@ -29,6 +29,18 @@ export const EVENT_LABELS: Record<EventType, string> = {
   AGENT_BLOCKED: "Blocked",
   AGENT_ERROR: "Error",
   AGENT_TASK_DONE: "Task done",
-  RUN_COMPLETED: "Run completed",
+  RUN_COMPLETED: "Team finished",
   RUN_CANCELLED: "Run cancelled",
 };
+
+/** Status changes the CEO should see. Token stream is AGENT_THINKING — show that as live text, not log rows. */
+export function isMilestoneEvent(type: EventType): boolean {
+  return type !== "AGENT_THINKING";
+}
+
+export function joinedThinking(events: RunEventMessage[]): string {
+  return events
+    .filter((e) => e.type === "AGENT_THINKING")
+    .map((e) => e.payload.message ?? "")
+    .join("");
+}
