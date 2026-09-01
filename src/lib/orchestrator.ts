@@ -32,7 +32,14 @@ import {
   councilThreadFromTasks,
 } from "./prompts";
 import {
+  hasUnclosedFence,
+  leftoverProse,
+  parseFileFences,
+  scaffoldGaps,
+} from "./project-files";
+import {
   engineeringAssignment,
+  ENGINEER_POSITIONS,
   engineersOnTeam,
   pickOne,
   qaOnTeam,
@@ -109,8 +116,16 @@ async function loadPriorContext(runId: string, task: Task): Promise<string> {
   });
   if (priors.length === 0) return "";
   return priors
-    .map((p) => `### ${p.position}: ${p.title}\n${(p.output ?? "").slice(0, 2500)}`)
+    .map((p) => `### ${p.position}: ${p.title}\n${summarizeOutput(p.output ?? "")}`)
     .join("\n\n");
+}
+
+function summarizeOutput(output: string): string {
+  const files = parseFileFences(output);
+  if (files.length === 0) return output.slice(0, 2500);
+  const listing = files.map((f) => `- ${f.path} (${f.content.length} chars)`).join("\n");
+  const bodies = files.map((f) => `### ${f.path}\n${f.content.slice(0, 1800)}`).join("\n\n");
+  return `Files emitted:\n${listing}\n\n${bodies}`.slice(0, 10_000);
 }
 
 function planningKind(title: string): "dispatch" | "council" | "synth" | "legacy" | null {
@@ -170,8 +185,13 @@ export async function executeAgentTask(
   );
 
   const kind = planningKind(task.title);
+  const isEngineer = ENGINEER_POSITIONS.includes(
+    agent.position as (typeof ENGINEER_POSITIONS)[number],
+  );
   if (kind === "dispatch" || kind === "synth" || kind === "legacy") config.maxTokens = 2500;
   else if (kind === "council") config.maxTokens = 1200;
+  else if (isEngineer) config.maxTokens = 6000;
+  else config.maxTokens = 1500;
 
   if (config.provider !== "mock" && config.provider !== "ollama") {
     const masked = config.apiKey
@@ -194,7 +214,12 @@ export async function executeAgentTask(
           ? synthesizerSystemPrompt(agent.name)
           : kind === "legacy"
             ? plannerSystemPrompt(agent.name, agent.positionLabel)
-            : workerSystemPrompt(agent.name, agent.positionLabel, agent.jobBoundary);
+            : workerSystemPrompt(
+                agent.name,
+                agent.positionLabel,
+                agent.jobBoundary,
+                agent.position,
+              );
 
   const userPrompt = kind
     ? `${task.description ?? ""}\n\n${prior ? `Council / upstream work:\n${prior}\n\n` : ""}Do the work. Do not refuse or hand this off.`
@@ -250,8 +275,10 @@ export async function executeAgentTask(
   }
 
   if (
-    kind &&
-    (result.finishReason === "length" || looksTruncated(fullOutput))
+    (kind || isEngineer) &&
+    (result.finishReason === "length" ||
+      looksTruncated(fullOutput) ||
+      hasUnclosedFence(fullOutput))
   ) {
     result = await provider.stream(
       [
@@ -339,7 +366,22 @@ export async function executeAgentTask(
   });
 
   const artifactType = mapPositionToArtifact(agent.position);
-  if (artifactType) {
+  const files = parseFileFences(fullOutput);
+  if (files.length > 0) {
+    await persistProjectFiles(runId, files);
+    const notes = leftoverProse(fullOutput, files);
+    if (notes.length > 40) {
+      await prisma.artifact.create({
+        data: {
+          runId,
+          type: artifactType ?? "other",
+          title: `${agent.positionLabel}: notes`,
+          content: notes,
+          filePath: `${agent.position}/${task.id}-notes.md`,
+        },
+      });
+    }
+  } else if (artifactType) {
     const evalResult = evalStayInRole(fullOutput, agent.position);
     if (!evalResult.passed) {
       await emit("AGENT_BLOCKED", {
@@ -359,6 +401,38 @@ export async function executeAgentTask(
       },
     });
   }
+}
+
+async function persistProjectFiles(
+  runId: string,
+  files: Array<{ path: string; content: string }>,
+) {
+  for (const file of files) {
+    const existing = await prisma.artifact.findFirst({
+      where: { runId, filePath: file.path },
+    });
+    if (existing) {
+      await prisma.artifact.update({
+        where: { id: existing.id },
+        data: { content: file.content, title: file.path, type: "code" },
+      });
+    } else {
+      await prisma.artifact.create({
+        data: {
+          runId,
+          type: "code",
+          title: file.path,
+          content: file.content,
+          filePath: file.path,
+        },
+      });
+    }
+  }
+}
+
+async function persistScaffoldFiles(runId: string, ceoGoal: string) {
+  const artifacts = await prisma.artifact.findMany({ where: { runId } });
+  await persistProjectFiles(runId, scaffoldGaps({ ceoGoal, artifacts }));
 }
 
 function mapPositionToArtifact(position: string) {
@@ -606,7 +680,8 @@ export async function publishAndDelegate(runId: string) {
       data: {
         runId,
         title: "Implement frontend from the plan",
-        description: "UI only. Follow the published plan.",
+        description:
+          "Emit real UI files (index.html, CSS, JS) using ```file:path fences. Static app that runs in preview. Do not overwrite data.js.",
         position: "frontend_engineer",
         priority: 80,
         dependsOnIds: dependsOn,
@@ -616,7 +691,8 @@ export async function publishAndDelegate(runId: string) {
       data: {
         runId,
         title: "Implement backend from the plan",
-        description: "APIs and data only. Follow the published plan.",
+        description:
+          "Emit data.js (localStorage is fine) and optional server/ sketches using ```file:path fences. Do not overwrite index.html.",
         position: "backend_engineer",
         priority: 80,
         dependsOnIds: dependsOn,
@@ -629,7 +705,7 @@ export async function publishAndDelegate(runId: string) {
       data: {
         runId,
         title: "Implement product work from the plan",
-        description: `You are the only engineering capacity (${pos}). Cover UI and API as the plan requires.`,
+        description: `You are the only engineering capacity (${pos}). Emit a complete runnable static app as real files (index.html + CSS + JS) using \`\`\`file:path fences. localStorage is fine for v1.`,
         position: pos,
         priority: 80,
         dependsOnIds: dependsOn,
@@ -902,7 +978,8 @@ export async function runOrchestrator(runId: string) {
   }
 
   if (remaining === 0) {
-    await emitRunEvent(runId, "RUN_COMPLETED", { message: "Pipeline complete" });
+    await persistScaffoldFiles(runId, run.ceoGoal);
+    await emitRunEvent(runId, "RUN_COMPLETED", { message: "Pipeline complete — project ready to preview or unzip" });
     await prisma.run.update({
       where: { id: runId },
       data: { status: "completed", completedAt: new Date() },

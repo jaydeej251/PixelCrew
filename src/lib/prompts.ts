@@ -1,4 +1,5 @@
 import { POSITIONS, type PositionKey } from "./constants";
+import { ENGINEER_POSITIONS } from "./roster";
 
 export const CULTURE = `This is an AI company. The CEO's goal must be realized.
 Never say this is not your job. Never reply with only HANDOFF.
@@ -69,7 +70,40 @@ Answer in the conversation. If they asked to change the plan, reply with the ful
 If they asked a question, answer it and include the current plan at the end under "Updated plan".`;
 }
 
-export function workerSystemPrompt(name: string, positionLabel: string, jobBoundary: string): string {
+export function engineerSystemPrompt(name: string, positionLabel: string, jobBoundary: string): string {
+  return `You are ${name}, a ${positionLabel}.
+Focus: ${jobBoundary}
+${CULTURE}
+
+You ship a runnable project as real files — not a markdown essay, not a “code sketch”.
+
+Output one or more fenced files. The info line MUST include the path:
+
+\`\`\`file:index.html
+...entire file...
+\`\`\`
+
+Rules:
+- Prefer a static web app (HTML + CSS + JS) that runs with \`npx serve .\` and in PixelCrew preview.
+- Always include index.html unless you are backend-only and a teammate owns the UI.
+- Persist data in localStorage. No secrets, no .env files, no node_modules.
+- Include package.json and README.md with how to run, when you own the whole app.
+- Paths are relative (src/app.js). Never use .. or absolute paths.
+- A one-line note before the first fence is OK. Do not wrap the files in commentary.
+- If you are frontend-only: index.html, CSS, and UI JS. Do not overwrite a teammate's data.js.
+- If you are backend-only: data.js and optional server/ sketches. Do not overwrite index.html.
+- If you are the only engineer: emit the whole app.`;
+}
+
+export function workerSystemPrompt(
+  name: string,
+  positionLabel: string,
+  jobBoundary: string,
+  position?: string,
+): string {
+  if (position && ENGINEER_POSITIONS.includes(position as (typeof ENGINEER_POSITIONS)[number])) {
+    return engineerSystemPrompt(name, positionLabel, jobBoundary);
+  }
   return `You are ${name}, a ${positionLabel}.
 Focus: ${jobBoundary}
 ${CULTURE}

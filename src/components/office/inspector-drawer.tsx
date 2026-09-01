@@ -34,7 +34,7 @@ export function InspectorDrawer({
   const milestones = agentEvents.filter((e) => isMilestoneEvent(e.type));
   const liveWriting = streamText || joinedThinking(agentEvents);
   const doneCount = milestones.filter((e) => e.type === "AGENT_TASK_DONE").length;
-  const writingLabel = agent?.status === "working" ? "Live writing" : "Last draft";
+  const writingLabel = agent?.status === "working" ? "Writing now" : "Last draft";
 
   useEffect(() => {
     if (!agent?.id || !open) {
@@ -51,29 +51,31 @@ export function InspectorDrawer({
     <Drawer
       open={open}
       onClose={onClose}
-      title={agent ? `${agent.name} — ${agent.positionLabel}` : "Inspector"}
+      title={agent ? agent.name : "Teammate"}
     >
       {agent ? (
         <div className="space-y-4">
+          <p className="text-sm text-zinc-400">{agent.positionLabel}</p>
           <div>
-            <p className="text-xs text-zinc-500">Provider / model</p>
-            <p className="mt-1 text-sm text-zinc-300">
-              {(agent as OfficeAgent & { provider?: string; model?: string }).provider ?? "mock"}{" "}
-              / {(agent as OfficeAgent & { model?: string }).model ?? "mock"}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-zinc-500">Job boundary</p>
+            <p className="text-xs text-zinc-500">What they do</p>
             <p className="mt-1 text-sm text-zinc-300">{agent.jobBoundary ?? "—"}</p>
           </div>
           <div>
-            <p className="text-xs text-zinc-500">Status</p>
-            <p className="mt-1 text-sm capitalize text-zinc-200">{agent.status}</p>
+            <p className="text-xs text-zinc-500">Right now</p>
+            <p className="mt-1 text-sm text-zinc-200">
+              {agent.status === "working"
+                ? "Working"
+                : agent.status === "blocked" || agent.status === "error"
+                  ? "Stuck"
+                  : agent.status === "handoff" || agent.status === "walking"
+                    ? "Passing work"
+                    : "Ready"}
+            </p>
           </div>
           {liveWriting && (
             <div>
               <p className="text-xs text-zinc-500">{writingLabel}</p>
-              <pre className="mt-1 max-h-48 overflow-auto rounded-lg bg-zinc-900 p-3 text-xs text-emerald-300">
+              <pre className="mt-1 max-h-48 overflow-auto rounded-lg bg-zinc-900 p-3 text-xs text-zinc-300">
                 {liveWriting}
               </pre>
             </div>
@@ -119,7 +121,7 @@ export function InspectorDrawer({
           </div>
         </div>
       ) : (
-        <p className="text-sm text-zinc-500">Select an agent on the floor</p>
+        <p className="text-sm text-zinc-500">Click a teammate to see what they’re working on.</p>
       )}
     </Drawer>
   );
