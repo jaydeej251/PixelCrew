@@ -1,9 +1,18 @@
 import { NextResponse } from "next/server";
-import { getOrCreateWorkspace } from "@/lib/seed";
 import { prisma } from "@/lib/db";
+import { getSession } from "@/lib/auth";
 
 export async function GET() {
-  const workspace = await getOrCreateWorkspace();
+  const session = await getSession();
+  if (!session) {
+    return NextResponse.json({ workspace: null, agents: [], desks: [], departments: [] });
+  }
+
+  const workspace = await prisma.workspace.findFirst({
+    where: { id: session.workspaceId, organizationId: session.organizationId },
+  });
+  if (!workspace) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
   const [agents, desks, departments] = await Promise.all([
     prisma.agent.findMany({
       where: { workspaceId: workspace.id },
@@ -22,5 +31,6 @@ export async function GET() {
     agents,
     desks,
     departments,
+    user: { email: session.email, name: session.name },
   });
 }

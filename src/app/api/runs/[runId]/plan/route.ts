@@ -5,6 +5,14 @@ import { PLANNER_POSITIONS, pickOne } from "@/lib/roster";
 import { PLAN_PUBLISHED_TITLE, PLAN_QA_TITLE, pickPlanTask } from "@/lib/workflow";
 import { councilThreadFromTasks, plannerSystemPrompt } from "@/lib/prompts";
 import { runOrchestrator, publishAndDelegate } from "@/lib/orchestrator";
+import { AuthError, assertRunAccess, requireSession } from "@/lib/auth";
+
+function authErrorResponse(err: unknown) {
+  if (err instanceof AuthError) {
+    return NextResponse.json({ error: err.message }, { status: err.message === "Unauthorized" ? 401 : 404 });
+  }
+  throw err;
+}
 
 type QaMessage = { role: "user" | "assistant"; content: string; speaker?: string };
 
@@ -45,7 +53,10 @@ export async function GET(
   _req: Request,
   { params }: { params: Promise<{ runId: string }> },
 ) {
-  const { runId } = await params;
+  try {
+    const session = await requireSession();
+    const { runId } = await params;
+    await assertRunAccess(runId, session);
   const run = await prisma.run.findUnique({
     where: { id: runId },
     include: { tasks: true, artifacts: true, workspace: { include: { agents: true } } },
@@ -70,13 +81,19 @@ export async function GET(
     published,
     thread,
   });
+  } catch (err) {
+    return authErrorResponse(err);
+  }
 }
 
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ runId: string }> },
 ) {
-  const { runId } = await params;
+  try {
+    const session = await requireSession();
+    const { runId } = await params;
+    await assertRunAccess(runId, session);
   const body = await req.json();
   const action = body.action as "ask" | "publish";
 
@@ -175,6 +192,9 @@ export async function POST(
   }
 
   return NextResponse.json({ ok: true, plan: updated, thread });
+  } catch (err) {
+    return authErrorResponse(err);
+  }
 }
 
 function extractUpdatedPlan(reply: string, previous: string): string {

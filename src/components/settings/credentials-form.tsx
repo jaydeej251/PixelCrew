@@ -48,13 +48,12 @@ export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
       <PanelHeader>
         <PanelTitle className="flex items-center gap-2">
           <Key size={14} />
-          API credentials
+          Your API keys
         </PanelTitle>
       </PanelHeader>
       <PanelContent>
         <p className="mb-3 text-xs text-zinc-500">
-          Save keys here for production. For local dev,{" "}
-          <code className="text-zinc-400">.env.local</code> also works — pick one.
+          Optional. Add a key if you want a real model instead of Mock.
         </p>
         {saved.length > 0 && (
           <ul className="mb-3 space-y-1 text-xs text-zinc-400">
@@ -135,7 +134,7 @@ export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
             />
           )}
           <Button type="submit" disabled={saving} className="w-full">
-            {saving ? "Saving…" : "Save credential"}
+            {saving ? "Saving…" : "Save key"}
           </Button>
           {message && <p className="text-xs text-emerald-400">{message}</p>}
         </form>

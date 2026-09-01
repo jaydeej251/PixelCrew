@@ -42,14 +42,13 @@ export function RunSettings({
       <PanelHeader>
         <PanelTitle className="flex items-center gap-2">
           <Cpu size={14} />
-          Run settings
+          Which AI to use
         </PanelTitle>
       </PanelHeader>
       <PanelContent className="space-y-2">
         <p className="text-xs text-zinc-500">
-          Pick a provider for this run. Keys can live in the sidebar <em>or</em>{" "}
-          <code className="text-zinc-400">.env.local</code> — you only need one.
-          Runs are staged: PM → architect → engineers (max 2) → QA, so credits are not burned in one burst.
+          Mock is free and fine for trying the product. Pick another option after you add a key
+          below.
         </p>
         <select
           className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm"
@@ -82,8 +81,7 @@ export function RunSettings({
                 </>
               ) : (
                 <span className="text-amber-400">
-                  No key yet — add OPENROUTER_API_KEY to <code>.env.local</code> and restart{" "}
-                  <code>npm run dev</code>, or save in the sidebar
+                  No key yet — add one under Your API keys, then come back here.
                 </span>
               )}
             </p>

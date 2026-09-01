@@ -78,7 +78,7 @@ export function buildWorkflowGraph(
   };
 }
 
-export const DEFAULT_TOKEN_BUDGET = 25_000;
+export const DEFAULT_TOKEN_BUDGET = 35_000;
 export const DEFAULT_MAX_CONCURRENT_LLM = 2;
 
 export const DISPATCH_TITLE = "Staff the goal";

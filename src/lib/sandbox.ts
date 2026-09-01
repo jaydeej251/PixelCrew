@@ -5,6 +5,10 @@ export type SandboxResult = {
   previewUrl?: string;
 };
 
+export function previewUrl(runId: string): string {
+  return `/api/runs/${runId}/preview/`;
+}
+
 export async function executeInSandbox(
   _code: string,
   _language: string,
@@ -12,7 +16,8 @@ export async function executeInSandbox(
   return {
     success: false,
     stdout: "",
-    stderr: "Sandbox execution is Phase 6. Configure E2B or Docker to enable.",
+    stderr:
+      "E2B/Docker sandbox is later Phase 6. Static exports preview in the office at /api/runs/:id/preview/.",
   };
 }
 

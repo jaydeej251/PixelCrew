@@ -5,12 +5,23 @@ import {
   workspaceHasProvider,
   getDefaultModel,
 } from "@/lib/run-setup";
+import { AuthError, assertWorkspaceAccess, requireSession } from "@/lib/auth";
+
+function authErrorResponse(err: unknown) {
+  if (err instanceof AuthError) {
+    return NextResponse.json({ error: err.message }, { status: err.message === "Unauthorized" ? 401 : 404 });
+  }
+  throw err;
+}
 
 export async function GET(req: Request) {
-  const workspaceId = new URL(req.url).searchParams.get("workspaceId");
-  if (!workspaceId) {
-    return NextResponse.json({ error: "workspaceId required" }, { status: 400 });
-  }
+  try {
+    const session = await requireSession();
+    const workspaceId = new URL(req.url).searchParams.get("workspaceId");
+    if (!workspaceId) {
+      return NextResponse.json({ error: "workspaceId required" }, { status: 400 });
+    }
+    await assertWorkspaceAccess(workspaceId, session);
 
   const statuses = await Promise.all(
     RUN_PROVIDERS.map(async (p) => {
@@ -26,4 +37,7 @@ export async function GET(req: Request) {
   );
 
   return NextResponse.json({ providers: statuses });
+  } catch (err) {
+    return authErrorResponse(err);
+  }
 }
