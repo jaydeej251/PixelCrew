@@ -9,6 +9,8 @@ export type OfficeAgent = {
   jobBoundary: string;
   status: AgentStatus;
   avatarColor: string;
+  provider?: string;
+  model?: string;
   desk?: { x: number; y: number; label: string; room: string } | null;
   department?: { name: string; color: string } | null;
 };

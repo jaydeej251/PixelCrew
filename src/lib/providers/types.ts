@@ -10,6 +10,7 @@ export type ProviderConfig = {
   apiKey?: string;
   baseUrl?: string;
   model: string;
+  maxTokens?: number;
 };
 
 export type StreamChunk = {
@@ -17,6 +18,7 @@ export type StreamChunk = {
   done?: boolean;
   inputTokens?: number;
   outputTokens?: number;
+  finishReason?: string;
 };
 
 export interface LLMProvider {

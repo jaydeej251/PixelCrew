@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Panel, PanelContent, PanelHeader, PanelTitle } from "@/components/ui/panel";
 import { Key } from "lucide-react";
@@ -12,7 +12,10 @@ const PROVIDERS = [
   { id: "openai_compatible", label: "OpenAI-compatible" },
 ] as const;
 
+type SavedCred = { id: string; provider: string; label: string };
+
 type CredentialsFormProps = {
+  workspaceId: string;
   onSave: (data: {
     provider: string;
     label: string;
@@ -21,13 +24,24 @@ type CredentialsFormProps = {
   }) => Promise<void>;
 };
 
-export function CredentialsForm({ onSave }: CredentialsFormProps) {
+export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
   const [provider, setProvider] = useState("openrouter");
   const [label, setLabel] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("http://127.0.0.1:11434/v1");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [saved, setSaved] = useState<SavedCred[]>([]);
+
+  const reload = () => {
+    fetch(`/api/credentials?workspaceId=${workspaceId}`)
+      .then((r) => r.json())
+      .then(setSaved);
+  };
+
+  useEffect(() => {
+    reload();
+  }, [workspaceId]);
 
   return (
     <Panel>
@@ -39,8 +53,31 @@ export function CredentialsForm({ onSave }: CredentialsFormProps) {
       </PanelHeader>
       <PanelContent>
         <p className="mb-3 text-xs text-zinc-500">
-          Keys are encrypted at rest. Never paste keys in chat.
+          Save keys here for production. For local dev,{" "}
+          <code className="text-zinc-400">.env.local</code> also works — pick one.
         </p>
+        {saved.length > 0 && (
+          <ul className="mb-3 space-y-1 text-xs text-zinc-400">
+            {saved.map((c) => (
+              <li key={c.id} className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-2">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                  {c.label} ({c.provider})
+                </span>
+                <button
+                  type="button"
+                  className="text-red-400 hover:text-red-300"
+                  onClick={async () => {
+                    await fetch(`/api/credentials?id=${c.id}`, { method: "DELETE" });
+                    reload();
+                  }}
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         <form
           className="space-y-2"
           onSubmit={async (e) => {
@@ -56,6 +93,7 @@ export function CredentialsForm({ onSave }: CredentialsFormProps) {
               });
               setApiKey("");
               setMessage("Saved");
+              reload();
             } catch {
               setMessage("Failed to save");
             }

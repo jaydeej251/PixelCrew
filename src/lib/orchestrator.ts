@@ -3,9 +3,54 @@ import { prisma } from "./db";
 import { createProvider, resolveProviderConfig, estimateCost } from "./providers";
 import type { AgentEventPayload } from "./events";
 import { evalStayInRole } from "./evals";
-import { buildWorkflowGraph } from "./workflow";
+import {
+  buildWorkflowGraph,
+  WORKFLOW_STAGES,
+  DEFAULT_TOKEN_BUDGET,
+  DEFAULT_MAX_CONCURRENT_LLM,
+  DISPATCH_TITLE,
+  COUNCIL_PRODUCT_TITLE,
+  COUNCIL_SENIOR_TITLE,
+  COUNCIL_UX_TITLE,
+  SYNTHESIZE_TITLE,
+  PLAN_DRAFT_TITLE,
+  PLAN_PUBLISHED_TITLE,
+  PLAN_QA_TITLE,
+  PRE_PUBLISH_STAGES,
+  POST_PUBLISH_STAGES,
+  pickPlanTask,
+} from "./workflow";
+import {
+  looksLikeHandoffOrRefusal,
+  looksTruncated,
+  dispatcherSystemPrompt,
+  councilSystemPrompt,
+  synthesizerSystemPrompt,
+  plannerSystemPrompt,
+  workerSystemPrompt,
+  parseNeededRoles,
+  councilThreadFromTasks,
+} from "./prompts";
+import {
+  engineeringAssignment,
+  engineersOnTeam,
+  pickOne,
+  qaOnTeam,
+  REVIEWER_POSITIONS,
+  DISPATCHER_POSITION,
+} from "./roster";
+import { ensureRole, isPositionKey } from "./hire";
+import { configureAgentsForRun, getDefaultModel, workspaceHasProvider } from "./run-setup";
+import type { PositionKey } from "./constants";
 
 type EmitFn = (type: string, payload: AgentEventPayload) => Promise<void>;
+
+class RunAbortedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RunAbortedError";
+  }
+}
 
 export async function emitRunEvent(
   runId: string,
@@ -23,7 +68,7 @@ export async function claimNextTask(
   agent: Agent,
 ): Promise<Task | null> {
   return prisma.$transaction(async (tx) => {
-    const task = await tx.task.findFirst({
+    const candidates = await tx.task.findMany({
       where: {
         runId,
         position: agent.position,
@@ -31,25 +76,55 @@ export async function claimNextTask(
       },
       orderBy: [{ priority: "desc" }, { createdAt: "asc" }],
     });
-    if (!task) return null;
 
-    const deps = task.dependsOnIds;
-    if (deps.length > 0) {
-      const doneCount = await tx.task.count({
-        where: { id: { in: deps }, status: "done" },
+    for (const task of candidates) {
+      if (task.dependsOnIds.length > 0) {
+        const doneCount = await tx.task.count({
+          where: { id: { in: task.dependsOnIds }, status: "done" },
+        });
+        if (doneCount < task.dependsOnIds.length) continue;
+      }
+
+      const claimed = await tx.task.updateMany({
+        where: { id: task.id, status: "queued" },
+        data: {
+          status: "claimed",
+          claimedById: agent.id,
+          claimedAt: new Date(),
+        },
       });
-      if (doneCount < deps.length) return null;
+      if (claimed.count !== 1) continue;
+      return tx.task.findUniqueOrThrow({ where: { id: task.id } });
     }
 
-    return tx.task.update({
-      where: { id: task.id },
-      data: {
-        status: "claimed",
-        claimedById: agent.id,
-        claimedAt: new Date(),
-      },
-    });
+    return null;
   });
+}
+
+async function loadPriorContext(runId: string, task: Task): Promise<string> {
+  if (task.dependsOnIds.length === 0) return "";
+  const priors = await prisma.task.findMany({
+    where: { id: { in: task.dependsOnIds }, status: "done" },
+    select: { title: true, output: true, position: true },
+  });
+  if (priors.length === 0) return "";
+  return priors
+    .map((p) => `### ${p.position}: ${p.title}\n${(p.output ?? "").slice(0, 2500)}`)
+    .join("\n\n");
+}
+
+function planningKind(title: string): "dispatch" | "council" | "synth" | "legacy" | null {
+  if (title === DISPATCH_TITLE) return "dispatch";
+  if (
+    title === COUNCIL_PRODUCT_TITLE ||
+    title === COUNCIL_SENIOR_TITLE ||
+    title === COUNCIL_UX_TITLE
+  ) {
+    return "council";
+  }
+  if (title === SYNTHESIZE_TITLE) return "synth";
+  if (title === PLAN_DRAFT_TITLE) return "legacy";
+  return null;
 }
 
 export async function executeAgentTask(
@@ -93,49 +168,128 @@ export async function executeAgentTask(
     agent.model,
     credential ?? undefined,
   );
-  const provider = createProvider(config, agent.position, task.title);
 
-  const systemPrompt = `You are ${agent.name}, a ${agent.positionLabel}.
-Your job boundary: ${agent.jobBoundary}
-If work is outside your boundary, say HANDOFF:<position> and explain why.
-Current task: ${task.title}
-${task.description ?? ""}`;
+  const kind = planningKind(task.title);
+  if (kind === "dispatch" || kind === "synth" || kind === "legacy") config.maxTokens = 2500;
+  else if (kind === "council") config.maxTokens = 1200;
+
+  if (config.provider !== "mock" && config.provider !== "ollama") {
+    const masked = config.apiKey
+      ? `${config.apiKey.slice(0, 6)}…${config.apiKey.slice(-4)}`
+      : "(none)";
+    console.log(
+      `[PixelCrew] ${agent.name} → ${config.provider}/${config.model} key=${masked}`,
+    );
+  }
+
+  const provider = createProvider(config, agent.position, task.title);
+  const prior = await loadPriorContext(runId, task);
+
+  const systemPrompt =
+    kind === "dispatch"
+      ? dispatcherSystemPrompt(agent.name)
+      : kind === "council"
+        ? councilSystemPrompt(agent.name, agent.positionLabel, agent.position)
+        : kind === "synth"
+          ? synthesizerSystemPrompt(agent.name)
+          : kind === "legacy"
+            ? plannerSystemPrompt(agent.name, agent.positionLabel)
+            : workerSystemPrompt(agent.name, agent.positionLabel, agent.jobBoundary);
+
+  const userPrompt = kind
+    ? `${task.description ?? ""}\n\n${prior ? `Council / upstream work:\n${prior}\n\n` : ""}Do the work. Do not refuse or hand this off.`
+    : prior
+      ? `CEO context and upstream work:\n${prior}\n\nYour task: ${task.title}\n${task.description ?? ""}`
+      : `Complete this task: ${task.title}\n${task.description ?? ""}`;
 
   let fullOutput = "";
-  const result = await provider.stream(
-    [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: `Complete this task: ${task.title}` },
-    ],
-    async (chunk) => {
-      if (chunk.content) {
-        fullOutput += chunk.content;
-        await emit("AGENT_THINKING", {
-          agentId: agent.id,
-          agentName: agent.name,
-          message: chunk.content,
-          taskId: task.id,
-        });
-      }
-    },
-  );
-
-  const handoffMatch = fullOutput.match(/HANDOFF:(\w+)/i);
-  if (handoffMatch) {
-    const targetPosition = handoffMatch[1].toLowerCase();
-    await emit("AGENT_HANDOFF", {
+  let thinkBuf = "";
+  const flushThinking = async (force = false) => {
+    if (!thinkBuf) return;
+    if (!force && thinkBuf.length < 80 && !thinkBuf.includes("\n")) return;
+    const message = thinkBuf;
+    thinkBuf = "";
+    await emit("AGENT_THINKING", {
       agentId: agent.id,
       agentName: agent.name,
-      targetPosition,
+      message,
       taskId: task.id,
-      message: fullOutput,
     });
-    await prisma.task.update({
-      where: { id: task.id },
-      data: { status: "queued", claimedById: null, position: targetPosition },
+  };
+  const onChunk = async (chunk: { content?: string }) => {
+    if (!chunk.content) return;
+    fullOutput += chunk.content;
+    thinkBuf += chunk.content;
+    await flushThinking(false);
+  };
+  let result = await provider.stream(
+    [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+    onChunk,
+  );
+  fullOutput = fullOutput || result.content;
+  await flushThinking(true);
+
+  if (kind && looksLikeHandoffOrRefusal(fullOutput)) {
+    fullOutput = "";
+    thinkBuf = "";
+    result = await provider.stream(
+      [
+        { role: "system", content: systemPrompt },
+        {
+          role: "user",
+          content: `${userPrompt}\n\nYour previous reply was a refusal. That is not allowed. Write the useful work now.`,
+        },
+      ],
+      onChunk,
+    );
+    fullOutput = fullOutput || result.content;
+    await flushThinking(true);
+  }
+
+  if (
+    kind &&
+    (result.finishReason === "length" || looksTruncated(fullOutput))
+  ) {
+    result = await provider.stream(
+      [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+        { role: "assistant", content: fullOutput },
+        {
+          role: "user",
+          content:
+            "You were cut off. Continue exactly from the last word. Do not restart. Finish every remaining section.",
+        },
+      ],
+      onChunk,
+    );
+    await flushThinking(true);
+  }
+
+  const handoffMatch = !kind ? fullOutput.match(/HANDOFF:\s*(\w+)/i) : null;
+  if (handoffMatch) {
+    const targetPosition = handoffMatch[1].toLowerCase();
+    const teammate = await prisma.agent.findFirst({
+      where: { workspaceId: agent.workspaceId, position: targetPosition },
     });
-    await prisma.agent.update({ where: { id: agent.id }, data: { status: "idle" } });
-    return;
+    if (teammate) {
+      await emit("AGENT_HANDOFF", {
+        agentId: agent.id,
+        agentName: agent.name,
+        targetPosition,
+        taskId: task.id,
+        message: fullOutput,
+      });
+      await prisma.task.update({
+        where: { id: task.id },
+        data: { status: "queued", claimedById: null, position: targetPosition },
+      });
+      await prisma.agent.update({ where: { id: agent.id }, data: { status: "idle" } });
+      return;
+    }
   }
 
   await prisma.task.update({
@@ -148,7 +302,8 @@ ${task.description ?? ""}`;
     agentId: agent.id,
     agentName: agent.name,
     taskId: task.id,
-    message: fullOutput.slice(0, 200),
+    taskTitle: task.title,
+    message: `Finished “${task.title}”`,
   });
 
   const inputTokens = result.inputTokens ?? 0;
@@ -172,6 +327,14 @@ ${task.description ?? ""}`;
     data: {
       totalTokens: { increment: inputTokens + outputTokens },
       estCostUsd: { increment: estCost },
+    },
+  });
+
+  await prisma.agentMemory.create({
+    data: {
+      agentId: agent.id,
+      runId,
+      content: fullOutput.slice(0, 12_000),
     },
   });
 
@@ -200,14 +363,302 @@ ${task.description ?? ""}`;
 
 function mapPositionToArtifact(position: string) {
   const map: Record<string, "prd" | "architecture" | "code" | "test_plan" | "other"> = {
+    dispatcher: "other",
     project_manager: "prd",
+    executive: "prd",
     tech_architect: "architecture",
+    engineer: "code",
     frontend_engineer: "code",
     backend_engineer: "code",
     qa_engineer: "test_plan",
     designer: "other",
   };
   return map[position] ?? "other";
+}
+
+function isCreditOrAuthError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg.includes("not enough credits") ||
+    msg.includes("more credits") ||
+    msg.includes("invalid API key") ||
+    msg.includes("Authentication")
+  );
+}
+
+async function refreshGraph(runId: string) {
+  const tasks = await prisma.task.findMany({ where: { runId } });
+  await prisma.workflow.upsert({
+    where: { runId },
+    create: { runId, graph: buildWorkflowGraph(tasks) },
+    update: { graph: buildWorkflowGraph(tasks) },
+  });
+}
+
+const DEFAULT_COUNCIL: PositionKey[] = [
+  "project_manager",
+  "tech_architect",
+  "designer",
+  "engineer",
+];
+
+async function staffRoles(
+  workspaceId: string,
+  needed: PositionKey[],
+  emit: EmitFn,
+  provider: Agent["provider"],
+  model: string,
+) {
+  const unique = [...new Set(needed)];
+  for (const position of unique) {
+    if (!isPositionKey(position)) continue;
+    const { agent, created } = await ensureRole({
+      workspaceId,
+      position,
+      provider,
+      model,
+    });
+    if (created) {
+      await emit("TASK_STARTED", {
+        agentId: agent.id,
+        agentName: agent.name,
+        position: agent.position,
+        message: `Hired ${agent.name} as ${agent.positionLabel}`,
+        taskTitle: "Hiring",
+      });
+    }
+  }
+  await configureAgentsForRun(workspaceId, provider, model);
+}
+
+async function seedDispatchTask(runId: string, ceoGoal: string) {
+  const exists = await prisma.task.findFirst({ where: { runId, title: DISPATCH_TITLE } });
+  if (exists) return exists;
+  const task = await prisma.task.create({
+    data: {
+      runId,
+      title: DISPATCH_TITLE,
+      description: `CEO goal:\n${ceoGoal}\n\nStaff Product, Senior Developer, and UI/UX. Write a brief the CEO can understand.`,
+      position: DISPATCHER_POSITION,
+      priority: 100,
+    },
+  });
+  await refreshGraph(runId);
+  return task;
+}
+
+async function seedCouncilTasks(runId: string, ceoGoal: string, dispatchTaskId: string) {
+  const specs = [
+    {
+      title: COUNCIL_PRODUCT_TITLE,
+      position: "project_manager",
+      description: `Product brainstorm. Partner with Senior Dev and UI/UX. Goal:\n${ceoGoal}`,
+    },
+    {
+      title: COUNCIL_SENIOR_TITLE,
+      position: "tech_architect",
+      description: `Senior-dev brainstorm (stack + architecture). Partner with Product and UI/UX. Goal:\n${ceoGoal}`,
+    },
+    {
+      title: COUNCIL_UX_TITLE,
+      position: "designer",
+      description: `UI/UX brainstorm (screens + flow). Partner with Product and Senior Dev. Goal:\n${ceoGoal}`,
+    },
+  ] as const;
+
+  for (const spec of specs) {
+    const exists = await prisma.task.findFirst({ where: { runId, title: spec.title } });
+    if (exists) continue;
+    await prisma.task.create({
+      data: {
+        runId,
+        title: spec.title,
+        description: spec.description,
+        position: spec.position,
+        priority: 90,
+        dependsOnIds: [dispatchTaskId],
+      },
+    });
+  }
+  await refreshGraph(runId);
+}
+
+async function seedSynthesizeTask(runId: string, ceoGoal: string, councilIds: string[]) {
+  const exists = await prisma.task.findFirst({ where: { runId, title: SYNTHESIZE_TITLE } });
+  if (exists) return;
+  await prisma.task.create({
+    data: {
+      runId,
+      title: SYNTHESIZE_TITLE,
+      description: `Merge the council brainstorms into one plan the CEO can publish. Goal:\n${ceoGoal}`,
+      position: DISPATCHER_POSITION,
+      priority: 80,
+      dependsOnIds: councilIds,
+    },
+  });
+  await refreshGraph(runId);
+}
+
+async function seedPlanQaThread(runId: string) {
+  const existing = await prisma.artifact.findFirst({
+    where: { runId, title: PLAN_QA_TITLE },
+  });
+  if (existing) return;
+
+  const tasks = await prisma.task.findMany({
+    where: { runId, status: "done" },
+    orderBy: { completedAt: "asc" },
+  });
+  const messages = councilThreadFromTasks(tasks);
+  if (messages.length === 0) return;
+
+  await prisma.artifact.create({
+    data: {
+      runId,
+      type: "other",
+      title: PLAN_QA_TITLE,
+      content: JSON.stringify(messages),
+    },
+  });
+}
+
+export async function publishAndDelegate(runId: string) {
+  const run = await prisma.run.findUnique({
+    where: { id: runId },
+    include: {
+      workspace: { include: { agents: true } },
+      tasks: true,
+      artifacts: true,
+    },
+  });
+  if (!run) throw new Error("Run not found");
+
+  const already = run.artifacts.find((a) => a.title === PLAN_PUBLISHED_TITLE);
+  if (already) {
+    await prisma.run.update({ where: { id: runId }, data: { status: "running" } });
+    return;
+  }
+
+  const planTask = pickPlanTask(run.tasks);
+  const planText =
+    planTask?.output || run.artifacts.find((a) => a.type === "prd")?.content || "";
+  if (!planText.trim()) {
+    throw new Error("No combined plan to publish");
+  }
+  let agents = run.workspace.agents;
+  const sample = agents[0];
+  const reviewer = pickOne(agents, REVIEWER_POSITIONS);
+  let assignment = engineeringAssignment(agents);
+
+  if (assignment.mode === "none") {
+    await ensureRole({
+      workspaceId: run.workspaceId,
+      position: "engineer",
+      provider: sample?.provider ?? "mock",
+      model: sample?.model ?? "mock",
+    });
+    if (sample) {
+      await configureAgentsForRun(run.workspaceId, sample.provider, sample.model);
+    }
+    agents = await prisma.agent.findMany({ where: { workspaceId: run.workspaceId } });
+    assignment = engineeringAssignment(agents);
+  }
+
+  await prisma.artifact.create({
+    data: {
+      runId,
+      type: "other",
+      title: PLAN_PUBLISHED_TITLE,
+      content: `Published by CEO.\nRoster: ${agents.map((a) => `${a.name} (${a.position})`).join(", ")}`,
+    },
+  });
+
+  const reviewTask = reviewer
+    ? await prisma.task.create({
+        data: {
+          runId,
+          title: "Review published plan and delegate",
+          description: `The CEO published this plan. Review it. Engineering capacity: ${assignment.positions.join(", ") || "none"}.\n\nPlan:\n${planText.slice(0, 4000)}`,
+          position: reviewer.position,
+          priority: 90,
+          dependsOnIds: planTask ? [planTask.id] : [],
+        },
+      })
+    : null;
+
+  const dependsOn = reviewTask ? [reviewTask.id] : planTask ? [planTask.id] : [];
+  const buildIds: string[] = [];
+
+  if (assignment.mode === "none") {
+    await prisma.task.create({
+      data: {
+        runId,
+        title: "Blocked: no engineer on the team",
+        description: "Hire an Engineer (or FE/BE) and start a new run.",
+        position: reviewer?.position ?? planTask?.position ?? "project_manager",
+        priority: 10,
+        dependsOnIds: dependsOn,
+        status: "blocked",
+      },
+    });
+  } else if (assignment.mode === "split") {
+    const fe = await prisma.task.create({
+      data: {
+        runId,
+        title: "Implement frontend from the plan",
+        description: "UI only. Follow the published plan.",
+        position: "frontend_engineer",
+        priority: 80,
+        dependsOnIds: dependsOn,
+      },
+    });
+    const be = await prisma.task.create({
+      data: {
+        runId,
+        title: "Implement backend from the plan",
+        description: "APIs and data only. Follow the published plan.",
+        position: "backend_engineer",
+        priority: 80,
+        dependsOnIds: dependsOn,
+      },
+    });
+    buildIds.push(fe.id, be.id);
+  } else {
+    const pos = assignment.soloPosition!;
+    const work = await prisma.task.create({
+      data: {
+        runId,
+        title: "Implement product work from the plan",
+        description: `You are the only engineering capacity (${pos}). Cover UI and API as the plan requires.`,
+        position: pos,
+        priority: 80,
+        dependsOnIds: dependsOn,
+      },
+    });
+    buildIds.push(work.id);
+  }
+
+  if (qaOnTeam(agents).length > 0 && buildIds.length > 0) {
+    await prisma.task.create({
+      data: {
+        runId,
+        title: "QA the delegated work",
+        description: "Test plan and gaps. Do not rewrite the product.",
+        position: "qa_engineer",
+        priority: 40,
+        dependsOnIds: buildIds,
+      },
+    });
+  }
+
+  const tasks = await prisma.task.findMany({ where: { runId } });
+  await prisma.workflow.upsert({
+    where: { runId },
+    create: { runId, graph: buildWorkflowGraph(tasks) },
+    update: { graph: buildWorkflowGraph(tasks) },
+  });
+
+  await prisma.run.update({ where: { id: runId }, data: { status: "running" } });
 }
 
 export async function runOrchestrator(runId: string) {
@@ -234,67 +685,206 @@ export async function runOrchestrator(runId: string) {
     data: { status: "running", startedAt: new Date() },
   });
 
-  const cap = run.workspace.concurrencyCap;
-  const agents = run.workspace.agents;
+  const cap = Math.min(
+    run.workspace.concurrencyCap || DEFAULT_MAX_CONCURRENT_LLM,
+    DEFAULT_MAX_CONCURRENT_LLM,
+  );
   const orgId = run.workspace.organizationId;
-
-  let active = 0;
-  const running = new Set<string>();
-
-  const tryClaim = async (agent: Agent) => {
-    if (running.has(agent.id) || active >= cap) return;
-    const task = await claimNextTask(runId, agent);
-    if (!task) return;
-
-    running.add(agent.id);
-    active++;
-    try {
-      await executeAgentTask(runId, agent, task, emit, orgId);
-    } catch (err) {
-      await emit("AGENT_ERROR", {
-        agentId: agent.id,
-        agentName: agent.name,
-        message: err instanceof Error ? err.message : "Unknown error",
-      });
-      await prisma.agent.update({
-        where: { id: agent.id },
-        data: { status: "error" },
-      });
-    } finally {
-      running.delete(agent.id);
-      active--;
+  const loadRoster = () =>
+    prisma.agent.findMany({ where: { workspaceId: run.workspaceId } });
+  let agents = await loadRoster();
+  const sample = agents[0];
+  let llmProvider = sample?.provider ?? "mock";
+  let llmModel = sample?.model ?? "mock";
+  if (!sample) {
+    const or = await workspaceHasProvider(run.workspaceId, "openrouter");
+    if (or.ready) {
+      llmProvider = "openrouter";
+      llmModel = getDefaultModel("openrouter");
     }
-  };
-
-  const pm = agents.find((a) => a.position === "project_manager");
-  if (pm && run.tasks.length === 0) {
-    const pmTasks = buildPmTasks(run.ceoGoal);
-    await prisma.task.createMany({
-      data: pmTasks.map((t) => ({ ...t, runId })),
-    });
-    const tasks = await prisma.task.findMany({ where: { runId } });
-    await prisma.workflow.create({
-      data: { runId, graph: buildWorkflowGraph(tasks) },
-    });
-    await prisma.artifact.create({
-      data: {
-        runId,
-        type: "task_list",
-        title: "Task breakdown",
-        content: JSON.stringify(pmTasks, null, 2),
-      },
-    });
   }
 
-  const refreshed = await prisma.task.findMany({ where: { runId } });
-  const maxRounds = 50;
-  for (let round = 0; round < maxRounds; round++) {
-    const pending = refreshed.filter((t) => t.status === "queued" || t.status === "in_progress");
-    if (pending.length === 0 && running.size === 0) break;
+  await staffRoles(
+    run.workspaceId,
+    ["dispatcher", ...DEFAULT_COUNCIL],
+    emit,
+    llmProvider,
+    llmModel,
+  );
+  agents = await loadRoster();
 
-    await Promise.all(agents.map((a) => tryClaim(a)));
-    if (running.size > 0) {
-      await new Promise((r) => setTimeout(r, 500));
+  const published = await prisma.artifact.findFirst({
+    where: { runId, title: PLAN_PUBLISHED_TITLE },
+  });
+
+  if (run.tasks.length === 0) {
+    await seedDispatchTask(runId, run.ceoGoal);
+  }
+
+  let abortReason: string | null = null;
+
+  for (const stage of WORKFLOW_STAGES) {
+    if (PRE_PUBLISH_STAGES.has(stage.id) && published) continue;
+    if (POST_PUBLISH_STAGES.has(stage.id) && !published) continue;
+
+    agents = await loadRoster();
+
+    const live = await prisma.run.findUnique({ where: { id: runId } });
+    if (live?.status === "cancelled") break;
+
+    const stageTasks = await prisma.task.findMany({
+      where: { runId, position: { in: stage.positions } },
+    });
+    if (stageTasks.length === 0) continue;
+
+    const stageAgents = agents.filter((a) => stage.positions.includes(a.position));
+    if (stageAgents.length === 0) continue;
+
+    const stageCap = Math.min(
+      cap,
+      stage.maxParallel,
+      stage.id === "build" ? Math.max(1, engineersOnTeam(agents).length) : stage.maxParallel,
+    );
+
+    await emit("TASK_STARTED", {
+      message: `Stage: ${stage.label}`,
+      taskTitle: stage.label,
+    });
+    console.log(`[PixelCrew] Stage ${stage.label} — max ${stageCap} parallel`);
+
+    const inFlight = new Set<string>();
+
+    const waitForIdle = async () => {
+      while (inFlight.size > 0) {
+        await new Promise((r) => setTimeout(r, 200));
+      }
+    };
+
+    const tryClaim = async (agent: Agent) => {
+      if (abortReason) return;
+      if (inFlight.has(agent.id) || inFlight.size >= stageCap) return;
+      const task = await claimNextTask(runId, agent);
+      if (!task) return;
+
+      inFlight.add(agent.id);
+      try {
+        const usage = await prisma.run.findUnique({
+          where: { id: runId },
+          select: { totalTokens: true, status: true },
+        });
+        if (usage?.status === "cancelled") {
+          await prisma.task.update({
+            where: { id: task.id },
+            data: { status: "queued", claimedById: null, claimedAt: null },
+          });
+          return;
+        }
+        if ((usage?.totalTokens ?? 0) >= DEFAULT_TOKEN_BUDGET) {
+          throw new RunAbortedError(
+            `Token budget reached (${DEFAULT_TOKEN_BUDGET}). Remaining work was not started.`,
+          );
+        }
+        await executeAgentTask(runId, agent, task, emit, orgId);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown error";
+        await emit("AGENT_ERROR", {
+          agentId: agent.id,
+          agentName: agent.name,
+          message,
+        });
+        await prisma.task.update({
+          where: { id: task.id },
+          data: { status: "failed" },
+        });
+        await prisma.agent.update({
+          where: { id: agent.id },
+          data: { status: "error" },
+        });
+        if (err instanceof RunAbortedError || isCreditOrAuthError(err)) {
+          abortReason = message;
+        }
+      } finally {
+        inFlight.delete(agent.id);
+      }
+    };
+
+    let idleRounds = 0;
+    while (!abortReason) {
+      const liveRun = await prisma.run.findUnique({ where: { id: runId } });
+      if (liveRun?.status === "cancelled") break;
+
+      const remaining = await prisma.task.count({
+        where: {
+          runId,
+          position: { in: stage.positions },
+          status: { in: ["queued", "claimed", "in_progress"] },
+        },
+      });
+      if (remaining === 0 && inFlight.size === 0) break;
+
+      await Promise.all(stageAgents.map((a) => tryClaim(a)));
+
+      if (inFlight.size === 0) {
+        idleRounds++;
+        if (idleRounds > 8) break;
+      } else {
+        idleRounds = 0;
+      }
+      await new Promise((r) => setTimeout(r, 300));
+    }
+
+    await waitForIdle();
+    if (abortReason) break;
+
+    if (stage.id === "dispatch" && !published) {
+      const dispatchTask = await prisma.task.findFirst({
+        where: { runId, title: DISPATCH_TITLE, status: "done" },
+      });
+      const needed = parseNeededRoles(dispatchTask?.output ?? "", DEFAULT_COUNCIL);
+      await staffRoles(
+        run.workspaceId,
+        [...DEFAULT_COUNCIL, ...needed],
+        emit,
+        llmProvider,
+        llmModel,
+      );
+      if (dispatchTask) {
+        await seedCouncilTasks(runId, run.ceoGoal, dispatchTask.id);
+      }
+    }
+
+    if (stage.id === "council" && !published) {
+      const council = await prisma.task.findMany({
+        where: {
+          runId,
+          status: "done",
+          title: { in: [COUNCIL_PRODUCT_TITLE, COUNCIL_SENIOR_TITLE, COUNCIL_UX_TITLE] },
+        },
+      });
+      const ids = council.map((t) => t.id);
+      if (ids.length > 0) {
+        await seedSynthesizeTask(runId, run.ceoGoal, ids);
+      }
+    }
+
+    if (stage.id === "synthesize" && !published) {
+      const merged = await prisma.task.findFirst({
+        where: { runId, title: SYNTHESIZE_TITLE, status: "done" },
+      });
+      if (!merged?.output?.trim()) {
+        abortReason = "Planning council did not produce a combined plan.";
+        break;
+      }
+      await emitRunEvent(runId, "TASK_STARTED", {
+        message: "Council plan ready — ask questions or publish",
+        taskTitle: "Plan review",
+      });
+      await seedPlanQaThread(runId);
+      await prisma.run.update({
+        where: { id: runId },
+        data: { status: "paused" },
+      });
+      return;
     }
   }
 
@@ -302,74 +892,25 @@ export async function runOrchestrator(runId: string) {
     where: { runId, status: { not: "done" } },
   });
 
+  if (abortReason) {
+    await emitRunEvent(runId, "RUN_CANCELLED", { message: abortReason });
+    await prisma.run.update({
+      where: { id: runId },
+      data: { status: "failed", completedAt: new Date() },
+    });
+    return;
+  }
+
   if (remaining === 0) {
-    await emitRunEvent(runId, "RUN_COMPLETED", { message: "All tasks complete" });
+    await emitRunEvent(runId, "RUN_COMPLETED", { message: "Pipeline complete" });
     await prisma.run.update({
       where: { id: runId },
       data: { status: "completed", completedAt: new Date() },
     });
   } else {
-    await prisma.run.update({ where: { id: runId }, data: { status: "failed" } });
+    await prisma.run.update({
+      where: { id: runId },
+      data: { status: "failed", completedAt: new Date() },
+    });
   }
-}
-
-function buildPmTasks(ceoGoal: string) {
-  return [
-    {
-      title: "Write PRD",
-      description: `Create a PRD for: ${ceoGoal}`,
-      position: "project_manager",
-      priority: 10,
-      dependsOnIds: [] as string[],
-    },
-    {
-      title: "Define architecture",
-      description: `Choose stack and structure for: ${ceoGoal}`,
-      position: "tech_architect",
-      priority: 9,
-      dependsOnIds: [] as string[],
-    },
-    {
-      title: "Build login UI",
-      description: "Frontend login and registration screens",
-      position: "frontend_engineer",
-      priority: 8,
-      dependsOnIds: [] as string[],
-    },
-    {
-      title: "Build dashboard UI",
-      description: "Main habit tracking dashboard",
-      position: "frontend_engineer",
-      priority: 7,
-      dependsOnIds: [] as string[],
-    },
-    {
-      title: "Auth API",
-      description: "Login/register/session endpoints",
-      position: "backend_engineer",
-      priority: 8,
-      dependsOnIds: [] as string[],
-    },
-    {
-      title: "Habits API",
-      description: "CRUD endpoints for habits",
-      position: "backend_engineer",
-      priority: 7,
-      dependsOnIds: [] as string[],
-    },
-    {
-      title: "Test plan",
-      description: "QA test cases for core flows",
-      position: "qa_engineer",
-      priority: 6,
-      dependsOnIds: [] as string[],
-    },
-    {
-      title: "Review deliverables",
-      description: "Final QA review",
-      position: "qa_engineer",
-      priority: 5,
-      dependsOnIds: [] as string[],
-    },
-  ];
 }

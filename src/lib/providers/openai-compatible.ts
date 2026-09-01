@@ -8,22 +8,49 @@ export class OpenAICompatibleProvider implements LLMProvider {
     onChunk: (chunk: StreamChunk) => void,
   ): Promise<StreamChunk> {
     const baseUrl = this.config.baseUrl ?? "https://api.openai.com/v1";
+    const apiKey = this.config.apiKey?.trim() ?? "";
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    };
+
+    // OpenRouter recommends these for attribution (optional but helps avoid edge-case rejections)
+    if (baseUrl.includes("openrouter.ai")) {
+      headers["HTTP-Referer"] =
+        process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+      headers["X-Title"] = process.env.PRODUCT_NAME ?? "PixelCrew";
+    }
+
     const res = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.config.apiKey ?? ""}`,
-      },
+      headers,
       body: JSON.stringify({
         model: this.config.model,
         messages,
         stream: true,
+        max_tokens: this.config.maxTokens ?? 900,
       }),
     });
 
     if (!res.ok) {
       const err = await res.text();
-      throw new Error(`LLM request failed: ${err}`);
+      let friendly = err;
+      try {
+        const parsed = JSON.parse(err);
+        const msg = parsed?.error?.message ?? parsed?.message ?? err;
+        if (msg.includes("more credits") || msg.includes("Insufficient")) {
+          friendly =
+            "OpenRouter: not enough credits. Add funds at openrouter.ai/settings/credits, use a free model, or switch to Ollama locally.";
+        } else if (msg.includes("Authentication") || msg.includes("API key")) {
+          friendly = "OpenRouter: invalid API key. Check sk-or-v1- prefix in .env.local.";
+        } else {
+          friendly = msg;
+        }
+      } catch {
+        // keep raw err
+      }
+      throw new Error(friendly);
     }
 
     const reader = res.body?.getReader();
@@ -32,6 +59,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     const decoder = new TextDecoder();
     let full = "";
     let buffer = "";
+    let finishReason: string | undefined;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -51,6 +79,8 @@ export class OpenAICompatibleProvider implements LLMProvider {
             full += content;
             onChunk({ content });
           }
+          const reason = parsed.choices?.[0]?.finish_reason;
+          if (reason) finishReason = reason;
         } catch {
           // skip malformed chunks
         }
@@ -61,7 +91,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
       messages.reduce((a, m) => a + m.content.length, 0) / 4,
     );
     const outputTokens = Math.ceil(full.length / 4);
-    return { content: full, done: true, inputTokens, outputTokens };
+    return { content: full, done: true, inputTokens, outputTokens, finishReason };
   }
 }
 
