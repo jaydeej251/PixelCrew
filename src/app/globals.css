@@ -3,6 +3,10 @@
 :root {
   --background: #09090b;
   --foreground: #fafafa;
+  --surface: #18181b;
+  --surface-elevated: #27272a;
+  --border: #27272a;
+  --ring: rgba(99, 102, 241, 0.5);
 }
 
 @theme inline {
@@ -16,10 +20,18 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
 * {
   box-sizing: border-box;
+}
+
+.auth-grid {
+  background-color: var(--background);
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(99, 102, 241, 0.15), transparent),
+    linear-gradient(to bottom, transparent, var(--background));
 }
 
 ::-webkit-scrollbar {
@@ -34,4 +46,432 @@ body {
 ::-webkit-scrollbar-thumb {
   background: #3f3f46;
   border-radius: 3px;
+}
+
+/* Virtual office (isometric 2.5D) */
+.office-stage-3d {
+  background: #87a8c8;
+}
+
+.office-stage-3d canvas {
+  display: block;
+  height: 100%;
+  width: 100%;
+}
+
+.office-stage {
+  position: relative;
+  display: flex;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(120, 180, 255, 0.18), transparent),
+    linear-gradient(#1b2740 0%, #243348 28%, #2a5a3c 70%, #1f4a30 100%);
+}
+
+.office-sky {
+  pointer-events: none;
+  position: absolute;
+  inset: 0 0 45%;
+  background: linear-gradient(to bottom, #87b6e8 0%, transparent 100%);
+  opacity: 0.25;
+}
+
+.office-world {
+  position: relative;
+  flex-shrink: 0;
+  transform: scale(0.92);
+  transform-origin: center top;
+}
+
+.iso-tile {
+  position: absolute;
+  width: 88px;
+  height: 44px;
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+.iso-room-label {
+  position: absolute;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(9, 9, 11, 0.72);
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #e4e4e7;
+  white-space: nowrap;
+}
+
+.iso-plant {
+  position: absolute;
+  width: 16px;
+  height: 22px;
+  border-radius: 8px 8px 3px 3px;
+  background: linear-gradient(#4ade80, #166534);
+  box-shadow: 0 6px 0 -2px rgba(0, 0, 0, 0.25);
+}
+
+.iso-plant::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: -6px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #22c55e;
+}
+
+.iso-desk-wrap {
+  position: absolute;
+  width: 68px;
+  height: 58px;
+}
+
+.iso-desk {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.iso-desk:disabled {
+  cursor: default;
+}
+
+.iso-desk-top {
+  position: absolute;
+  left: 8px;
+  top: 18px;
+  width: 52px;
+  height: 26px;
+  clip-path: polygon(50% 0, 100% 40%, 50% 80%, 0 40%);
+  background: linear-gradient(135deg, #c4a574, #8b6914);
+}
+
+.iso-desk-leg.left,
+.iso-desk-leg.right {
+  position: absolute;
+  top: 36px;
+  width: 6px;
+  height: 12px;
+  background: #5c4033;
+}
+
+.iso-desk-leg.left {
+  left: 18px;
+}
+
+.iso-desk-leg.right {
+  right: 18px;
+}
+
+.iso-chair {
+  position: absolute;
+  left: 24px;
+  top: 38px;
+  width: 20px;
+  height: 14px;
+  border-radius: 4px 4px 2px 2px;
+  background: #3f3f46;
+}
+
+.iso-monitor {
+  position: absolute;
+  left: 22px;
+  top: 2px;
+  width: 24px;
+  height: 20px;
+  border-radius: 2px;
+  background: #27272a;
+  box-shadow: 0 2px 0 #18181b;
+}
+
+.iso-screen {
+  position: absolute;
+  inset: 3px 3px 5px;
+  border-radius: 1px;
+  background: #09090b;
+}
+
+.iso-desk.is-lit .iso-screen {
+  background: linear-gradient(#67e8f9, #6366f1);
+  box-shadow: 0 0 10px rgba(103, 232, 249, 0.7);
+  animation: screen-flicker 1.4s ease-in-out infinite;
+}
+
+.iso-actor {
+  position: absolute;
+}
+
+.office-sprite {
+  position: relative;
+  display: flex;
+  width: 44px;
+  height: 62px;
+  align-items: flex-end;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.office-sprite.is-selected {
+  filter: drop-shadow(0 0 6px rgba(165, 180, 252, 0.9));
+}
+
+.office-shadow {
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  width: 28px;
+  height: 8px;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.office-legs {
+  position: absolute;
+  bottom: 6px;
+  display: flex;
+  gap: 4px;
+}
+
+.office-leg {
+  width: 5px;
+  height: 10px;
+  border-radius: 2px;
+  background: #1e3a5f;
+}
+
+.office-sprite.is-walk .office-leg.left {
+  animation: stride 0.35s ease-in-out infinite;
+}
+
+.office-sprite.is-walk .office-leg.right {
+  animation: stride 0.35s ease-in-out infinite reverse;
+}
+
+.office-body {
+  position: absolute;
+  bottom: 14px;
+  width: 20px;
+  height: 18px;
+  border-radius: 6px 6px 4px 4px;
+  border-bottom: 2px solid transparent;
+}
+
+.office-head {
+  position: absolute;
+  bottom: 28px;
+  width: 18px;
+  height: 18px;
+}
+
+.office-hair {
+  position: absolute;
+  top: -3px;
+  left: 1px;
+  width: 16px;
+  height: 10px;
+  border-radius: 8px 8px 2px 2px;
+}
+
+.office-face {
+  position: absolute;
+  inset: 4px 2px 2px;
+  display: flex;
+  justify-content: space-around;
+  border-radius: 50%;
+  background: #f1d5b5;
+  padding: 5px 2px 0;
+}
+
+.office-eye {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: #18181b;
+}
+
+.office-sprite.is-type {
+  animation: type-bob 0.55s ease-in-out infinite;
+}
+
+.office-sprite.is-stuck {
+  animation: stuck-shake 0.4s ease-in-out infinite;
+}
+
+.office-code-dots {
+  position: absolute;
+  top: 0;
+  right: -6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 5px -4px 0 #86efac, 2px -8px 0 #bbf7d0;
+  animation: code-blink 0.8s ease-in-out infinite;
+}
+
+.office-stuck-mark {
+  position: absolute;
+  top: -10px;
+  right: -4px;
+  font-size: 14px;
+  font-weight: 800;
+  color: #fbbf24;
+}
+
+.office-doc {
+  position: absolute;
+  top: 8px;
+  right: -8px;
+  width: 10px;
+  height: 12px;
+  border-radius: 1px;
+  background: #fafafa;
+  box-shadow: 1px 1px 0 #a1a1aa;
+}
+
+.office-nametag {
+  position: absolute;
+  top: -18px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(9, 9, 11, 0.82);
+  padding: 1px 6px;
+  font-size: 9px;
+  font-weight: 600;
+  color: #fafafa;
+  white-space: nowrap;
+}
+
+.office-hint {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  color: rgba(244, 244, 245, 0.7);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.office-hud {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 12px;
+}
+
+.office-work-banner {
+  pointer-events: none;
+  display: table;
+  margin: 0 auto 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(103, 232, 249, 0.45);
+  background: rgba(8, 47, 73, 0.82);
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: #ecfeff;
+  box-shadow: 0 8px 24px rgba(8, 47, 73, 0.45);
+}
+
+.office-coding-badge {
+  display: inline-block;
+  border-radius: 6px;
+  background: #22d3ee;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #082f49;
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.85);
+}
+
+.office-nametag.is-coding {
+  background: rgba(8, 47, 73, 0.92);
+  color: #a5f3fc;
+  font-size: 10px;
+}
+
+@keyframes stride {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes type-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(2px);
+  }
+}
+
+@keyframes stuck-shake {
+  0%,
+  100% {
+    transform: rotate(0);
+  }
+  30% {
+    transform: rotate(-6deg);
+  }
+  70% {
+    transform: rotate(6deg);
+  }
+}
+
+@keyframes screen-flicker {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.25);
+  }
+}
+
+@keyframes code-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .office-sprite.is-walk .office-leg,
+  .office-sprite.is-type,
+  .office-sprite.is-stuck,
+  .iso-desk.is-lit .iso-screen,
+  .office-code-dots {
+    animation: none;
+  }
 }

@@ -128,7 +128,7 @@ export function OrgBuilder({
       <textarea
         className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100"
         rows={3}
-        placeholder="Focus for this person — they still help realize the CEO goal"
+        placeholder="What this person should focus on"
         value={jobBoundary}
         onChange={(e) => setJobBoundary(e.target.value)}
       />
@@ -149,7 +149,7 @@ export function OrgBuilder({
         </PanelHeader>
         <PanelContent className="space-y-2">
           <p className="text-xs text-zinc-500">
-            Templates replace the current roster. After that you can hire, edit, or fire anyone.
+            Pick a starting team. You can add, edit, or remove people after.
           </p>
           {templates.map((t) => (
             <button
@@ -185,7 +185,7 @@ export function OrgBuilder({
             }}
           >
             <Plus size={14} />
-            Hire
+            Add
           </Button>
         </PanelHeader>
         <PanelContent>
@@ -235,7 +235,7 @@ export function OrgBuilder({
               </div>
             ))}
             {agents.length === 0 && (
-              <p className="text-xs text-zinc-600">No one on the floor yet. Hire someone or apply a template.</p>
+              <p className="text-xs text-zinc-600">No one on the team yet. Add someone or pick a template.</p>
             )}
           </div>
         </PanelContent>

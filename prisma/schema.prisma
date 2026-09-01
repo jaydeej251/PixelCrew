@@ -84,6 +84,7 @@ model User {
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
   memberships   Membership[]
+  sessions      Session[]
 }
 
 model Organization {
@@ -108,6 +109,17 @@ model Membership {
   organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@unique([userId, organizationId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model Workspace {
@@ -192,9 +204,11 @@ model Run {
   id           String     @id @default(cuid())
   workspaceId  String
   ceoGoal      String
+  title        String     @default("")
   status       RunStatus  @default(pending)
   startedAt    DateTime?
   completedAt  DateTime?
+  archivedAt   DateTime?
   totalTokens  Int        @default(0)
   estCostUsd   Float      @default(0)
   createdAt    DateTime   @default(now())

@@ -1,65 +1,225 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { OfficeFloor } from "@/components/office/office-floor";
+import { useRouter } from "next/navigation";
+import { OfficeViewport } from "@/components/office/office-viewport";
 import { InspectorDrawer } from "@/components/office/inspector-drawer";
-import { OrgBuilder } from "@/components/org/org-builder";
 import { ArtifactsPanel } from "@/components/artifacts/artifacts-panel";
-import { CredentialsForm } from "@/components/settings/credentials-form";
-import { RunSettings } from "@/components/settings/run-settings";
-import { Button } from "@/components/ui/button";
-import { Panel, PanelContent, PanelHeader, PanelTitle } from "@/components/ui/panel";
-import { PRODUCT_NAME } from "@/lib/constants";
-import { TEAM_TEMPLATES } from "@/lib/templates";
-import { EVENT_LABELS, isMilestoneEvent } from "@/lib/events";
+import {
+  ConversationList,
+  getStoredActiveRunId,
+  setStoredActiveRunId,
+  type ConversationSummary,
+} from "@/components/conversations/conversation-list";
+import { AppHeader } from "@/components/layout/app-header";
+import { SettingsDrawer } from "@/components/layout/settings-drawer";
+import { GoalComposer } from "@/components/layout/goal-composer";
+import { DashboardSkeleton } from "@/components/layout/dashboard-skeleton";
+import { ActivityFeed } from "@/components/office/activity-feed";
+import { Alert } from "@/components/ui/alert";
+import { Dialog } from "@/components/ui/dialog";
+import { SHOW_DEV_TOOLS } from "@/lib/dev-tools";
 import type { RunEventMessage } from "@/lib/events";
 import type { OfficeAgent } from "@/lib/office";
 import type { AgentStatus } from "@prisma/client";
-import { Play, Square, Sparkles } from "lucide-react";
 import { PlanReview } from "@/components/plan/plan-review";
+import { OFFICE_VIEW_KEY, type OfficeViewMode } from "@/components/office/office-layout";
 
 type WorkspaceData = {
   workspace: { id: string; name: string; ceoGoal: string | null };
   agents: OfficeAgent[];
   desks: Array<{ id: string; label: string; x: number; y: number; room: string }>;
+  user?: { email: string; name: string | null };
+};
+
+type RunDetail = {
+  id: string;
+  ceoGoal: string;
+  status: string;
+  totalTokens?: number;
+  estCostUsd?: number;
+  artifacts?: Array<{
+    id: string;
+    type: string;
+    title: string;
+    content: string;
+    createdAt: string;
+    filePath?: string | null;
+  }>;
+  events?: Array<{
+    id: string;
+    type: RunEventMessage["type"];
+    payload: RunEventMessage["payload"];
+    agentId?: string | null;
+    createdAt: string;
+  }>;
 };
 
 export function Dashboard() {
+  const router = useRouter();
   const [data, setData] = useState<WorkspaceData | null>(null);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [ceoGoal, setCeoGoal] = useState("");
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [newChatDialogOpen, setNewChatDialogOpen] = useState(false);
+  const [mobilePane, setMobilePane] = useState<"chats" | "work" | "files">("work");
   const [events, setEvents] = useState<RunEventMessage[]>([]);
   const [agentStatuses, setAgentStatuses] = useState<Record<string, AgentStatus>>({});
   const [streamByAgent, setStreamByAgent] = useState<Record<string, string>>({});
   const [runId, setRunId] = useState<string | null>(null);
-  const [artifacts, setArtifacts] = useState<Array<{ id: string; type: string; title: string; content: string; createdAt: string }>>([]);
+  const [artifacts, setArtifacts] = useState<
+    Array<{
+      id: string;
+      type: string;
+      title: string;
+      content: string;
+      createdAt: string;
+      filePath?: string | null;
+    }>
+  >([]);
   const [runStats, setRunStats] = useState({ totalTokens: 0, estCostUsd: 0 });
   const [running, setRunning] = useState(false);
   const [simulating, setSimulating] = useState(false);
-  const [runProvider, setRunProvider] = useState("openrouter");
-  const [runModel, setRunModel] = useState("openai/gpt-4o-mini");
+  const [runProvider, setRunProvider] = useState("mock");
+  const [runModel, setRunModel] = useState("mock");
   const [runError, setRunError] = useState("");
   const [awaitingPlan, setAwaitingPlan] = useState(false);
-  const [runOutcome, setRunOutcome] = useState<"idle" | "running" | "paused" | "completed" | "failed">(
-    "idle",
-  );
+  const [runOutcome, setRunOutcome] = useState<
+    "idle" | "running" | "paused" | "completed" | "failed"
+  >("idle");
+  const [officeView, setOfficeView] = useState<OfficeViewMode>("3d");
   const eventSourceRef = useRef<EventSource | null>(null);
   const seenEventIdsRef = useRef(new Set<string>());
+  const subscribeToRunRef = useRef<(id: string) => void>(() => undefined);
+  const floorBusyRef = useRef(false);
+
+  const loadConversations = useCallback(async () => {
+    const res = await fetch("/api/runs");
+    if (!res.ok) return [];
+    const runs = (await res.json()) as ConversationSummary[];
+    setConversations(runs);
+    return runs;
+  }, []);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/workspace");
+    if (res.status === 401) {
+      router.push("/login");
+      return;
+    }
     const json = await res.json();
     setData(json);
-    setCeoGoal(json.workspace.ceoGoal ?? "");
     const statuses: Record<string, AgentStatus> = {};
-    for (const a of json.agents) statuses[a.id] = a.status;
-    setAgentStatuses(statuses);
+    for (const a of json.agents as OfficeAgent[]) statuses[a.id] = a.status;
+    if (!floorBusyRef.current) {
+      setAgentStatuses(statuses);
+    } else {
+      setAgentStatuses((prev) => {
+        const next = { ...prev };
+        for (const a of json.agents as OfficeAgent[]) {
+          if (!(a.id in next)) next[a.id] = "walking";
+        }
+        return next;
+      });
+    }
+    return json as WorkspaceData;
+  }, [router]);
+
+  const applyRunDetail = useCallback((run: RunDetail) => {
+    setRunId(run.id);
+    setStoredActiveRunId(run.id);
+    setCeoGoal(run.ceoGoal);
+    setArtifacts(run.artifacts ?? []);
+    setRunStats({ totalTokens: run.totalTokens ?? 0, estCostUsd: run.estCostUsd ?? 0 });
+    setEvents(
+      (run.events ?? []).map((e) => ({
+        id: e.id,
+        type: e.type,
+        payload: e.payload,
+        createdAt: e.createdAt,
+        agentId: e.agentId,
+      })),
+    );
+    setStreamByAgent({});
+    seenEventIdsRef.current.clear();
+
+    if (run.status === "paused") {
+      setAwaitingPlan(true);
+      setRunOutcome("paused");
+      setRunning(false);
+    } else if (run.status === "completed") {
+      setAwaitingPlan(false);
+      setRunOutcome("completed");
+      setRunning(false);
+    } else if (run.status === "failed" || run.status === "cancelled") {
+      setAwaitingPlan(false);
+      setRunOutcome("failed");
+      setRunning(false);
+    } else if (run.status === "running" || run.status === "pending") {
+      setAwaitingPlan(false);
+      setRunOutcome("running");
+      setRunning(true);
+      subscribeToRunRef.current(run.id);
+    } else {
+      setAwaitingPlan(false);
+      setRunOutcome("idle");
+      setRunning(false);
+    }
+  }, []);
+
+  const selectRun = useCallback(
+    async (id: string) => {
+      eventSourceRef.current?.close();
+      const res = await fetch(`/api/runs/${id}`);
+      if (!res.ok) return;
+      const run = (await res.json()) as RunDetail;
+      applyRunDetail(run);
+      setMobilePane("work");
+    },
+    [applyRunDetail],
+  );
+
+  const blankConversation = useCallback(() => {
+    eventSourceRef.current?.close();
+    setRunId(null);
+    setStoredActiveRunId(null);
+    setCeoGoal("");
+    setArtifacts([]);
+    setRunStats({ totalTokens: 0, estCostUsd: 0 });
+    setEvents([]);
+    setStreamByAgent({});
+    seenEventIdsRef.current.clear();
+    setAwaitingPlan(false);
+    setRunOutcome("idle");
+    setRunning(false);
+    setRunError("");
+    floorBusyRef.current = false;
+    setMobilePane("work");
   }, []);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    void (async () => {
+      await load();
+      const runs = await loadConversations();
+      const stored = getStoredActiveRunId();
+      if (stored && runs.some((r) => r.id === stored)) {
+        await selectRun(stored);
+      } else {
+        blankConversation();
+      }
+    })();
+  }, [load, loadConversations, selectRun, blankConversation]);
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem(OFFICE_VIEW_KEY);
+    if (saved === "iso" || saved === "3d") setOfficeView(saved);
+  }, []);
+
+  useEffect(() => {
+    floorBusyRef.current = running || simulating || awaitingPlan;
+  }, [running, simulating, awaitingPlan]);
 
   useEffect(() => {
     return () => {
@@ -85,15 +245,21 @@ export function Dashboard() {
         if (eventSourceRef.current === es) eventSourceRef.current = null;
         setRunning(false);
         if (event.runStatus === "paused") {
+          floorBusyRef.current = true;
           setAwaitingPlan(true);
           setRunOutcome("paused");
         } else if (event.runStatus === "completed") {
+          floorBusyRef.current = false;
           setRunOutcome("completed");
         } else if (event.runStatus === "failed" || event.runStatus === "cancelled") {
+          floorBusyRef.current = false;
           setRunOutcome("failed");
+        } else {
+          floorBusyRef.current = false;
         }
-        refreshRun(id);
+        void refreshRun(id);
         void load();
+        void loadConversations();
         return;
       }
       if (event.id && seenEventIdsRef.current.has(event.id)) return;
@@ -104,6 +270,9 @@ export function Dashboard() {
       }
       const agentId = event.agentId ?? event.payload?.agentId;
       if (agentId) {
+        if (event.type === "TASK_CLAIMED") {
+          setAgentStatuses((s) => ({ ...s, [agentId]: "walking" }));
+        }
         if (event.type === "TASK_STARTED" || event.type === "AGENT_THINKING") {
           setAgentStatuses((s) => ({ ...s, [agentId]: "working" }));
         }
@@ -132,6 +301,8 @@ export function Dashboard() {
     };
   };
 
+  subscribeToRunRef.current = subscribeToRun;
+
   const refreshRun = async (id: string) => {
     const res = await fetch(`/api/runs/${id}`);
     const run = await res.json();
@@ -144,44 +315,57 @@ export function Dashboard() {
     }
   };
 
-  useEffect(() => {
-    void fetch("/api/runs")
-      .then((r) => r.json())
-      .then(
-        (
-          runs: Array<{
-            id: string;
-            status: string;
-            artifacts?: Array<{ id: string; type: string; title: string; content: string; createdAt: string }>;
-            totalTokens?: number;
-            estCostUsd?: number;
-          }>,
-        ) => {
-          const latest = Array.isArray(runs) ? runs[0] : null;
-          if (!latest) return;
-          setRunId(latest.id);
-          setArtifacts(latest.artifacts ?? []);
-          setRunStats({
-            totalTokens: latest.totalTokens ?? 0,
-            estCostUsd: latest.estCostUsd ?? 0,
-          });
-          if (latest.status === "paused") {
-            setAwaitingPlan(true);
-            setRunOutcome("paused");
-          } else if (latest.status === "completed") {
-            setRunOutcome("completed");
-          } else if (latest.status === "running" || latest.status === "pending") {
-            setRunning(true);
-            setRunOutcome("running");
-            subscribeToRun(latest.id);
-          }
-        },
-      )
-      .catch(() => undefined);
-  }, []);
+  const requestNewChat = () => {
+    if (running) {
+      setNewChatDialogOpen(true);
+      return;
+    }
+    blankConversation();
+  };
+
+  const handleRename = async (id: string, title: string) => {
+    await fetch(`/api/runs/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, title } : c)));
+  };
+
+  const handleDelete = async (id: string) => {
+    await fetch(`/api/runs/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archive: true }),
+    });
+    setConversations((prev) => prev.filter((x) => x.id !== id));
+    if (runId === id) blankConversation();
+  };
+
+  const logout = async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    router.push("/login");
+    router.refresh();
+  };
+
+  const recallEveryone = (agents: OfficeAgent[]) => {
+    setAgentStatuses((s) => {
+      const next = { ...s };
+      for (const a of agents) next[a.id] = "walking";
+      return next;
+    });
+  };
+
+  const force3D = () => {
+    setOfficeView("3d");
+    window.localStorage.setItem(OFFICE_VIEW_KEY, "3d");
+  };
 
   const startRun = async () => {
     if (!data) return;
+    floorBusyRef.current = true;
+    force3D();
+    recallEveryone(data.agents);
     setRunning(true);
     setAwaitingPlan(false);
     setRunOutcome("running");
@@ -189,11 +373,6 @@ export function Dashboard() {
     setEvents([]);
     setStreamByAgent({});
     seenEventIdsRef.current.clear();
-    await fetch(`/api/workspace/${data.workspace.id}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "update_goal", ceoGoal }),
-    });
     const res = await fetch("/api/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -206,31 +385,57 @@ export function Dashboard() {
     });
     const json = await res.json();
     if (!res.ok) {
-      setRunError(json.error ?? "Run failed to start");
+      floorBusyRef.current = false;
+      setRunError(json.error ?? "Couldn’t start. Check settings and try again.");
       setRunning(false);
+      setRunOutcome("idle");
       return;
     }
     setRunId(json.runId);
+    setStoredActiveRunId(json.runId);
+    setMobilePane("work");
     subscribeToRun(json.runId);
-    await load();
+    const runs = await loadConversations();
+    const created = runs.find((r) => r.id === json.runId);
+    if (!created) {
+      setConversations((prev) => [
+        {
+          id: json.runId,
+          title: ceoGoal.slice(0, 60),
+          ceoGoal,
+          status: "pending",
+          createdAt: new Date().toISOString(),
+        },
+        ...prev,
+      ]);
+    }
+    const fresh = await load();
+    recallEveryone(fresh?.agents ?? data.agents);
   };
 
   const simulateRun = async () => {
     if (!data) return;
+    floorBusyRef.current = true;
+    force3D();
     setSimulating(true);
     setEvents([]);
     setStreamByAgent({});
+    recallEveryone(data.agents);
     const res = await fetch("/api/simulate", { method: "POST" });
     const { events: simEvents } = await res.json();
     const feAgents = data.agents.filter((a) => a.position === "frontend_engineer");
+    const beAgents = data.agents.filter((a) => a.position === "backend_engineer");
     const idMap: Record<string, string> = {
       "fe-1": feAgents[0]?.id ?? "",
-      "fe-2": feAgents[1]?.id ?? "",
+      "fe-2": feAgents[1]?.id ?? feAgents[0]?.id ?? "",
+      "be-1": beAgents[0]?.id ?? "",
     };
 
+    await new Promise((r) => setTimeout(r, 1600));
+
     for (const [i, e] of simEvents.entries()) {
-      await new Promise((r) => setTimeout(r, 600));
-      const mappedId = e.agentId ? idMap[e.agentId] ?? e.agentId : undefined;
+      await new Promise((r) => setTimeout(r, 1100));
+      const mappedId = e.agentId ? idMap[e.agentId] || e.agentId : undefined;
       const event: RunEventMessage = {
         ...e,
         id: `sim-${i}`,
@@ -241,6 +446,9 @@ export function Dashboard() {
       setEvents((prev) => [...prev, event]);
       const aid = mappedId ?? e.payload?.agentId;
       if (aid) {
+        if (e.type === "TASK_CLAIMED") {
+          setAgentStatuses((s) => ({ ...s, [aid]: "walking" }));
+        }
         if (["TASK_STARTED", "AGENT_THINKING"].includes(e.type)) {
           setAgentStatuses((s) => ({ ...s, [aid]: "working" }));
         }
@@ -254,198 +462,262 @@ export function Dashboard() {
         }
       }
     }
+    await new Promise((r) => setTimeout(r, 4000));
+    floorBusyRef.current = false;
     setSimulating(false);
   };
 
   const cancelRun = async () => {
     if (!runId) return;
+    floorBusyRef.current = false;
     await fetch(`/api/runs/${runId}`, { method: "DELETE" });
     setRunning(false);
+    void loadConversations();
   };
 
   if (!data) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-zinc-950 text-zinc-400">
-        Loading {PRODUCT_NAME}…
-      </div>
-    );
+    return <DashboardSkeleton />;
   }
 
-  return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <header className="border-b border-zinc-800 px-6 py-4">
-        <div className="mx-auto flex max-w-7xl items-center justify-between">
-          <div>
-            <h1 className="text-lg font-semibold">{PRODUCT_NAME}</h1>
-            <p className="text-xs text-zinc-500">{data.workspace.name}</p>
-          </div>
-          <div className="flex gap-2">
-            <Button variant="secondary" onClick={simulateRun} disabled={simulating || running}>
-              <Sparkles size={14} />
-              {simulating ? "Simulating…" : "Simulate"}
-            </Button>
-            {running ? (
-              <Button variant="danger" onClick={cancelRun}>
-                <Square size={14} />
-                Cancel
-              </Button>
-            ) : (
-              <Button onClick={startRun} disabled={running}>
-                <Play size={14} />
-                Run team
-              </Button>
-            )}
-          </div>
-        </div>
-      </header>
+  const onShift = running || simulating || awaitingPlan;
+  const codingAgents = data.agents.filter((a) => agentStatuses[a.id] === "working");
+  const headingToDesk = data.agents.filter(
+    (a) => agentStatuses[a.id] === "walking" || agentStatuses[a.id] === "handoff",
+  );
+  const names = codingAgents.map((a) => a.name.split(" ")[0]);
+  const shiftBanner = codingAgents.length === 1
+    ? `${names[0]} is coding`
+    : codingAgents.length > 1
+      ? `${names.slice(0, 2).join(" & ")}${names.length > 2 ? " + crew" : ""} coding`
+      : headingToDesk.length
+        ? "They're walking to their desks"
+        : onShift
+          ? "They're at their desks"
+          : null;
 
-      <main className="mx-auto grid max-w-7xl gap-6 p-6 lg:grid-cols-[280px_1fr_280px]">
-        <aside className="space-y-4">
-          <OrgBuilder
-            agents={data.agents}
-            templates={TEAM_TEMPLATES}
-            onApplyTemplate={async (templateId) => {
-              await fetch(`/api/workspace/${data.workspace.id}`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ action: "apply_template", templateId }),
-              });
-              await load();
-            }}
-            onHire={async (hireData) => {
-              await fetch(`/api/workspace/${data.workspace.id}`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ action: "hire", ...hireData }),
-              });
-              await load();
-            }}
-            onUpdate={async (id, hireData) => {
-              await fetch(`/api/agents/${id}`, {
-                method: "PATCH",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(hireData),
-              });
-              await load();
-            }}
-            onRemove={async (id) => {
-              await fetch(`/api/agents/${id}`, { method: "DELETE" });
-              if (selectedAgentId === id) {
-                setSelectedAgentId(null);
-                setInspectorOpen(false);
-              }
-              await load();
-            }}
-          />
-          <CredentialsForm
-            workspaceId={data.workspace.id}
-            onSave={async (cred) => {
-              await fetch("/api/credentials", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ workspaceId: data.workspace.id, ...cred }),
-              });
-            }}
-          />
-          <RunSettings
-            workspaceId={data.workspace.id}
-            provider={runProvider}
-            model={runModel}
-            onProviderChange={setRunProvider}
-            onModelChange={setRunModel}
-          />
+  const chatsAside = (
+    <ConversationList
+      conversations={conversations}
+      activeId={runId}
+      onNew={() => {
+        requestNewChat();
+        setMobilePane("work");
+      }}
+      onSelect={(id) => {
+        void selectRun(id);
+        setMobilePane("work");
+      }}
+      onRename={handleRename}
+      onDelete={handleDelete}
+    />
+  );
+
+  const filesAside = (
+    <ArtifactsPanel
+      artifacts={artifacts}
+      totalTokens={runStats.totalTokens}
+      estCostUsd={runStats.estCostUsd}
+      runId={runId ?? undefined}
+      runFinished={runOutcome === "completed"}
+    />
+  );
+
+  return (
+    <div className="flex h-dvh flex-col overflow-hidden bg-zinc-950 text-zinc-100">
+      <AppHeader
+        workspaceName={data.workspace.name}
+        userEmail={data.user?.email}
+        userName={data.user?.name}
+        running={running}
+        runOutcome={runOutcome}
+        onCancel={cancelRun}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onLogout={logout}
+        onSimulate={SHOW_DEV_TOOLS ? simulateRun : undefined}
+        simulating={simulating}
+        onOpenChats={() => setMobilePane((p) => (p === "chats" ? "work" : "chats"))}
+        onOpenFiles={
+          runId ? () => setMobilePane((p) => (p === "files" ? "work" : "files")) : undefined
+        }
+        filesCount={artifacts.length}
+      />
+
+      <div className="relative flex min-h-0 flex-1">
+        <aside className="hidden w-56 shrink-0 flex-col border-r border-zinc-800/80 bg-zinc-950/90 lg:flex">
+          {chatsAside}
         </aside>
 
-        <section className="space-y-4">
-          <Panel>
-            <PanelHeader>
-              <PanelTitle>CEO goal</PanelTitle>
-            </PanelHeader>
-            <PanelContent>
-              <textarea
-                className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100"
-                rows={3}
-                value={ceoGoal}
-                onChange={(e) => setCeoGoal(e.target.value)}
-                placeholder="What should we build? The workspace AI will staff a team and they’ll brainstorm."
-              />
-            </PanelContent>
-          </Panel>
-
-          {runError && (
-            <p className="rounded-lg border border-red-900/50 bg-red-950/30 px-3 py-2 text-sm text-red-300">
-              {runError}
-            </p>
-          )}
-
-          {runOutcome === "failed" && (
-            <p className="rounded-lg border border-red-900/50 bg-red-950/30 px-3 py-2 text-sm text-red-300">
-              The run stopped with an error. Check the timeline and inspector. You can Run team again.
-            </p>
-          )}
-
-          {runOutcome === "completed" && (
-            <p className="rounded-lg border border-emerald-900/40 bg-emerald-950/20 px-3 py-2 text-sm text-emerald-200">
-              The team finished. They drafted a plan and file sketches — they did not deploy a live
-              budget tracker. Open <span className="font-medium">Artifacts</span> on the right (click a
-              card to read it, or Export zip). Avery’s job ended at the plan; engineers ran after that.
-            </p>
-          )}
-
-          {awaitingPlan && runId && (
-            <PlanReview
-              runId={runId}
-              onPublished={() => {
-                setAwaitingPlan(false);
-                setRunning(true);
-                setRunOutcome("running");
-                subscribeToRun(runId);
-              }}
-            />
-          )}
-
-          <OfficeFloor
+        <section className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+          <OfficeViewport
+            mode={officeView}
             agents={data.agents}
             desks={data.desks}
             selectedAgentId={selectedAgentId}
             onSelectAgent={handleSelectAgent}
             agentStatuses={agentStatuses}
+            events={events}
+            onShift={onShift}
           />
 
-          {events.length > 0 && (
-            <Panel>
-              <PanelHeader>
-                <PanelTitle>Run timeline</PanelTitle>
-              </PanelHeader>
-              <PanelContent>
-                <ul className="max-h-32 space-y-1 overflow-auto text-xs">
-                  {events
-                    .filter((e, i, all) => e.id && all.findIndex((x) => x.id === e.id) === i)
-                    .filter((e) => isMilestoneEvent(e.type))
-                    .slice(-10)
-                    .map((e) => (
-                    <li key={e.id} className="text-zinc-400">
-                      <span className="text-indigo-400">{EVENT_LABELS[e.type] ?? e.type}</span>
-                      {e.payload.agentName && ` — ${e.payload.agentName}`}
-                      {e.payload.taskTitle && `: ${e.payload.taskTitle}`}
-                    </li>
-                  ))}
-                </ul>
-              </PanelContent>
-            </Panel>
-          )}
+          <div className="office-hud">
+            <div>
+            {shiftBanner && <p className="office-work-banner">{shiftBanner}</p>}
+            <div className="flex items-start justify-between gap-3">
+              <div className="pointer-events-auto max-w-sm space-y-2">
+                {runId && ceoGoal && (
+                  <div className="rounded-xl border border-zinc-800/80 bg-zinc-950/80 px-3 py-2 backdrop-blur-md">
+                    <p className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+                      You asked
+                    </p>
+                    <p className="line-clamp-2 text-sm text-zinc-100">{ceoGoal}</p>
+                  </div>
+                )}
+                {runError && <Alert variant="error">{runError}</Alert>}
+                {runOutcome === "failed" && runId && (
+                  <Alert variant="error">
+                    Something went wrong and the team stopped. Click a teammate, or start a new chat.
+                  </Alert>
+                )}
+                {runOutcome === "completed" && runId && (
+                  <Alert variant="success">
+                    Done. Open Files to preview the app, or download it.
+                  </Alert>
+                )}
+                <ActivityFeed events={events} />
+              </div>
+
+              <div className="pointer-events-auto flex flex-col items-end gap-3">
+                <div className="flex rounded-full border border-zinc-700/80 bg-zinc-950/80 p-0.5 backdrop-blur-md">
+                  <button
+                    type="button"
+                    className={`rounded-full px-3 py-1 text-[11px] font-medium ${
+                      officeView === "iso"
+                        ? "bg-zinc-100 text-zinc-900"
+                        : "text-zinc-300 hover:text-white"
+                    }`}
+                    onClick={() => {
+                      setOfficeView("iso");
+                      window.localStorage.setItem(OFFICE_VIEW_KEY, "iso");
+                    }}
+                  >
+                    Isometric
+                  </button>
+                  <button
+                    type="button"
+                    className={`rounded-full px-3 py-1 text-[11px] font-medium ${
+                      officeView === "3d"
+                        ? "bg-zinc-100 text-zinc-900"
+                        : "text-zinc-300 hover:text-white"
+                    }`}
+                    onClick={() => {
+                      setOfficeView("3d");
+                      window.localStorage.setItem(OFFICE_VIEW_KEY, "3d");
+                    }}
+                  >
+                    3D
+                  </button>
+                </div>
+                {awaitingPlan && runId && (
+                <div className="max-h-[70vh] w-full max-w-md overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950/90 p-4 shadow-xl backdrop-blur-md">
+                  <PlanReview
+                    runId={runId}
+                    onPublished={() => {
+                      setAwaitingPlan(false);
+                      setRunning(true);
+                      setRunOutcome("running");
+                      subscribeToRun(runId);
+                    }}
+                  />
+                </div>
+              )}
+              </div>
+            </div>
+            </div>
+
+            {!runId && (
+              <div className="pointer-events-auto mx-auto w-full max-w-2xl">
+                <p className="mb-2 text-center text-sm font-medium text-zinc-100 drop-shadow">
+                  Your office is live — tell the team what to build
+                </p>
+                <GoalComposer
+                  value={ceoGoal}
+                  onChange={setCeoGoal}
+                  onSubmit={() => void startRun()}
+                  submitting={running}
+                  showExamples
+                  compact
+                />
+              </div>
+            )}
+          </div>
         </section>
 
-        <aside>
-          <ArtifactsPanel
-            artifacts={artifacts}
-            totalTokens={runStats.totalTokens}
-            estCostUsd={runStats.estCostUsd}
-            runId={runId ?? undefined}
-            runFinished={runOutcome === "completed"}
-          />
-        </aside>
-      </main>
+        {runId && (
+          <aside className="hidden w-80 shrink-0 flex-col border-l border-zinc-800/80 bg-zinc-950 lg:flex">
+            {filesAside}
+          </aside>
+        )}
+
+        {mobilePane === "chats" && (
+          <div className="absolute inset-0 z-20 flex lg:hidden">
+            <div className="flex h-full w-72 flex-col border-r border-zinc-800 bg-zinc-950">
+              {chatsAside}
+            </div>
+            <button
+              type="button"
+              className="flex-1 bg-black/50"
+              aria-label="Close chats"
+              onClick={() => setMobilePane("work")}
+            />
+          </div>
+        )}
+
+        {mobilePane === "files" && (
+          <div className="absolute inset-0 z-20 flex lg:hidden">
+            <button
+              type="button"
+              className="flex-1 bg-black/50"
+              aria-label="Close files"
+              onClick={() => setMobilePane("work")}
+            />
+            <div className="flex h-full w-80 max-w-[85vw] flex-col border-l border-zinc-800 bg-zinc-950">
+              {filesAside}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <SettingsDrawer
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        workspaceId={data.workspace.id}
+        agents={data.agents}
+        runProvider={runProvider}
+        runModel={runModel}
+        onProviderChange={setRunProvider}
+        onModelChange={setRunModel}
+        onRefresh={async () => {
+          await load();
+        }}
+        onAgentRemoved={(id) => {
+          if (selectedAgentId === id) {
+            setSelectedAgentId(null);
+            setInspectorOpen(false);
+          }
+        }}
+      />
+
+      <Dialog
+        open={newChatDialogOpen}
+        onClose={() => setNewChatDialogOpen(false)}
+        title="Start a new chat?"
+        description="Your team is still working. They’ll keep going in the background — open that chat later to watch."
+        confirmLabel="New chat"
+        onConfirm={() => {
+          setNewChatDialogOpen(false);
+          blankConversation();
+        }}
+      />
 
       <InspectorDrawer
         open={inspectorOpen}
