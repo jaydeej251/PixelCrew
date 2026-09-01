@@ -1,0 +1,64 @@
+import type { PositionKey } from "./constants";
+import { DEFAULT_JOB_BOUNDARIES, POSITIONS } from "./constants";
+
+export type TemplateAgent = {
+  name: string;
+  position: PositionKey;
+  department: string;
+  room: string;
+};
+
+export type TeamTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  agents: TemplateAgent[];
+};
+
+export const TEAM_TEMPLATES: TeamTemplate[] = [
+  {
+    id: "startup",
+    name: "Startup Product Team",
+    description: "PM, architect, 2 frontend, 2 backend, 2 QA — parallel by default.",
+    agents: [
+      { name: "Alex Chen", position: "project_manager", department: "Product", room: "Product" },
+      { name: "Jordan Lee", position: "tech_architect", department: "Engineering", room: "Engineering" },
+      { name: "Sam Rivera", position: "frontend_engineer", department: "Engineering", room: "Engineering" },
+      { name: "Casey Kim", position: "frontend_engineer", department: "Engineering", room: "Engineering" },
+      { name: "Morgan Patel", position: "backend_engineer", department: "Engineering", room: "Engineering" },
+      { name: "Riley Nguyen", position: "backend_engineer", department: "Engineering", room: "Engineering" },
+      { name: "Taylor Brooks", position: "qa_engineer", department: "QA", room: "QA" },
+      { name: "Jamie Ortiz", position: "qa_engineer", department: "QA", room: "QA" },
+    ],
+  },
+  {
+    id: "agency",
+    name: "Agency Delivery",
+    description: "PM, designer, frontend, backend for client deliverables.",
+    agents: [
+      { name: "Avery Walsh", position: "project_manager", department: "Product", room: "Product" },
+      { name: "Drew Santos", position: "designer", department: "Product", room: "Product" },
+      { name: "Quinn Hayes", position: "frontend_engineer", department: "Engineering", room: "Engineering" },
+      { name: "Blake Foster", position: "backend_engineer", department: "Engineering", room: "Engineering" },
+      { name: "Skyler Reed", position: "qa_engineer", department: "QA", room: "QA" },
+    ],
+  },
+  {
+    id: "research",
+    name: "Research Lab",
+    description: "PM and architect focused on discovery and documentation.",
+    agents: [
+      { name: "Eden Park", position: "project_manager", department: "Product", room: "Product" },
+      { name: "Harper Lin", position: "tech_architect", department: "Engineering", room: "Engineering" },
+      { name: "Reese Morgan", position: "qa_engineer", department: "QA", room: "QA" },
+    ],
+  },
+];
+
+export function getPositionLabel(position: PositionKey): string {
+  return POSITIONS[position];
+}
+
+export function getJobBoundary(position: PositionKey): string {
+  return DEFAULT_JOB_BOUNDARIES[position];
+}

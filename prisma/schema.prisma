@@ -1,0 +1,301 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AgentStatus {
+  idle
+  walking
+  working
+  blocked
+  error
+  handoff
+}
+
+enum RunStatus {
+  pending
+  running
+  paused
+  completed
+  cancelled
+  failed
+}
+
+enum TaskStatus {
+  queued
+  claimed
+  in_progress
+  blocked
+  done
+  failed
+}
+
+enum EventType {
+  TASK_CLAIMED
+  TASK_STARTED
+  AGENT_THINKING
+  AGENT_HANDOFF
+  AGENT_BLOCKED
+  AGENT_ERROR
+  AGENT_TASK_DONE
+  RUN_COMPLETED
+  RUN_CANCELLED
+}
+
+enum ProviderType {
+  mock
+  openai_compatible
+  openrouter
+  google
+  ollama
+  anthropic
+}
+
+enum ArtifactType {
+  prd
+  task_list
+  architecture
+  code
+  test_plan
+  other
+}
+
+enum MembershipRole {
+  owner
+  admin
+  member
+}
+
+enum PlanTier {
+  free
+  pro
+  enterprise
+}
+
+model User {
+  id            String       @id @default(cuid())
+  email         String       @unique
+  name          String?
+  passwordHash  String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  memberships   Membership[]
+}
+
+model Organization {
+  id           String        @id @default(cuid())
+  name         String
+  slug         String        @unique
+  plan         PlanTier      @default(free)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  memberships  Membership[]
+  workspaces   Workspace[]
+  usageEvents  UsageEvent[]
+}
+
+model Membership {
+  id             String         @id @default(cuid())
+  role           MembershipRole @default(member)
+  userId         String
+  organizationId String
+  createdAt      DateTime       @default(now())
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+}
+
+model Workspace {
+  id              String               @id @default(cuid())
+  name            String
+  organizationId  String
+  ceoGoal         String?
+  concurrencyCap  Int                  @default(8)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  organization    Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  departments     Department[]
+  agents          Agent[]
+  desks           Desk[]
+  runs            Run[]
+  credentials     ProviderCredential[]
+  memories        WorkspaceMemory[]
+}
+
+model Department {
+  id          String    @id @default(cuid())
+  name        String
+  workspaceId String
+  color       String    @default("#6366f1")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  agents      Agent[]
+}
+
+model Desk {
+  id          String    @id @default(cuid())
+  label       String
+  x           Int
+  y           Int
+  room        String
+  workspaceId String
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  agents      Agent[]
+
+  @@unique([workspaceId, x, y])
+}
+
+model Agent {
+  id             String       @id @default(cuid())
+  name           String
+  position       String
+  positionLabel  String
+  jobBoundary    String
+  avatarColor    String       @default("#8b5cf6")
+  status         AgentStatus  @default(idle)
+  provider       ProviderType @default(mock)
+  model          String       @default("mock")
+  workspaceId    String
+  departmentId   String?
+  deskId         String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  workspace      Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  department     Department?  @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  desk           Desk?        @relation(fields: [deskId], references: [id], onDelete: SetNull)
+  claimedTasks   Task[]       @relation("ClaimedBy")
+  events         RunEvent[]
+  memories       AgentMemory[]
+}
+
+model ProviderCredential {
+  id             String       @id @default(cuid())
+  workspaceId    String
+  provider       ProviderType
+  label          String
+  encryptedKey   String?
+  baseUrl        String?
+  isDefault      Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  workspace      Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model Run {
+  id           String     @id @default(cuid())
+  workspaceId  String
+  ceoGoal      String
+  status       RunStatus  @default(pending)
+  startedAt    DateTime?
+  completedAt  DateTime?
+  totalTokens  Int        @default(0)
+  estCostUsd   Float      @default(0)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  workspace    Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tasks        Task[]
+  events       RunEvent[]
+  artifacts    Artifact[]
+  usageEvents  UsageEvent[]
+  workflow     Workflow?
+}
+
+model Workflow {
+  id        String   @id @default(cuid())
+  runId     String   @unique
+  graph     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  run       Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+}
+
+model Task {
+  id              String     @id @default(cuid())
+  runId           String
+  title           String
+  description     String?
+  position        String
+  status          TaskStatus @default(queued)
+  priority        Int        @default(0)
+  dependsOnIds    String[]   @default([])
+  claimedById     String?
+  claimedAt       DateTime?
+  completedAt     DateTime?
+  output          String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  run             Run        @relation(fields: [runId], references: [id], onDelete: Cascade)
+  claimedBy       Agent?     @relation("ClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
+}
+
+model RunEvent {
+  id        String    @id @default(cuid())
+  runId     String
+  agentId   String?
+  type      EventType
+  payload   Json      @default("{}")
+  createdAt DateTime  @default(now())
+  run       Run       @relation(fields: [runId], references: [id], onDelete: Cascade)
+  agent     Agent?    @relation(fields: [agentId], references: [id], onDelete: SetNull)
+
+  @@index([runId, createdAt])
+}
+
+model Artifact {
+  id        String       @id @default(cuid())
+  runId     String
+  type      ArtifactType
+  title     String
+  content   String
+  filePath  String?
+  createdAt DateTime     @default(now())
+  run       Run          @relation(fields: [runId], references: [id], onDelete: Cascade)
+}
+
+model UsageEvent {
+  id             String       @id @default(cuid())
+  organizationId String
+  runId          String?
+  provider       ProviderType
+  model          String
+  inputTokens    Int          @default(0)
+  outputTokens   Int          @default(0)
+  estCostUsd     Float        @default(0)
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  run            Run?         @relation(fields: [runId], references: [id], onDelete: SetNull)
+}
+
+model AgentMemory {
+  id        String   @id @default(cuid())
+  agentId   String
+  runId     String?
+  content   String
+  createdAt DateTime @default(now())
+  agent     Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+}
+
+model WorkspaceMemory {
+  id          String    @id @default(cuid())
+  workspaceId String
+  key         String
+  content     String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, key])
+}
+
+model WaitlistEntry {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  createdAt DateTime @default(now())
+}
