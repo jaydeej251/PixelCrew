@@ -1,16 +1,64 @@
 import { prisma } from "./db";
 import { DEFAULT_DESKS, AVATAR_COLORS } from "./constants";
 import { TEAM_TEMPLATES } from "./templates";
-import { slugify } from "./utils";
 import { getJobBoundary, getPositionLabel } from "./templates";
 import type { PositionKey } from "./constants";
+import { hashPassword } from "./auth";
+
+async function bootstrapWorkspaceAgents(workspaceId: string) {
+  if ((await prisma.agent.count({ where: { workspaceId } })) > 0) return;
+
+  const deskCount = await prisma.desk.count({ where: { workspaceId } });
+  if (deskCount === 0) {
+    await prisma.desk.createMany({
+      data: DEFAULT_DESKS.map((d) => ({ ...d, workspaceId })),
+    });
+  }
+
+  const template = TEAM_TEMPLATES[0];
+  const deptMap = new Map<string, string>();
+  for (const deptName of [...new Set(template.agents.map((a) => a.department))]) {
+    const dept = await prisma.department.create({
+      data: { name: deptName, workspaceId },
+    });
+    deptMap.set(deptName, dept.id);
+  }
+
+  const desks = await prisma.desk.findMany({ where: { workspaceId } });
+  let deskIdx = 1;
+
+  for (const [i, agentDef] of template.agents.entries()) {
+    const desk = desks[deskIdx % desks.length];
+    deskIdx++;
+    await prisma.agent.create({
+      data: {
+        name: agentDef.name,
+        position: agentDef.position,
+        positionLabel: getPositionLabel(agentDef.position),
+        jobBoundary: getJobBoundary(agentDef.position),
+        avatarColor: AVATAR_COLORS[i % AVATAR_COLORS.length],
+        workspaceId,
+        departmentId: deptMap.get(agentDef.department),
+        deskId: desk?.id,
+        provider: "mock",
+        model: "mock",
+      },
+    });
+  }
+}
 
 export async function seedDatabase() {
   const email = "ceo@pixelcrew.local";
+  const passwordHash = await hashPassword("password123");
   let user = await prisma.user.findUnique({ where: { email } });
   if (!user) {
     user = await prisma.user.create({
-      data: { email, name: "CEO", passwordHash: "dev" },
+      data: { email, name: "CEO", passwordHash },
+    });
+  } else if (!user.passwordHash || user.passwordHash === "dev") {
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash },
     });
   }
 
@@ -24,6 +72,15 @@ export async function seedDatabase() {
         memberships: { create: { userId: user.id, role: "owner" } },
       },
     });
+  } else {
+    const membership = await prisma.membership.findUnique({
+      where: { userId_organizationId: { userId: user.id, organizationId: org.id } },
+    });
+    if (!membership) {
+      await prisma.membership.create({
+        data: { userId: user.id, organizationId: org.id, role: "owner" },
+      });
+    }
   }
 
   let workspace = await prisma.workspace.findFirst({
@@ -34,45 +91,12 @@ export async function seedDatabase() {
       data: {
         name: "Main Office",
         organizationId: org.id,
-        ceoGoal: "Build a personal habit tracker with login",
+        ceoGoal: "",
       },
     });
-
-    await prisma.desk.createMany({
-      data: DEFAULT_DESKS.map((d) => ({ ...d, workspaceId: workspace!.id })),
-    });
-
-    const template = TEAM_TEMPLATES[0];
-    const deptMap = new Map<string, string>();
-    for (const deptName of [...new Set(template.agents.map((a) => a.department))]) {
-      const dept = await prisma.department.create({
-        data: { name: deptName, workspaceId: workspace.id },
-      });
-      deptMap.set(deptName, dept.id);
-    }
-
-    const desks = await prisma.desk.findMany({ where: { workspaceId: workspace.id } });
-    let deskIdx = 1;
-
-    for (const [i, agentDef] of template.agents.entries()) {
-      const desk = desks[deskIdx % desks.length];
-      deskIdx++;
-      await prisma.agent.create({
-        data: {
-          name: agentDef.name,
-          position: agentDef.position,
-          positionLabel: getPositionLabel(agentDef.position),
-          jobBoundary: getJobBoundary(agentDef.position),
-          avatarColor: AVATAR_COLORS[i % AVATAR_COLORS.length],
-          workspaceId: workspace.id,
-          departmentId: deptMap.get(agentDef.department),
-          deskId: desk?.id,
-          provider: "mock",
-          model: "mock",
-        },
-      });
-    }
   }
+
+  await bootstrapWorkspaceAgents(workspace.id);
 
   return { user, org, workspace };
 }

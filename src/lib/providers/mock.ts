@@ -1,4 +1,7 @@
+import { ENGINEER_POSITIONS } from "../roster";
 import type { LLMProvider, ChatMessage, StreamChunk } from "./types";
+import { toFileFences } from "../project-files";
+import { MOCK_BACKEND_FILES, MOCK_BUDGET_TRACKER, MOCK_FRONTEND_FILES } from "../mock-project";
 
 const MOCK_RESPONSES: Record<string, string[]> = {
   dispatcher: [
@@ -18,20 +21,9 @@ const MOCK_RESPONSES: Record<string, string[]> = {
     "UX take: onboarding → today's spend → add expense sheet → month chart.",
     "Empty state: 'No expenses yet — add coffee or rent to see the month.'",
   ],
-  engineer: [
-    "Implementing the assigned work from the published plan.",
-    "Covering frontend and backend as needed for this roster.",
-  ],
-  frontend_engineer: [
-    "Scaffolding the dashboard layout component.",
-    "Implementing the habit tracker UI with form validation.",
-    "Wiring up client-side state for daily entries.",
-  ],
-  backend_engineer: [
-    "Designing the habits API endpoints.",
-    "Implementing auth middleware and session handling.",
-    "Creating Prisma models for habits and users.",
-  ],
+  engineer: [toFileFences(MOCK_BUDGET_TRACKER)],
+  frontend_engineer: [toFileFences(MOCK_FRONTEND_FILES)],
+  backend_engineer: [toFileFences(MOCK_BACKEND_FILES)],
   qa_engineer: [
     "Drafting test cases for login and habit CRUD.",
     "Reviewing API contract against PRD requirements.",
@@ -58,8 +50,23 @@ export class MockProvider implements LLMProvider {
         `Working on: ${this.taskTitle}`,
         "Making a useful default so the CEO goal still moves.",
       ];
+    const long = ENGINEER_POSITIONS.includes(
+      this.position as (typeof ENGINEER_POSITIONS)[number],
+    );
     let full = "";
     for (const line of lines) {
+      if (long) {
+        const chunkSize = 80;
+        for (let i = 0; i < line.length; i += chunkSize) {
+          await delay(8);
+          const chunk = line.slice(i, i + chunkSize);
+          full += chunk;
+          onChunk({ content: chunk });
+        }
+        full += "\n";
+        onChunk({ content: "\n" });
+        continue;
+      }
       const words = line.split(" ");
       for (const word of words) {
         await delay(40);
