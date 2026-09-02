@@ -1,5 +1,124 @@
 /** A complete static budget tracker used by the mock provider so Phase 6 lite is testable without an LLM. */
 
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** Goal-shaped mock ship so Preview matches the run, not a hard-coded budget demo. */
+export function mockProjectForGoal(ceoGoal: string): Record<string, string> {
+  const goal = ceoGoal.trim() || "Demo app";
+  if (/budget|expense|spend/i.test(goal)) return MOCK_BUDGET_TRACKER;
+
+  const title = goal.length > 48 ? `${goal.slice(0, 45).trim()}…` : goal;
+  const safe = escapeHtml(title);
+  const slug =
+    title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)/g, "")
+      .slice(0, 40) || "demo-app";
+
+  return {
+    "index.html": `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${safe}</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="app">
+    <header class="hero">
+      <h1>${safe}</h1>
+      <p class="lede">Mock build for this run’s goal. Notes stay in this browser.</p>
+    </header>
+    <form id="note-form" class="card">
+      <h2>Add note</h2>
+      <label>
+        Note
+        <input id="note" type="text" maxlength="120" required placeholder="Ship idea…" />
+      </label>
+      <button type="submit">Save</button>
+    </form>
+    <section class="card">
+      <h2>Notes</h2>
+      <ul id="list" class="list"></ul>
+      <p id="empty" class="empty">No notes yet.</p>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
+`,
+    "styles.css": MOCK_BUDGET_TRACKER["styles.css"]!,
+    "app.js": `const KEY = "pixelcrew-mock-${slug}-v1";
+
+function load() {
+  try {
+    return JSON.parse(localStorage.getItem(KEY)) ?? { items: [] };
+  } catch {
+    return { items: [] };
+  }
+}
+
+function save(state) {
+  localStorage.setItem(KEY, JSON.stringify(state));
+}
+
+function render() {
+  const state = load();
+  const list = document.getElementById("list");
+  const empty = document.getElementById("empty");
+  list.innerHTML = "";
+  state.items.forEach((item) => {
+    const li = document.createElement("li");
+    li.textContent = item.note;
+    list.appendChild(li);
+  });
+  empty.hidden = state.items.length > 0;
+}
+
+document.getElementById("note-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const state = load();
+  state.items.push({
+    note: document.getElementById("note").value.trim(),
+    when: new Date().toISOString(),
+  });
+  save(state);
+  event.target.reset();
+  render();
+});
+
+render();
+`,
+    "package.json": `{
+  "name": ${JSON.stringify(slug)},
+  "private": true,
+  "version": "0.1.0",
+  "description": ${JSON.stringify(goal)},
+  "scripts": {
+    "start": "npx --yes serve .",
+    "dev": "npx --yes serve ."
+  }
+}
+`,
+    "README.md": `# ${safe}
+
+Mock static app for: ${safe}
+
+\`\`\`bash
+npx --yes serve .
+\`\`\`
+`,
+  };
+}
+
 export const MOCK_BUDGET_TRACKER: Record<string, string> = {
   "index.html": `<!DOCTYPE html>
 <html lang="en">
@@ -12,7 +131,7 @@ export const MOCK_BUDGET_TRACKER: Record<string, string> = {
 <body>
   <main class="app">
     <header class="hero">
-      <p class="eyebrow">PixelCrew export</p>
+      <p class="eyebrow">Demo app</p>
       <h1>Budget Tracker</h1>
       <p class="lede">Log spend, watch the month vs your budget. Everything stays in this browser.</p>
     </header>

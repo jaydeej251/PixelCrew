@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -10,9 +12,26 @@ type PreviewModalProps = {
 
 export function PreviewModal({ runId, onClose }: PreviewModalProps) {
   const src = `/api/runs/${runId}/preview`;
+  const [mounted, setMounted] = useState(false);
 
-  return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-zinc-950/90 p-4 backdrop-blur-sm">
+  useEffect(() => {
+    setMounted(true);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  if (!mounted) return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[10000] flex flex-col bg-zinc-950/90 p-4 backdrop-blur-sm">
       <div className="mx-auto flex h-full w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950">
         <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
           <div>
@@ -43,6 +62,7 @@ export function PreviewModal({ runId, onClose }: PreviewModalProps) {
           sandbox="allow-scripts allow-forms allow-same-origin"
         />
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
