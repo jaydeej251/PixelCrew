@@ -9,6 +9,7 @@ import type { OfficeAgent } from "@/lib/office";
 import { statusToAnimation } from "@/lib/office";
 import { shade } from "./iso";
 import type { LifeActivity, LifeState } from "./office-life";
+import { OFFICE_HTML_Z } from "./office-layout";
 
 /** One Minecraft pixel. Character is 8×32×8 like Steve. */
 const U = 0.028;
@@ -42,6 +43,7 @@ function Box({
 
 function labelFor(first: string, act: LifeActivity) {
   if (act === "work") return `${first} · coding`;
+  if (act === "meet") return `${first} · planning`;
   if (act === "wait") return `${first} · at desk`;
   if (act === "talk") return `${first} · chatting`;
   if (act === "walk") return `${first} · walking`;
@@ -115,9 +117,10 @@ export function VoxelPerson({
     const isWalk = act === "walk";
     const isType = act === "work";
     const isWait = act === "wait";
+    const isMeet = act === "meet";
     const isStuck = act === "stuck";
-    const isTalk = act === "talk";
-    const sitY = isType || isWait ? 0.24 : 0;
+    const isTalk = act === "talk" || isMeet;
+    const sitY = isType || isWait || isMeet ? 0.24 : 0;
     g.position.y += (sitY - g.position.y) * k;
 
     const t = state.clock.elapsedTime;
@@ -143,10 +146,10 @@ export function VoxelPerson({
             : Math.sin(t * 1.4 + 1) * 0.06;
     }
     if (leftLeg) {
-      leftLeg.rotation.x = isType || isWait ? -Math.PI / 2.15 : isWalk ? -swing : 0;
+      leftLeg.rotation.x = isType || isWait || isMeet ? -Math.PI / 2.15 : isWalk ? -swing : 0;
     }
     if (rightLeg) {
-      rightLeg.rotation.x = isType || isWait ? -Math.PI / 2.15 : isWalk ? swing : 0;
+      rightLeg.rotation.x = isType || isWait || isMeet ? -Math.PI / 2.15 : isWalk ? swing : 0;
     }
 
     const look = life ? ([life.faceX, life.faceZ] as const) : lookAt;
@@ -256,19 +259,31 @@ export function VoxelPerson({
       </group>
 
       {liveAct === "stuck" && (
-        <Html position={[0.2, 1.05, 0]} center>
+        <Html position={[0.2, 1.05, 0]} center zIndexRange={OFFICE_HTML_Z}>
           <span className="office-stuck-mark">?</span>
         </Html>
       )}
       {liveAct === "work" && (
         <>
           <pointLight position={[0.15, 0.85, 0.35]} intensity={1.8} distance={2.4} color="#67e8f9" />
-          <Html position={[0, 1.48, 0]} center distanceFactor={8} style={{ pointerEvents: "none" }}>
+          <Html
+            position={[0, 1.48, 0]}
+            center
+            distanceFactor={8}
+            zIndexRange={OFFICE_HTML_Z}
+            style={{ pointerEvents: "none" }}
+          >
             <span className="office-coding-badge">CODING</span>
           </Html>
         </>
       )}
-      <Html position={[0, 1.12, 0]} center distanceFactor={9} style={{ pointerEvents: "none" }}>
+      <Html
+        position={[0, 1.12, 0]}
+        center
+        distanceFactor={9}
+        zIndexRange={OFFICE_HTML_Z}
+        style={{ pointerEvents: "none" }}
+      >
         <span className={liveAct === "work" ? "office-nametag is-coding" : "office-nametag"}>
           {labelFor(first, liveAct)}
         </span>
