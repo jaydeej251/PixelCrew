@@ -88,6 +88,7 @@ export const COUNCIL_UX_TITLE = "UI/UX brainstorm";
 export const SYNTHESIZE_TITLE = "Merge the council plan";
 export const PLAN_DRAFT_TITLE = "Draft the plan";
 export const PLAN_QA_TITLE = "Plan Q&A";
+export const PLAN_DECISIONS_TITLE = "Plan decisions";
 export const PLAN_PUBLISHED_TITLE = "Plan published";
 
 export function pickPlanTask<T extends { title: string; status: string }>(tasks: T[]): T | undefined {

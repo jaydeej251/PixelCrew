@@ -4,12 +4,17 @@ import { useMemo } from "react";
 import { motion } from "framer-motion";
 import { CharacterSprite } from "./character-sprite";
 import { depth, TILE_H, TILE_W, toIso } from "./iso";
-import { OFFICE_ROOMS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
+import { edgeFromOffset, floorColorAt } from "@/lib/office-blueprint";
+import {
+  isMeetingRole,
+  meetingSeatIndex,
+  planningSeatGrid,
+} from "./office-life";
 import {
   GRID_MAX,
   GRID_MIN,
-  ROOM_HEX,
+  ROOM_RECTS,
   agentGridPos,
   cellRoom,
   type OfficeViewProps,
@@ -22,7 +27,9 @@ export function OfficeFloor({
   onSelectAgent,
   agentStatuses = {},
   events = [],
-  onShift = false,
+  inPlanning = false,
+  blueprint,
+  editor,
 }: OfficeViewProps) {
   const tiles = useMemo(() => {
     const list: Array<{ key: string; x: number; y: number; room: string }> = [];
@@ -47,14 +54,12 @@ export function OfficeFloor({
   );
 
   const roomAnchors = useMemo(() => {
-    return OFFICE_ROOMS.map((room) => {
-      const inRoom = desks.filter((d) => d.room === room);
-      if (inRoom.length === 0) return null;
-      const x = inRoom.reduce((s, d) => s + d.x, 0) / inRoom.length;
-      const y = inRoom.reduce((s, d) => s + d.y, 0) / inRoom.length - 1.15;
-      return { room, ...toIso(x, y) };
-    }).filter(Boolean) as Array<{ room: string; left: number; top: number }>;
-  }, [desks]);
+    return ROOM_RECTS.map((room) => {
+      const x = (room.minX + room.maxX) / 2;
+      const y = room.minY + 0.12;
+      return { room: room.id, ...toIso(x, y) };
+    });
+  }, []);
 
   const bounds = useMemo(() => {
     const pts = tiles.map((t) => toIso(t.x, t.y));
@@ -71,6 +76,13 @@ export function OfficeFloor({
   const agentsByDesk = new Map(
     agents.filter((a) => a.desk).map((a) => [`${a.desk!.x}-${a.desk!.y}`, a]),
   );
+
+  const meetingIds = agents
+    .filter((a) => {
+      const st = agentStatuses[a.id] ?? a.status;
+      return isMeetingRole(a.position) && (inPlanning || st === "working" || st === "walking");
+    })
+    .map((a) => a.id);
 
   const width = bounds.maxL - bounds.minL;
   const height = bounds.maxT - bounds.minT;
@@ -89,23 +101,33 @@ export function OfficeFloor({
       >
         {tiles.map((t) => {
           const iso = toIso(t.x, t.y);
-          const colors = ROOM_HEX[t.room] ?? ROOM_HEX.hall;
-          const checker = (t.x + t.y) % 2 === 0;
+          const hex = floorColorAt(blueprint, t.x, t.y);
           return (
-            <div
+            <button
               key={t.key}
+              type="button"
               className="iso-tile"
+              disabled={!editor?.enabled}
+              onClick={(e) => {
+                if (!editor?.enabled) return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                const dx = (e.clientX - rect.left) / Math.max(1, rect.width) - 0.5;
+                const dy = (e.clientY - rect.top) / Math.max(1, rect.height) - 0.5;
+                // Screen Y down ≈ world +Z (south); screen X ≈ world +X (east).
+                editor.onTile(t.x, t.y, edgeFromOffset(dx, dy));
+              }}
               style={{
                 left: iso.left,
                 top: iso.top,
                 zIndex: depth(t.x, t.y),
-                background: checker ? colors[0] : colors[1],
+                background: hex,
               }}
             />
           );
         })}
 
-        {plants.map((t) => {
+        {!blueprint &&
+          plants.map((t) => {
           const iso = toIso(t.x, t.y);
           return (
             <div
@@ -130,11 +152,46 @@ export function OfficeFloor({
           </div>
         ))}
 
-        {desks.map((desk) => {
+        {blueprint?.objects
+          .filter((obj) => editor?.enabled || obj.kind !== "desk")
+          .map((obj) => {
+            const iso = toIso(obj.x, obj.y);
+            const cls =
+              obj.kind === "whiteboard"
+                ? "iso-board"
+                : obj.kind === "tv"
+                  ? "iso-tv"
+                  : obj.kind === "conference" || obj.kind === "table" || obj.kind === "counter"
+                    ? "iso-table"
+                    : obj.kind === "chair"
+                      ? "iso-meet-chair"
+                      : obj.kind === "rug"
+                        ? "iso-rug"
+                        : obj.kind === "desk"
+                          ? "iso-desk-top"
+                          : "iso-plant";
+            return (
+              <div
+                key={obj.id}
+                className={cls}
+                style={{
+                  left: iso.left + TILE_W / 2 - 18,
+                  top: iso.top + 4,
+                  zIndex: depth(obj.x, obj.y) + 4,
+                }}
+              />
+            );
+          })}
+
+        {!(editor?.enabled) &&
+          desks.map((desk) => {
           const iso = toIso(desk.x, desk.y);
           const agent = agentsByDesk.get(`${desk.x}-${desk.y}`);
-          const status = agent ? (agentStatuses[agent.id] ?? agent.status) : "idle";
-          const working = status === "working";
+          const working = Boolean(
+            agent &&
+              (agentStatuses[agent.id] ?? agent.status) === "working" &&
+              !isMeetingRole(agent.position),
+          );
           return (
             <div
               key={desk.id}
@@ -166,12 +223,16 @@ export function OfficeFloor({
 
         {agents.map((agent) => {
           const status = agentStatuses[agent.id] ?? agent.status;
-          const at =
-            onShift && status !== "blocked" && status !== "error"
+          const meet =
+            isMeetingRole(agent.position) &&
+            (inPlanning || status === "working" || status === "walking");
+          const at = meet
+            ? planningSeatGrid(meetingSeatIndex(agent.id, meetingIds))
+            : status === "working" || status === "walking"
               ? (agent.desk ?? { x: 4, y: 4 })
               : agentGridPos(agent, status, desks, agents, events);
           const iso = toIso(at.x, at.y);
-          const seated = onShift || status === "working" || status === "idle";
+          const seated = meet || status === "working";
           return (
             <motion.div
               key={agent.id}
