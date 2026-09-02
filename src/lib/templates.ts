@@ -22,7 +22,7 @@ export const TEAM_TEMPLATES: TeamTemplate[] = [
     description:
       "Workspace AI staffs Product, Senior Dev, and UI/UX to brainstorm, then an engineer builds after you publish.",
     agents: [
-      { name: "Avery", position: "dispatcher", department: "Product", room: "Executive" },
+      { name: "Avery", position: "dispatcher", department: "Product", room: "Reception" },
       { name: "Alex Chen", position: "project_manager", department: "Product", room: "Product" },
       { name: "Jordan Lee", position: "tech_architect", department: "Engineering", room: "Engineering" },
       { name: "Drew Santos", position: "designer", department: "Product", room: "Product" },
@@ -34,7 +34,7 @@ export const TEAM_TEMPLATES: TeamTemplate[] = [
     name: "Startup Product Team",
     description: "Council plus specialized FE/BE and QA. Workspace AI still staffs and they still brainstorm first.",
     agents: [
-      { name: "Avery", position: "dispatcher", department: "Product", room: "Executive" },
+      { name: "Avery", position: "dispatcher", department: "Product", room: "Reception" },
       { name: "Alex Chen", position: "project_manager", department: "Product", room: "Product" },
       { name: "Jordan Lee", position: "tech_architect", department: "Engineering", room: "Engineering" },
       { name: "Drew Santos", position: "designer", department: "Product", room: "Product" },
@@ -50,7 +50,7 @@ export const TEAM_TEMPLATES: TeamTemplate[] = [
     name: "Agency Delivery",
     description: "Council plus FE/BE/QA. Same rule: the goal gets staffed and realized.",
     agents: [
-      { name: "Avery", position: "dispatcher", department: "Product", room: "Executive" },
+      { name: "Avery", position: "dispatcher", department: "Product", room: "Reception" },
       { name: "Avery Walsh", position: "project_manager", department: "Product", room: "Product" },
       { name: "Jordan Lee", position: "tech_architect", department: "Engineering", room: "Engineering" },
       { name: "Drew Santos", position: "designer", department: "Product", room: "Product" },

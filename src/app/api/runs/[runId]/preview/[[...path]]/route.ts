@@ -35,7 +35,7 @@ export async function GET(
     const requested =
       segments && segments.length > 0
         ? normalizePath(segments.join("/"))
-        : findPreviewIndex(files);
+        : findPreviewIndex(files, run.ceoGoal);
 
     if (!requested || !files.has(requested)) {
       return NextResponse.json({ error: "File not found" }, { status: 404 });
