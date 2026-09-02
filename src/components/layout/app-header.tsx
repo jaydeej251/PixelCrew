@@ -15,6 +15,7 @@ type AppHeaderProps = {
   running: boolean;
   runOutcome: "idle" | "running" | "paused" | "completed" | "failed";
   onCancel: () => void;
+  onResume?: () => void;
   onOpenSettings: () => void;
   onLogout: () => void;
   onSimulate?: () => void;
@@ -47,6 +48,7 @@ export function AppHeader({
   running,
   runOutcome,
   onCancel,
+  onResume,
   onOpenSettings,
   onLogout,
   onSimulate,
@@ -124,6 +126,12 @@ export function AppHeader({
           {running && (
             <Button variant="ghost" type="button" className="!h-8 !px-3 text-red-300" onClick={onCancel}>
               Stop
+            </Button>
+          )}
+
+          {!running && runOutcome === "failed" && onResume && (
+            <Button variant="primary" type="button" className="!h-8 !px-3" onClick={onResume}>
+              Resume
             </Button>
           )}
 
