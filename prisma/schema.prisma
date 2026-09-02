@@ -137,6 +137,7 @@ model Workspace {
   runs            Run[]
   credentials     ProviderCredential[]
   memories        WorkspaceMemory[]
+  officeLayouts   OfficeLayout[]
 }
 
 model Department {
@@ -162,6 +163,21 @@ model Desk {
   agents      Agent[]
 
   @@unique([workspaceId, x, y])
+}
+
+model OfficeLayout {
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  data        Json
+  isActive    Boolean   @default(false)
+  // Built-in HQ: cannot delete; restore resets to factory plan
+  isProtected Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, isActive])
 }
 
 model Agent {
