@@ -2,10 +2,26 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { createProvider, resolveProviderConfig } from "@/lib/providers";
 import { PLANNER_POSITIONS, pickOne } from "@/lib/roster";
-import { PLAN_PUBLISHED_TITLE, PLAN_QA_TITLE, pickPlanTask } from "@/lib/workflow";
+import {
+  PLAN_DECISIONS_TITLE,
+  PLAN_PUBLISHED_TITLE,
+  PLAN_QA_TITLE,
+  pickPlanTask,
+} from "@/lib/workflow";
 import { councilThreadFromTasks, plannerSystemPrompt } from "@/lib/prompts";
 import { runOrchestrator, publishAndDelegate } from "@/lib/orchestrator";
 import { AuthError, assertRunAccess, requireSession } from "@/lib/auth";
+import {
+  allDecisionsAnswered,
+  applyAnswer,
+  decisionAnswersKey,
+  decisionApplyUserPrompt,
+  parseDecisionsState,
+  picksDifferFromRecommended,
+  stripDecisionFence,
+  withRecommendedAnswers,
+  type PlanDecisionsState,
+} from "@/lib/plan-decisions";
 
 function authErrorResponse(err: unknown) {
   if (err instanceof AuthError) {
@@ -49,6 +65,110 @@ async function savePlanThread(runId: string, messages: QaMessage[]) {
   }
 }
 
+async function getDecisionState(runId: string): Promise<PlanDecisionsState> {
+  const row = await prisma.artifact.findFirst({
+    where: { runId, title: PLAN_DECISIONS_TITLE },
+  });
+  if (!row) return { items: [] };
+  return parseDecisionsState(row.content);
+}
+
+async function saveDecisionState(runId: string, state: PlanDecisionsState) {
+  const existing = await prisma.artifact.findFirst({
+    where: { runId, title: PLAN_DECISIONS_TITLE },
+  });
+  const content = JSON.stringify(state);
+  if (existing) {
+    await prisma.artifact.update({
+      where: { id: existing.id },
+      data: { content },
+    });
+  } else {
+    await prisma.artifact.create({
+      data: {
+        runId,
+        type: "other",
+        title: PLAN_DECISIONS_TITLE,
+        content,
+      },
+    });
+  }
+}
+
+async function writeRevisedPlan(runId: string, planTaskId: string, plan: string) {
+  await prisma.task.update({
+    where: { id: planTaskId },
+    data: { output: plan },
+  });
+  await prisma.artifact.create({
+    data: {
+      runId,
+      type: "prd",
+      title: "Plan (revised)",
+      content: plan,
+    },
+  });
+}
+
+async function revisePlanForDecisions(
+  runId: string,
+  state: PlanDecisionsState,
+): Promise<{ plan: string; thread: QaMessage[] }> {
+  const run = await prisma.run.findUnique({
+    where: { id: runId },
+    include: { tasks: true, workspace: { include: { agents: true } } },
+  });
+  if (!run) throw new Error("Run not found");
+  const plannerAgent = pickOne(run.workspace.agents, PLANNER_POSITIONS);
+  const planTask = pickPlanTask(run.tasks);
+  const currentPlan = planTask?.output ?? "";
+  let thread = await getPlanThread(runId);
+
+  if (!plannerAgent || !planTask || !picksDifferFromRecommended(state.items)) {
+    const next = { ...state, appliedKey: decisionAnswersKey(state.items) };
+    await saveDecisionState(runId, next);
+    return { plan: currentPlan, thread };
+  }
+
+  const credential = await prisma.providerCredential.findFirst({
+    where: { workspaceId: plannerAgent.workspaceId, provider: plannerAgent.provider },
+  });
+  const config = resolveProviderConfig(
+    plannerAgent.provider,
+    plannerAgent.model,
+    credential ?? undefined,
+  );
+  config.maxTokens = 2500;
+  const llm = createProvider(config, plannerAgent.position, "Apply plan decisions");
+  let reply = "";
+  const result = await llm.stream(
+    [
+      {
+        role: "system",
+        content: `${plannerSystemPrompt(plannerAgent.name, plannerAgent.positionLabel)} You speak for the planning council. Apply the CEO's directional choices. Never refuse.`,
+      },
+      { role: "user", content: decisionApplyUserPrompt(currentPlan, state.items) },
+    ],
+    (chunk) => {
+      reply += chunk.content;
+    },
+  );
+  reply = reply || result.content;
+  const updated = stripDecisionFence(extractUpdatedPlan(reply, currentPlan));
+  thread.push({
+    role: "assistant",
+    speaker: "Workspace AI",
+    content: "Updated the plan to match your direction choices.",
+  });
+  await savePlanThread(runId, thread);
+  if (updated !== currentPlan) {
+    await writeRevisedPlan(runId, planTask.id, updated);
+  }
+  const next = { ...state, appliedKey: decisionAnswersKey(state.items) };
+  await saveDecisionState(runId, next);
+  return { plan: updated, thread };
+}
+
 export async function GET(
   _req: Request,
   { params }: { params: Promise<{ runId: string }> },
@@ -73,6 +193,8 @@ export async function GET(
     thread = councilThreadFromTasks(done);
   }
 
+  const decisions = await getDecisionState(runId);
+
   return NextResponse.json({
     status: run.status,
     ceoGoal: run.ceoGoal,
@@ -80,6 +202,7 @@ export async function GET(
     planner: planTask?.position ?? null,
     published,
     thread,
+    decisions: decisions.items,
   });
   } catch (err) {
     return authErrorResponse(err);
@@ -95,7 +218,7 @@ export async function POST(
     const { runId } = await params;
     await assertRunAccess(runId, session);
   const body = await req.json();
-  const action = body.action as "ask" | "publish";
+  const action = body.action as "ask" | "publish" | "decide";
 
   if (action === "publish") {
     const run = await prisma.run.findUnique({
@@ -110,9 +233,66 @@ export async function POST(
     if (!planTask?.output?.trim()) {
       return NextResponse.json({ error: "No combined plan to publish" }, { status: 400 });
     }
+    const decisions = await getDecisionState(runId);
+    if (!allDecisionsAnswered(decisions.items)) {
+      return NextResponse.json(
+        {
+          error: "Pick an answer for each direction question, or use the recommended options.",
+          decisions: decisions.items,
+        },
+        { status: 400 },
+      );
+    }
+    if (decisionAnswersKey(decisions.items) !== decisions.appliedKey) {
+      await revisePlanForDecisions(runId, decisions);
+    }
     await publishAndDelegate(runId);
     runOrchestrator(runId).catch(console.error);
     return NextResponse.json({ ok: true });
+  }
+
+  if (action === "decide") {
+    const run = await prisma.run.findUnique({
+      where: { id: runId },
+      include: { tasks: true },
+    });
+    if (!run) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (run.status !== "paused") {
+      return NextResponse.json({ error: "Plan is not in review" }, { status: 400 });
+    }
+    let state = await getDecisionState(runId);
+    if (state.items.length === 0) {
+      return NextResponse.json({ error: "No direction questions on this plan" }, { status: 400 });
+    }
+    if (body.useRecommended) {
+      state = { ...state, items: withRecommendedAnswers(state.items) };
+    } else {
+      const nextItems = applyAnswer(
+        state.items,
+        String(body.decisionId ?? ""),
+        String(body.optionId ?? ""),
+      );
+      if (!nextItems) {
+        return NextResponse.json({ error: "Unknown question or option" }, { status: 400 });
+      }
+      state = { ...state, items: nextItems };
+    }
+    await saveDecisionState(runId, state);
+    const planTask = pickPlanTask(run.tasks);
+    let plan = planTask?.output ?? "";
+    let thread = await getPlanThread(runId);
+    if (allDecisionsAnswered(state.items) && decisionAnswersKey(state.items) !== state.appliedKey) {
+      const revised = await revisePlanForDecisions(runId, state);
+      plan = revised.plan;
+      thread = revised.thread;
+      state = await getDecisionState(runId);
+    }
+    return NextResponse.json({
+      ok: true,
+      plan,
+      thread,
+      decisions: state.items,
+    });
   }
 
   if (action !== "ask" || !String(body.message ?? "").trim()) {
@@ -175,23 +355,13 @@ export async function POST(
   thread.push({ role: "assistant", content: reply, speaker: "Workspace AI" });
   await savePlanThread(runId, thread);
 
-  const updated = extractUpdatedPlan(reply, planTask.output ?? "");
+  const updated = stripDecisionFence(extractUpdatedPlan(reply, planTask.output ?? ""));
   if (updated !== planTask.output) {
-    await prisma.task.update({
-      where: { id: planTask.id },
-      data: { output: updated },
-    });
-    await prisma.artifact.create({
-      data: {
-        runId,
-        type: "prd",
-        title: "Plan (revised)",
-        content: updated,
-      },
-    });
+    await writeRevisedPlan(runId, planTask.id, updated);
   }
 
-  return NextResponse.json({ ok: true, plan: updated, thread });
+  const decisions = await getDecisionState(runId);
+  return NextResponse.json({ ok: true, plan: updated, thread, decisions: decisions.items });
   } catch (err) {
     return authErrorResponse(err);
   }

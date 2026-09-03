@@ -34,11 +34,11 @@ export const DEFAULT_JOB_BOUNDARIES: Record<PositionKey, string> = {
   executive:
     "Set direction. If product is missing, you plan. Never say the goal is someone else's problem.",
   project_manager:
-    "Own the product take: users, features, success metrics, and a task list. Partner with Senior Dev and UI/UX. Never refuse a CEO question — propose a default.",
+    "Own the product take: users, features, success metrics, and a task list sized to real effort. Partner with Senior Dev and UI/UX. Never assign yourself HTML implementation. Never refuse a CEO question — propose a default.",
   designer:
-    "Own UX flows, screens, and empty states. Partner with Product and Senior Dev. Never refuse — sketch a default.",
+    "Own UX flows, screens, and empty states. Partner with Product and Senior Dev. In-page CTAs use #section ids; confirmation stays on-page. Never refuse — sketch a default.",
   tech_architect:
-    "Own stack, architecture, and risks. Partner with Product and UI/UX. Recommend a simple stack even when the CEO is unsure. Never refuse.",
+    "Own stack, architecture, and risks. Partner with Product and UI/UX. Recommend a simple stack even when the CEO is unsure. Persist collections as a localStorage array; no inline JS. Never refuse.",
   engineer:
     "Implement whatever the plan requires — frontend, backend, or both — because you may be the only engineer.",
   frontend_engineer:
@@ -46,7 +46,7 @@ export const DEFAULT_JOB_BOUNDARIES: Record<PositionKey, string> = {
   backend_engineer:
     "Implement APIs and data. If you are the only engineer, also cover UI drafts so the goal still ships.",
   qa_engineer:
-    "Write test plans, review outputs, and file issues. If QA would block the goal, note gaps and still ship a plan.",
+    "Review the actual files against the CEO goal. File a FAIL/PASS punch list. Never invent passing test results.",
 };
 
 export const AVATAR_COLORS = [
@@ -60,19 +60,44 @@ export const AVATAR_COLORS = [
   "#14b8a6",
 ];
 
-export const OFFICE_ROOMS = ["Executive", "Product", "Engineering", "QA"] as const;
+export const OFFICE_ROOMS = ["Planning", "Reception", "Executive", "Product", "Engineering", "QA"] as const;
 
+/** Integer tiles, kept off door openings (doors sit on half-grid lines). */
 export const DEFAULT_DESKS = [
-  { label: "CEO Desk", x: 2, y: 1, room: "Executive" },
-  { label: "HQ AI", x: 4, y: 1, room: "Executive" },
-  { label: "PM-1", x: 1, y: 3, room: "Product" },
-  { label: "PM-2", x: 3, y: 3, room: "Product" },
-  { label: "UX-1", x: 5, y: 3, room: "Product" },
-  { label: "Arch-1", x: 1, y: 5, room: "Engineering" },
-  { label: "FE-1", x: 3, y: 5, room: "Engineering" },
-  { label: "FE-2", x: 5, y: 5, room: "Engineering" },
-  { label: "BE-1", x: 1, y: 7, room: "Engineering" },
-  { label: "BE-2", x: 3, y: 7, room: "Engineering" },
-  { label: "QA-1", x: 5, y: 7, room: "QA" },
-  { label: "QA-2", x: 7, y: 7, room: "QA" },
+  { label: "CEO Desk", x: 1, y: 5, room: "Executive" },
+  { label: "HQ AI", x: 8, y: 6, room: "Reception" },
+  { label: "PM-1", x: 3, y: 5, room: "Product" },
+  { label: "PM-2", x: 4, y: 5, room: "Product" },
+  { label: "UX-1", x: 5, y: 5, room: "Product" },
+  { label: "Arch-1", x: 1, y: 7, room: "Engineering" },
+  { label: "FE-1", x: 3, y: 7, room: "Engineering" },
+  { label: "FE-2", x: 4, y: 7, room: "Engineering" },
+  { label: "BE-1", x: 1, y: 8, room: "Engineering" },
+  { label: "BE-2", x: 3, y: 8, room: "Engineering" },
+  { label: "QA-1", x: 7, y: 4, room: "QA" },
+  { label: "QA-2", x: 8, y: 4, room: "QA" },
 ] as const;
+
+export const PREFERRED_DESK_LABELS: Record<PositionKey, string[]> = {
+  dispatcher: ["HQ AI"],
+  executive: ["CEO Desk"],
+  project_manager: ["PM-1", "PM-2"],
+  designer: ["UX-1", "PM-2"],
+  tech_architect: ["Arch-1"],
+  engineer: ["FE-1", "FE-2", "BE-1", "BE-2", "Arch-1"],
+  frontend_engineer: ["FE-1", "FE-2"],
+  backend_engineer: ["BE-1", "BE-2"],
+  qa_engineer: ["QA-1", "QA-2"],
+};
+
+export const POSITION_ROOM: Record<PositionKey, string> = {
+  dispatcher: "Reception",
+  executive: "Executive",
+  project_manager: "Product",
+  designer: "Product",
+  tech_architect: "Engineering",
+  engineer: "Engineering",
+  frontend_engineer: "Engineering",
+  backend_engineer: "Engineering",
+  qa_engineer: "QA",
+};

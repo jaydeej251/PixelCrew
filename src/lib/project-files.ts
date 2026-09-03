@@ -1,3 +1,5 @@
+import { isMismatchedMarketingHtml } from "./ship-quality";
+
 export type ProjectFile = {
   path: string;
   content: string;
@@ -195,7 +197,7 @@ export type ArtifactLike = {
   createdAt?: Date | string;
 };
 
-const SKIP_DOC_TITLES = new Set(["Plan Q&A", "Plan published"]);
+const SKIP_DOC_TITLES = new Set(["Plan Q&A", "Plan decisions", "Plan published"]);
 
 export function projectFilesFromArtifacts(artifacts: ArtifactLike[]): Map<string, string> {
   const sorted = [...artifacts].sort((a, b) => {
@@ -260,23 +262,41 @@ function defaultPackageJson(ceoGoal: string): string {
   )}\n`;
 }
 
-function fallbackIndexHtml(ceoGoal: string, files: string[]): string {
+/** Packager-injected stub — never treat as a shipped product page. */
+export function isPackagerFallbackHtml(content: string): boolean {
+  return (
+    /data-pixelcrew-missing-build\s*=\s*["']1["']/i.test(content) ||
+    /<title>\s*PixelCrew export\s*<\/title>/i.test(content) ||
+    /This export is a project folder/i.test(content) ||
+    /No previewable app in this run/i.test(content)
+  );
+}
+
+function isRealPreviewHtml(path: string, content: string, ceoGoal = ""): boolean {
+  if (!/\.html?$/i.test(path)) return false;
+  if (isPackagerFallbackHtml(content)) return false;
+  if (ceoGoal && isMismatchedMarketingHtml(content, ceoGoal)) return false;
+  return true;
+}
+
+function missingBuildHtml(ceoGoal: string, files: string[]): string {
   const items = files
     .filter((f) => f !== "index.html")
     .map((f) => `<li><code>${escapeHtml(f)}</code></li>`)
     .join("\n");
   const isNode = files.includes("package.json") && files.some((f) => /\.(tsx?|jsx?)$/.test(f));
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-pixelcrew-missing-build="1">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PixelCrew export</title>
+  <title>No app to preview</title>
   <style>
     :root { color-scheme: dark; }
     body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: #09090b; color: #fafafa; }
     main { max-width: 42rem; margin: 0 auto; padding: 2rem 1.25rem; }
     h1 { font-size: 1.25rem; }
+    .banner { background: #3f1d1d; border: 1px solid #7f1d1d; color: #fecaca; padding: 0.75rem 1rem; border-radius: 0.5rem; margin-bottom: 1.25rem; }
     p, li { color: #a1a1aa; line-height: 1.5; }
     pre { background: #18181b; padding: 1rem; border-radius: 0.75rem; overflow: auto; }
     code { font-family: ui-monospace, monospace; font-size: 0.85em; }
@@ -284,17 +304,18 @@ function fallbackIndexHtml(ceoGoal: string, files: string[]): string {
 </head>
 <body>
   <main>
-    <h1>This export is a project folder</h1>
-    <p>${escapeHtml(ceoGoal)}</p>
+    <p class="banner"><strong>Missing build</strong> — this is not a shipped app. Engineers did not emit previewable HTML for this run.</p>
+    <h1>No previewable app in this run</h1>
+    <p>Goal: ${escapeHtml(ceoGoal)}</p>
     <p>${
       isNode
-        ? "In-office preview is for static HTML. Unzip and run the commands below on your machine."
-        : "No index.html was emitted. Unzip the export and open the files listed here."
+        ? "This run looks like a Node/Next project. In-office preview only serves static HTML — unzip the export and run the commands below on your machine."
+        : "No index.html (or other HTML) was found among the run’s project files. Open Files to inspect what was emitted, or re-run so engineers ship a static index.html."
     }</p>
     <pre>${isNode ? "npm install\nnpm run dev" : "npx --yes serve ."}</pre>
-    <h2>Files</h2>
+    <h2>Files found</h2>
     <ul>
-${items}
+${items || "      <li><em>None</em></li>"}
     </ul>
   </main>
 </body>
@@ -319,22 +340,51 @@ export function assembleProject(opts: {
     if (!files.has(path)) files.set(path, content);
   }
 
+  // Drop packager stubs and wrong-product marketing portfolios so Preview never serves them.
+  for (const [path, content] of [...files.entries()]) {
+    if (isPackagerFallbackHtml(content)) {
+      files.delete(path);
+      continue;
+    }
+    if (/\.html?$/i.test(path) && isMismatchedMarketingHtml(content, opts.ceoGoal)) {
+      files.delete(path);
+    }
+  }
+
   const paths = [...files.keys()];
-  const hasAgentHtml = paths.some((f) => f === "index.html" || f.endsWith("/index.html"));
+  const hasRealHtml = [...files.entries()].some(([path, content]) =>
+    isRealPreviewHtml(path, content, opts.ceoGoal),
+  );
   const isNode = paths.some((f) => /\.(tsx?|jsx?)$/.test(f)) && paths.includes("package.json");
   if (!files.has("package.json")) {
     files.set("package.json", defaultPackageJson(opts.ceoGoal));
   }
   if (!files.has("README.md")) {
-    files.set("README.md", defaultReadme(opts.ceoGoal, hasAgentHtml, isNode));
+    files.set("README.md", defaultReadme(opts.ceoGoal, hasRealHtml, isNode));
   }
-  if (!hasAgentHtml) {
-    files.set("index.html", fallbackIndexHtml(opts.ceoGoal, [...files.keys()]));
+  // Only inject a missing-build page when there is truly nothing to open in preview.
+  // Do not invent a PixelCrew product index when real HTML exists under another name.
+  if (!hasRealHtml) {
+    files.set("index.html", missingBuildHtml(opts.ceoGoal, [...files.keys()]));
   }
   return files;
 }
 
-export function findPreviewIndex(files: Map<string, string>): string {
+export function findPreviewIndex(files: Map<string, string>, ceoGoal = ""): string {
+  const entries = [...files.entries()];
+  const realRoot = entries.find(
+    ([path, content]) => path === "index.html" && isRealPreviewHtml(path, content, ceoGoal),
+  );
+  if (realRoot) return realRoot[0];
+
+  const realNested = entries.find(
+    ([path, content]) => path.endsWith("/index.html") && isRealPreviewHtml(path, content, ceoGoal),
+  );
+  if (realNested) return realNested[0];
+
+  const anyReal = entries.find(([path, content]) => isRealPreviewHtml(path, content, ceoGoal));
+  if (anyReal) return anyReal[0];
+
   if (files.has("index.html")) return "index.html";
   const nested = [...files.keys()].find((p) => p.endsWith("/index.html"));
   if (nested) return nested;
@@ -352,8 +402,22 @@ export function injectBaseHref(html: string, runId: string, filePath = "index.ht
   return `<head>${base}</head>\n${html}`;
 }
 
-export function canPreview(artifacts: ArtifactLike[]): boolean {
-  return projectFilesFromArtifacts(artifacts).size > 0 || artifacts.some((a) => a.type === "code");
+export function canPreview(artifacts: ArtifactLike[], ceoGoal = ""): boolean {
+  const files = projectFilesFromArtifacts(artifacts);
+  if (
+    [...files.entries()].some(([path, content]) => isRealPreviewHtml(path, content, ceoGoal))
+  ) {
+    return true;
+  }
+  return files.size > 0 || artifacts.some((a) => a.type === "code");
+}
+
+/** True when preview would open a real shipped HTML page (not the missing-build stub). */
+export function hasPreviewableApp(artifacts: ArtifactLike[], ceoGoal = ""): boolean {
+  const files = projectFilesFromArtifacts(artifacts);
+  return [...files.entries()].some(([path, content]) =>
+    isRealPreviewHtml(path, content, ceoGoal),
+  );
 }
 
 /** README / package.json / index.html the packager must add because agents omitted them. */
@@ -365,8 +429,11 @@ export function scaffoldGaps(opts: {
   const assembled = assembleProject(opts);
   const gaps: ProjectFile[] = [];
   for (const key of ["README.md", "package.json", "index.html"] as const) {
-    if (!existing.has(key) && assembled.has(key)) {
-      gaps.push({ path: key, content: assembled.get(key)! });
+    const next = assembled.get(key);
+    if (!next) continue;
+    const prior = existing.get(key);
+    if (!prior || (key === "index.html" && isPackagerFallbackHtml(prior))) {
+      gaps.push({ path: key, content: next });
     }
   }
   return gaps;

@@ -1,5 +1,6 @@
 import { prisma } from "./db";
 import { DEFAULT_DESKS, AVATAR_COLORS } from "./constants";
+import { pickDeskForPosition, syncOfficeDesks } from "./office-desks";
 import { TEAM_TEMPLATES } from "./templates";
 import { getJobBoundary, getPositionLabel } from "./templates";
 import type { PositionKey } from "./constants";
@@ -13,6 +14,8 @@ async function bootstrapWorkspaceAgents(workspaceId: string) {
     await prisma.desk.createMany({
       data: DEFAULT_DESKS.map((d) => ({ ...d, workspaceId })),
     });
+  } else {
+    await syncOfficeDesks(workspaceId);
   }
 
   const template = TEAM_TEMPLATES[0];
@@ -25,11 +28,11 @@ async function bootstrapWorkspaceAgents(workspaceId: string) {
   }
 
   const desks = await prisma.desk.findMany({ where: { workspaceId } });
-  let deskIdx = 1;
+  const taken = new Set<string>();
 
   for (const [i, agentDef] of template.agents.entries()) {
-    const desk = desks[deskIdx % desks.length];
-    deskIdx++;
+    const desk = pickDeskForPosition(desks, agentDef.position, taken);
+    if (desk) taken.add(desk.id);
     await prisma.agent.create({
       data: {
         name: agentDef.name,
@@ -116,12 +119,14 @@ export async function applyTemplate(workspaceId: string, templateId: string) {
     deptMap.set(deptName, dept.id);
   }
 
+  await syncOfficeDesks(workspaceId);
+
   const desks = await prisma.desk.findMany({ where: { workspaceId } });
-  let deskIdx = 0;
+  const taken = new Set<string>();
 
   for (const [i, agentDef] of template.agents.entries()) {
-    const desk = desks[deskIdx % desks.length];
-    deskIdx++;
+    const desk = pickDeskForPosition(desks, agentDef.position, taken);
+    if (desk) taken.add(desk.id);
     await prisma.agent.create({
       data: {
         name: agentDef.name,

@@ -138,6 +138,7 @@ export async function checkPlanLimits(organizationId: string): Promise<{
   monthStart.setDate(1);
   monthStart.setHours(0, 0, 0, 0);
 
+  // Counts new Run rows only (new chats/goals). Resuming a stopped run does not create a row.
   const runCount = await prisma.run.count({
     where: {
       workspace: { organizationId },

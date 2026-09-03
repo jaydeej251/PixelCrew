@@ -55,9 +55,10 @@ export function createProvider(
   config: ProviderConfig,
   position: string,
   taskTitle: string,
+  ceoGoal = "",
 ): LLMProvider {
   if (config.provider === "mock") {
-    return new MockProvider(position, taskTitle);
+    return new MockProvider(position, taskTitle, ceoGoal);
   }
 
   const key = config.apiKey?.trim();

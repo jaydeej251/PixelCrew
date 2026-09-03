@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth";
+import { syncOfficeDesks } from "@/lib/office-desks";
+import { listOfficeLayouts, getActiveOfficeLayout } from "@/lib/office-layouts";
 
 export async function GET() {
   const session = await getSession();
@@ -13,13 +15,17 @@ export async function GET() {
   });
   if (!workspace) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const [agents, desks, departments] = await Promise.all([
+  await syncOfficeDesks(workspace.id);
+
+  const [agents, desks, departments, officeLayouts, officeLayout] = await Promise.all([
     prisma.agent.findMany({
       where: { workspaceId: workspace.id },
       include: { desk: true, department: true },
     }),
     prisma.desk.findMany({ where: { workspaceId: workspace.id } }),
     prisma.department.findMany({ where: { workspaceId: workspace.id } }),
+    listOfficeLayouts(workspace.id),
+    getActiveOfficeLayout(workspace.id),
   ]);
 
   return NextResponse.json({
@@ -31,6 +37,16 @@ export async function GET() {
     agents,
     desks,
     departments,
+    officeLayouts,
+    officeLayout: {
+      id: officeLayout.id,
+      name: officeLayout.name,
+      isActive: officeLayout.isActive,
+      isProtected: Boolean(
+        (officeLayout as { isProtected?: boolean }).isProtected || officeLayout.name === "HQ",
+      ),
+      data: officeLayout.data,
+    },
     user: { email: session.email, name: session.name },
   });
 }
