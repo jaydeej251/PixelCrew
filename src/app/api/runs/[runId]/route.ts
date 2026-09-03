@@ -1,10 +1,19 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { prisma } from "@/lib/db";
 import {
   AuthError,
   assertRunAccess,
   requireSession,
 } from "@/lib/auth";
+
+const updateRunSchema = z
+  .object({
+    title: z.string().trim().max(120).optional(),
+    archive: z.literal(true).optional(),
+  })
+  .strict()
+  .refine((value) => value.title !== undefined || value.archive === true);
 
 function authErrorResponse(err: unknown) {
   if (err instanceof AuthError) {
@@ -46,11 +55,15 @@ export async function PATCH(
     const { runId } = await params;
     await assertRunAccess(runId, session);
 
-    const body = await req.json();
+    const parsed = updateRunSchema.safeParse(await req.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Invalid run update" }, { status: 400 });
+    }
+    const body = parsed.data;
     const data: { title?: string; archivedAt?: Date | null } = {};
 
     if (typeof body.title === "string") {
-      data.title = body.title.trim().slice(0, 120);
+      data.title = body.title;
     }
     if (body.archive === true) {
       data.archivedAt = new Date();

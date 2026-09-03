@@ -1,35 +1,55 @@
 import { NextResponse } from "next/server";
-import { AuthError, assertWorkspaceAccess, requireSession } from "@/lib/auth";
-import { createOfficeLayout, listOfficeLayouts, restoreHqLayout } from "@/lib/office-layouts";
+import { z } from "zod";
+import {
+  AuthError,
+  assertWorkspaceAccess,
+  authErrorStatus,
+  requireSession,
+} from "@/lib/auth";
+import {
+  createOfficeLayout,
+  listOfficeLayouts,
+  restoreHqLayout,
+} from "@/lib/office-layouts";
 
-function authErrorResponse(err: unknown) {
-  if (err instanceof AuthError) {
-    return NextResponse.json({ error: err.message }, { status: err.message === "Unauthorized" ? 401 : 404 });
+const createLayoutSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("restore_hq") }).strict(),
+  z.object({
+    action: z.literal("create"),
+    name: z.string().trim().min(1).max(48),
+    source: z.enum(["empty", "hq", "copy"]).default("empty"),
+    copyId: z.string().trim().min(1).max(100).optional(),
+  }).strict().refine((value) => value.source !== "copy" || value.copyId, {
+    message: "copyId is required when copying a layout",
+  }),
+]);
+
+function errorResponse(error: unknown) {
+  if (error instanceof AuthError) {
+    return NextResponse.json({ error: error.message }, { status: authErrorStatus(error) });
   }
-  throw err;
+  throw error;
 }
 
 export async function GET() {
   try {
     const session = await requireSession();
-    const layouts = await listOfficeLayouts(session.workspaceId);
-    return NextResponse.json({ layouts });
-  } catch (err) {
-    return authErrorResponse(err);
+    await assertWorkspaceAccess(session.workspaceId, session);
+    return NextResponse.json({ layouts: await listOfficeLayouts(session.workspaceId) });
+  } catch (error) {
+    return errorResponse(error);
   }
 }
 
-export async function POST(req: Request) {
+export async function POST(request: Request) {
   try {
     const session = await requireSession();
     await assertWorkspaceAccess(session.workspaceId, session);
-    const body = (await req.json()) as {
-      action?: string;
-      name?: string;
-      source?: "empty" | "hq" | "copy";
-      copyId?: string;
-    };
-    if (body.action === "restore_hq") {
+    const parsed = createLayoutSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Invalid layout action" }, { status: 400 });
+    }
+    if (parsed.data.action === "restore_hq") {
       const layout = await restoreHqLayout(session.workspaceId);
       return NextResponse.json({
         ok: true,
@@ -40,12 +60,13 @@ export async function POST(req: Request) {
     }
     const layout = await createOfficeLayout(
       session.workspaceId,
-      body.name ?? "New office",
-      body.source ?? "empty",
-      body.copyId,
+      parsed.data.name,
+      parsed.data.source,
+      parsed.data.copyId,
     );
-    return NextResponse.json(layout);
-  } catch (err) {
-    return authErrorResponse(err);
+    if (!layout) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return NextResponse.json(layout, { status: 201 });
+  } catch (error) {
+    return errorResponse(error);
   }
 }

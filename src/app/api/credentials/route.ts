@@ -1,16 +1,29 @@
 import { NextResponse } from "next/server";
+import { ProviderType } from "@prisma/client";
+import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
 import {
   AuthError,
   assertWorkspaceAccess,
+  authErrorStatus,
+  requireOrganizationRole,
   requireSession,
 } from "@/lib/auth";
-import type { ProviderType } from "@prisma/client";
+
+const credentialSchema = z
+  .object({
+    workspaceId: z.string().min(1),
+    provider: z.nativeEnum(ProviderType),
+    label: z.string().trim().min(1).max(100),
+    apiKey: z.string().trim().max(10_000).optional(),
+    baseUrl: z.url().max(2_000).optional(),
+  })
+  .strict();
 
 function authErrorResponse(err: unknown) {
   if (err instanceof AuthError) {
-    return NextResponse.json({ error: err.message }, { status: err.message === "Unauthorized" ? 401 : 404 });
+    return NextResponse.json({ error: err.message }, { status: authErrorStatus(err) });
   }
   throw err;
 }
@@ -18,8 +31,12 @@ function authErrorResponse(err: unknown) {
 export async function POST(req: Request) {
   try {
     const session = await requireSession();
-    const body = await req.json();
-    const { workspaceId, provider, label, apiKey, baseUrl } = body;
+    requireOrganizationRole(session, ["owner", "admin"]);
+    const parsed = credentialSchema.safeParse(await req.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Invalid credential settings" }, { status: 400 });
+    }
+    const { workspaceId, provider, label, apiKey, baseUrl } = parsed.data;
     await assertWorkspaceAccess(workspaceId, session);
 
     const trimmedKey = apiKey?.trim();
@@ -30,8 +47,8 @@ export async function POST(req: Request) {
     const cred = await prisma.providerCredential.create({
       data: {
         workspaceId,
-        provider: provider as ProviderType,
-        label: label ?? provider,
+        provider,
+        label,
         encryptedKey: trimmedKey ? encrypt(trimmedKey) : null,
         baseUrl: baseUrl?.trim() ?? null,
       },
@@ -63,6 +80,7 @@ export async function GET(req: Request) {
 export async function DELETE(req: Request) {
   try {
     const session = await requireSession();
+    requireOrganizationRole(session, ["owner", "admin"]);
     const id = new URL(req.url).searchParams.get("id");
     if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
     const cred = await prisma.providerCredential.findUnique({

@@ -7,7 +7,9 @@
     "build": "prisma generate && next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx --test src/lib/project-files.test.ts src/lib/ship-quality.test.ts src/lib/plan-quality.test.ts src/lib/plan-decisions.test.ts src/lib/run-resume.test.ts src/lib/office-blueprint.test.ts src/lib/markdown-plain.test.ts src/lib/thought-process.test.ts src/lib/office-layout-protect.test.ts src/components/office/office-life.test.ts src/components/office/office-layout.test.ts",
+    "test": "tsx --test src/lib/*.test.ts src/components/office/*.test.ts",
+    "test:browser": "playwright test",
+    "check": "npm run lint && npm test && npm run test:browser && npm run build",
     "postinstall": "prisma generate || exit 0",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
@@ -35,6 +37,7 @@
     "zod": "^4.5.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20",

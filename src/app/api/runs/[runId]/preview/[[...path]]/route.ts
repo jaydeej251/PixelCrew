@@ -1,13 +1,9 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
-import {
-  assembleProject,
-  contentTypeFor,
-  findPreviewIndex,
-  injectBaseHref,
-  normalizePath,
-} from "@/lib/project-files";
+import { normalizePath } from "@/lib/project-files";
 import { AuthError, assertRunAccess, requireSession } from "@/lib/auth";
+import { createPreviewToken } from "@/lib/preview-token";
+import { consumeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
+import { resolvePreviewOrigins } from "@/lib/preview-origin";
 
 function authErrorResponse(err: unknown) {
   if (err instanceof AuthError) {
@@ -17,41 +13,37 @@ function authErrorResponse(err: unknown) {
 }
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ runId: string; path?: string[] }> },
 ) {
   try {
     const session = await requireSession();
     const { runId, path: segments } = await params;
     await assertRunAccess(runId, session);
-
-    const run = await prisma.run.findUnique({
-      where: { id: runId },
-      include: { artifacts: true },
+    const limit = await consumeRateLimit({
+      scope: "preview-token-user",
+      identifier: session.id,
+      limit: 60,
+      windowMs: 60_000,
     });
-    if (!run) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (!limit.allowed) return rateLimitResponse(limit);
 
-    const files = assembleProject({ ceoGoal: run.ceoGoal, artifacts: run.artifacts });
-    const requested =
-      segments && segments.length > 0
-        ? normalizePath(segments.join("/"))
-        : findPreviewIndex(files, run.ceoGoal);
-
-    if (!requested || !files.has(requested)) {
+    const requested = segments?.length ? normalizePath(segments.join("/")) : null;
+    if (segments?.length && !requested) {
       return NextResponse.json({ error: "File not found" }, { status: 404 });
     }
 
-    let body = files.get(requested)!;
-    const type = contentTypeFor(requested);
-    if (type.startsWith("text/html")) {
-      body = injectBaseHref(body, runId, requested);
-    }
-
-    return new NextResponse(body, {
+    const token = createPreviewToken(runId);
+    const { previewOrigin } = resolvePreviewOrigins(req.url);
+    const encodedPath = requested
+      ? requested.split("/").map(encodeURIComponent).join("/")
+      : "";
+    const target = new URL(`/api/previews/${token}/${encodedPath}`, previewOrigin);
+    return NextResponse.redirect(target, {
+      status: 307,
       headers: {
-        "Content-Type": type,
-        "Cache-Control": "no-store",
-        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, no-store, max-age=0",
+        "Referrer-Policy": "no-referrer",
       },
     });
   } catch (err) {

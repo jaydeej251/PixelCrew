@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
+import { ProviderType } from "@prisma/client";
+import { z } from "zod";
 import { runOrchestrator } from "@/lib/orchestrator";
 import { configureAgentsForRun, workspaceHasProvider } from "@/lib/run-setup";
 import {
@@ -8,10 +10,18 @@ import {
   assertWorkspaceAccess,
   checkPlanLimits,
   deriveRunTitle,
-  getSession,
   requireSession,
 } from "@/lib/auth";
-import type { ProviderType } from "@prisma/client";
+import { consumeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
+
+const createRunSchema = z
+  .object({
+    workspaceId: z.string().min(1),
+    ceoGoal: z.string().trim().min(1).max(20_000).optional(),
+    provider: z.nativeEnum(ProviderType).default("mock"),
+    model: z.string().trim().min(1).max(200).optional(),
+  })
+  .strict();
 
 function authErrorResponse(err: unknown) {
   if (err instanceof AuthError) {
@@ -23,8 +33,19 @@ function authErrorResponse(err: unknown) {
 export async function POST(req: Request) {
   try {
     const session = await requireSession();
-    const body = await req.json();
-    const { workspaceId, ceoGoal, provider = "mock", model } = body;
+    const rateLimit = await consumeRateLimit({
+      scope: "run-create-organization",
+      identifier: session.organizationId,
+      limit: 20,
+      windowMs: 60 * 60_000,
+    });
+    if (!rateLimit.allowed) return rateLimitResponse(rateLimit);
+
+    const parsed = createRunSchema.safeParse(await req.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Invalid run request" }, { status: 400 });
+    }
+    const { workspaceId, ceoGoal, provider, model } = parsed.data;
 
     await assertWorkspaceAccess(workspaceId, session);
 
@@ -36,7 +57,7 @@ export async function POST(req: Request) {
     const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } });
     if (!workspace) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-    const providerType = provider as ProviderType;
+    const providerType = provider;
     if (providerType !== "mock") {
       const check = await workspaceHasProvider(workspaceId, providerType);
       if (!check.ready) {

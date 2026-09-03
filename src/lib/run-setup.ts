@@ -10,7 +10,12 @@ const ENV_ALIASES: Record<ProviderType, string[]> = {
   anthropic: ["ANTHROPIC_API_KEY"],
 };
 
+function sharedEnvironmentKeysAllowed(): boolean {
+  return process.env.NODE_ENV !== "production";
+}
+
 export function getEnvProviderKey(provider: ProviderType): string | undefined {
+  if (!sharedEnvironmentKeysAllowed()) return undefined;
   const names = ENV_ALIASES[provider] ?? [];
   for (const name of names) {
     let value = process.env[name]?.trim();
@@ -104,7 +109,7 @@ export async function workspaceHasProvider(
     const cred = await prisma.providerCredential.findFirst({
       where: { workspaceId, provider: "ollama" },
     });
-    if (cred?.baseUrl || getEnvProviderKey("ollama") || process.env.OLLAMA_BASE_URL) {
+    if (cred?.baseUrl || getEnvProviderKey("ollama")) {
       return { ready: true, source: cred ? "credential" : "env" };
     }
     return { ready: true, source: "env" };
