@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { createProvider, resolveProviderConfig } from "@/lib/providers";
+import { findProviderCredential } from "@/lib/provider-credentials";
 import { PLANNER_POSITIONS, pickOne } from "@/lib/roster";
 import {
   PLAN_DECISIONS_TITLE,
@@ -151,9 +152,11 @@ async function revisePlanForDecisions(
     return { plan: currentPlan, thread };
   }
 
-  const credential = await prisma.providerCredential.findFirst({
-    where: { workspaceId: plannerAgent.workspaceId, provider: plannerAgent.provider },
-  });
+  const credential = await findProviderCredential(
+    prisma,
+    plannerAgent.workspaceId,
+    plannerAgent.provider,
+  );
   const config = resolveProviderConfig(
     plannerAgent.provider,
     plannerAgent.model,
@@ -353,9 +356,11 @@ export async function POST(
   }
   thread.push({ role: "user", content: question });
 
-  const credential = await prisma.providerCredential.findFirst({
-    where: { workspaceId: plannerAgent.workspaceId, provider: plannerAgent.provider },
-  });
+  const credential = await findProviderCredential(
+    prisma,
+    plannerAgent.workspaceId,
+    plannerAgent.provider,
+  );
   const config = resolveProviderConfig(
     plannerAgent.provider,
     plannerAgent.model,
