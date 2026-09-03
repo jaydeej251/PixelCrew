@@ -44,6 +44,62 @@ enum EventType {
   AGENT_TASK_DONE
   RUN_COMPLETED
   RUN_CANCELLED
+  EXECUTION_STARTED
+  TOOL_STARTED
+  TOOL_COMPLETED
+  TOOL_FAILED
+  CHECK_PASSED
+  CHECK_FAILED
+  APPROVAL_REQUIRED
+  APPROVAL_RESOLVED
+  DIFF_READY
+  EXECUTION_COMPLETED
+  SANDBOX_TERMINATED
+}
+
+enum ExecutionStatus {
+  pending
+  running
+  paused
+  completed
+  failed
+  cancelled
+}
+
+enum AttemptStatus {
+  starting
+  running
+  completed
+  failed
+  cancelled
+}
+
+enum ToolEventStatus {
+  requested
+  running
+  completed
+  failed
+}
+
+enum CheckStatus {
+  pending
+  passed
+  failed
+}
+
+enum ApprovalStatus {
+  pending
+  approved
+  rejected
+  cancelled
+}
+
+enum RunEventSourceKind {
+  execution
+  attempt
+  tool_event
+  check_result
+  approval
 }
 
 enum ProviderType {
@@ -77,26 +133,28 @@ enum PlanTier {
 }
 
 model User {
-  id            String       @id @default(cuid())
-  email         String       @unique
-  name          String?
-  passwordHash  String?
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
-  memberships   Membership[]
-  sessions      Session[]
+  id                 String       @id @default(cuid())
+  email              String       @unique
+  name               String?
+  passwordHash       String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  memberships        Membership[]
+  sessions           Session[]
+  requestedApprovals Approval[]   @relation("ApprovalRequestedBy")
+  resolvedApprovals  Approval[]   @relation("ApprovalResolvedBy")
 }
 
 model Organization {
-  id           String        @id @default(cuid())
-  name         String
-  slug         String        @unique
-  plan         PlanTier      @default(free)
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  memberships  Membership[]
-  workspaces   Workspace[]
-  usageEvents  UsageEvent[]
+  id          String       @id @default(cuid())
+  name        String
+  slug        String       @unique
+  plan        PlanTier     @default(free)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  memberships Membership[]
+  workspaces  Workspace[]
+  usageEvents UsageEvent[]
 }
 
 model Membership {
@@ -123,21 +181,21 @@ model Session {
 }
 
 model Workspace {
-  id              String               @id @default(cuid())
-  name            String
-  organizationId  String
-  ceoGoal         String?
-  concurrencyCap  Int                  @default(3)
-  createdAt       DateTime             @default(now())
-  updatedAt       DateTime             @updatedAt
-  organization    Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  departments     Department[]
-  agents          Agent[]
-  desks           Desk[]
-  runs            Run[]
-  credentials     ProviderCredential[]
-  memories        WorkspaceMemory[]
-  officeLayouts   OfficeLayout[]
+  id             String               @id @default(cuid())
+  name           String
+  organizationId String
+  ceoGoal        String?
+  concurrencyCap Int                  @default(3)
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  departments    Department[]
+  agents         Agent[]
+  desks          Desk[]
+  runs           Run[]
+  credentials    ProviderCredential[]
+  memories       WorkspaceMemory[]
+  officeLayouts  OfficeLayout[]
 }
 
 model Department {
@@ -181,60 +239,67 @@ model OfficeLayout {
 }
 
 model Agent {
-  id             String       @id @default(cuid())
-  name           String
-  position       String
-  positionLabel  String
-  jobBoundary    String
-  avatarColor    String       @default("#8b5cf6")
-  status         AgentStatus  @default(idle)
-  provider       ProviderType @default(mock)
-  model          String       @default("mock")
-  workspaceId    String
-  departmentId   String?
-  deskId         String?
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-  workspace      Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  department     Department?  @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  desk           Desk?        @relation(fields: [deskId], references: [id], onDelete: SetNull)
-  claimedTasks   Task[]       @relation("ClaimedBy")
-  events         RunEvent[]
-  memories       AgentMemory[]
+  id            String        @id @default(cuid())
+  name          String
+  position      String
+  positionLabel String
+  jobBoundary   String
+  avatarColor   String        @default("#8b5cf6")
+  status        AgentStatus   @default(idle)
+  provider      ProviderType  @default(mock)
+  model         String        @default("mock")
+  workspaceId   String
+  departmentId  String?
+  deskId        String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  workspace     Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  department    Department?   @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  desk          Desk?         @relation(fields: [deskId], references: [id], onDelete: SetNull)
+  claimedTasks  Task[]        @relation("ClaimedBy")
+  events        RunEvent[]
+  memories      AgentMemory[]
+  executions    Execution[]
+  attempts      Attempt[]
 }
 
 model ProviderCredential {
-  id             String       @id @default(cuid())
-  workspaceId    String
-  provider       ProviderType
-  label          String
-  encryptedKey   String?
-  baseUrl        String?
-  isDefault      Boolean      @default(false)
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-  workspace      Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  id           String       @id @default(cuid())
+  workspaceId  String
+  provider     ProviderType
+  label        String
+  encryptedKey String?
+  baseUrl      String?
+  isDefault    Boolean      @default(false)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 }
 
 model Run {
-  id           String     @id @default(cuid())
+  id           String        @id @default(cuid())
   workspaceId  String
   ceoGoal      String
-  title        String     @default("")
-  status       RunStatus  @default(pending)
+  title        String        @default("")
+  status       RunStatus     @default(pending)
   startedAt    DateTime?
   completedAt  DateTime?
   archivedAt   DateTime?
-  totalTokens  Int        @default(0)
-  estCostUsd   Float      @default(0)
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
-  workspace    Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  totalTokens  Int           @default(0)
+  estCostUsd   Float         @default(0)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   tasks        Task[]
   events       RunEvent[]
   artifacts    Artifact[]
   usageEvents  UsageEvent[]
   workflow     Workflow?
+  executions   Execution[]
+  attempts     Attempt[]
+  toolEvents   ToolEvent[]
+  checkResults CheckResult[]
+  approvals    Approval[]
 }
 
 model Workflow {
@@ -247,35 +312,164 @@ model Workflow {
 }
 
 model Task {
-  id              String     @id @default(cuid())
-  runId           String
-  title           String
-  description     String?
-  position        String
-  status          TaskStatus @default(queued)
-  priority        Int        @default(0)
-  dependsOnIds    String[]   @default([])
-  claimedById     String?
-  claimedAt       DateTime?
-  completedAt     DateTime?
-  output          String?
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @updatedAt
-  run             Run        @relation(fields: [runId], references: [id], onDelete: Cascade)
-  claimedBy       Agent?     @relation("ClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
+  id           String        @id @default(cuid())
+  runId        String
+  title        String
+  description  String?
+  position     String
+  status       TaskStatus    @default(queued)
+  priority     Int           @default(0)
+  dependsOnIds String[]      @default([])
+  claimedById  String?
+  claimedAt    DateTime?
+  completedAt  DateTime?
+  output       String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  run          Run           @relation(fields: [runId], references: [id], onDelete: Cascade)
+  claimedBy    Agent?        @relation("ClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
+  execution    Execution?
+  attempts     Attempt[]
+  toolEvents   ToolEvent[]
+  checkResults CheckResult[]
+  approvals    Approval[]
 }
 
 model RunEvent {
-  id        String    @id @default(cuid())
-  runId     String
-  agentId   String?
-  type      EventType
-  payload   Json      @default("{}")
-  createdAt DateTime  @default(now())
-  run       Run       @relation(fields: [runId], references: [id], onDelete: Cascade)
-  agent     Agent?    @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  id         String              @id @default(cuid())
+  runId      String
+  agentId    String?
+  type       EventType
+  payload    Json                @default("{}")
+  sourceKind RunEventSourceKind?
+  sourceId   String?
+  createdAt  DateTime            @default(now())
+  run        Run                 @relation(fields: [runId], references: [id], onDelete: Cascade)
+  agent      Agent?              @relation(fields: [agentId], references: [id], onDelete: SetNull)
 
+  @@unique([runId, sourceKind, sourceId, type])
   @@index([runId, createdAt])
+}
+
+model Execution {
+  id             String          @id @default(cuid())
+  runId          String
+  taskId         String          @unique
+  agentId        String?
+  idempotencyKey String          @unique
+  status         ExecutionStatus @default(pending)
+  attemptCounter Int             @default(0)
+  startedAt      DateTime?
+  completedAt    DateTime?
+  cancelledAt    DateTime?
+  lastError      String?         @db.VarChar(8000)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  run            Run             @relation(fields: [runId], references: [id], onDelete: Cascade)
+  task           Task            @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  agent          Agent?          @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  attempts       Attempt[]
+  approvals      Approval[]
+
+  @@index([runId, status])
+}
+
+model Attempt {
+  id                  String        @id @default(cuid())
+  executionId         String
+  runId               String
+  taskId              String
+  agentId             String?
+  sequence            Int
+  idempotencyKey      String        @unique
+  status              AttemptStatus @default(starting)
+  workspaceKey        String?       @db.VarChar(512)
+  toolSequenceCounter Int           @default(0)
+  startedAt           DateTime?
+  completedAt         DateTime?
+  error               String?       @db.VarChar(8000)
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+  execution           Execution     @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  run                 Run           @relation(fields: [runId], references: [id], onDelete: Cascade)
+  task                Task          @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  agent               Agent?        @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  toolEvents          ToolEvent[]
+  checkResults        CheckResult[]
+  approvals           Approval[]
+
+  @@unique([executionId, sequence])
+  @@index([runId, status])
+}
+
+model ToolEvent {
+  id             String          @id @default(cuid())
+  attemptId      String
+  runId          String
+  taskId         String
+  sequence       Int
+  idempotencyKey String          @unique
+  toolName       String          @db.VarChar(200)
+  status         ToolEventStatus @default(requested)
+  input          Json?
+  output         Json?
+  error          String?         @db.VarChar(8000)
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  attempt        Attempt         @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  run            Run             @relation(fields: [runId], references: [id], onDelete: Cascade)
+  task           Task            @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@unique([attemptId, sequence])
+  @@index([runId, status])
+}
+
+model CheckResult {
+  id             String      @id @default(cuid())
+  attemptId      String
+  runId          String
+  taskId         String
+  idempotencyKey String      @unique
+  checkName      String      @db.VarChar(200)
+  status         CheckStatus @default(pending)
+  summary        String?     @db.VarChar(8000)
+  details        Json?
+  completedAt    DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  attempt        Attempt     @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  run            Run         @relation(fields: [runId], references: [id], onDelete: Cascade)
+  task           Task        @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([runId, status])
+}
+
+model Approval {
+  id             String         @id @default(cuid())
+  executionId    String
+  attemptId      String?
+  runId          String
+  taskId         String
+  idempotencyKey String         @unique
+  status         ApprovalStatus @default(pending)
+  kind           String         @db.VarChar(200)
+  prompt         String         @db.VarChar(8000)
+  decisionNote   String?        @db.VarChar(8000)
+  requestedById  String?
+  resolvedById   String?
+  resolvedAt     DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  execution      Execution      @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  attempt        Attempt?       @relation(fields: [attemptId], references: [id], onDelete: SetNull)
+  run            Run            @relation(fields: [runId], references: [id], onDelete: Cascade)
+  task           Task           @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  requestedBy    User?          @relation("ApprovalRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+  resolvedBy     User?          @relation("ApprovalResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  @@index([runId, status])
 }
 
 model Artifact {

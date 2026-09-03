@@ -1,0 +1,17 @@
+---
+description: Start each new change from the latest remote main branch
+alwaysApply: true
+---
+
+# Branch source of truth
+
+Before starting a new feature, gate, fix, or other independent change:
+
+1. Ensure the current worktree is clean and prior work is committed.
+2. Fetch `origin` and confirm the prior pull request is merged when the new work depends on it.
+3. Switch to local `main`.
+4. Update it from `origin/main` using fast-forward-only pull.
+5. Create a fresh, purpose-named branch from that updated `main`.
+
+Do not stack a new change on an unmerged feature branch. Continue on the existing branch only when
+the work belongs to the same pull request.

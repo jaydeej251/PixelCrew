@@ -58,6 +58,12 @@ import {
 import { ensureRole, isPositionKey } from "./hire";
 import { configureAgentsForRun, getDefaultModel, workspaceHasProvider } from "./run-setup";
 import type { PositionKey } from "./constants";
+import {
+  getOrCreateExecution,
+  projectMilestone,
+  settleAttempt,
+  startOrResumeAttempt,
+} from "./execution-runtime";
 
 type EmitFn = (type: string, payload: AgentEventPayload) => Promise<void>;
 
@@ -285,6 +291,36 @@ export async function executeAgentTask(
     brief: userPrompt.slice(0, 12_000),
   });
 
+  const execution = await getOrCreateExecution(prisma, {
+    runId,
+    taskId: task.id,
+    agentId: agent.id,
+  });
+  const claimStamp = task.claimedAt?.toISOString() ?? loopStartedAt.toISOString();
+  const attempt = await startOrResumeAttempt(prisma, {
+    executionId: execution.id,
+    requestId: `${task.id}:${claimStamp}:${agent.id}`,
+    agentId: agent.id,
+  });
+  await projectMilestone(prisma, {
+    runId,
+    agentId: agent.id,
+    type: "EXECUTION_STARTED",
+    sourceKind: "execution",
+    sourceId: execution.id,
+    payload: {
+      executionId: execution.id,
+      attemptId: attempt.id,
+      taskId: task.id,
+      taskTitle: task.title,
+      agentId: agent.id,
+      agentName: agent.name,
+      status: "running",
+      sequence: attempt.sequence,
+    },
+  });
+
+  try {
   let fullOutput = "";
   let thinkBuf = "";
   const flushThinking = async (force = false) => {
@@ -429,6 +465,7 @@ export async function executeAgentTask(
         data: { status: "queued", claimedById: null, position: targetPosition },
       });
       await prisma.agent.update({ where: { id: agent.id }, data: { status: "idle" } });
+      await settleAttempt(prisma, attempt.id, "failed", "Reassigned via handoff");
       return;
     }
   }
@@ -518,6 +555,31 @@ export async function executeAgentTask(
         filePath: `${agent.position}/${task.id}.md`,
       },
     });
+  }
+
+  const settled = await settleAttempt(prisma, attempt.id, "completed");
+  if (settled?.status === "completed") {
+    await projectMilestone(prisma, {
+      runId,
+      agentId: agent.id,
+      type: "EXECUTION_COMPLETED",
+      sourceKind: "execution",
+      sourceId: execution.id,
+      payload: {
+        executionId: execution.id,
+        attemptId: attempt.id,
+        taskId: task.id,
+        taskTitle: task.title,
+        agentId: agent.id,
+        agentName: agent.name,
+        status: "completed",
+        sequence: attempt.sequence,
+      },
+    });
+  }
+  } catch (err) {
+    await settleAttempt(prisma, attempt.id, "failed", err);
+    throw err;
   }
 }
 

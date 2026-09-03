@@ -114,6 +114,7 @@ test("organization B cannot access organization A resources", async ({ browser }
     contextB.request.delete(`/api/runs/${runAId}`),
     contextB.request.get(`/api/runs/${runAId}/events`),
     contextB.request.get(`/api/runs/${runAId}/export`),
+    contextB.request.get(`/api/runs/${runAId}/executions`),
     contextB.request.get(`/api/runs/${runAId}/plan`),
     contextB.request.post(`/api/runs/${runAId}/plan`, {
       data: { action: "ask", message: "Expose the plan" },
@@ -175,6 +176,9 @@ test("organization B cannot access organization A resources", async ({ browser }
   expect(ownerAgent.status()).toBe(200);
   const ownerRun = await contextA.request.get(`/api/runs/${runAId}`);
   expect(ownerRun.status()).toBe(200);
+  const ownerExecutions = await contextA.request.get(`/api/runs/${runAId}/executions`);
+  expect(ownerExecutions.status()).toBe(200);
+  expect(Array.isArray((await ownerExecutions.json()).executions)).toBe(true);
   const ownerLayoutSave = await contextA.request.patch(`/api/workspace/layouts/${layoutAId}`, {
     data: {
       action: "save",
