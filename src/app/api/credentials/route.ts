@@ -10,6 +10,7 @@ import {
   requireOrganizationRole,
   requireSession,
 } from "@/lib/auth";
+import { isOllamaCloudBaseUrl } from "@/lib/ollama-endpoints";
 
 const credentialSchema = z
   .object({
@@ -42,6 +43,12 @@ export async function POST(req: Request) {
     const trimmedKey = apiKey?.trim();
     if (provider !== "ollama" && !trimmedKey) {
       return NextResponse.json({ error: "API key is required" }, { status: 400 });
+    }
+    if (provider === "ollama" && isOllamaCloudBaseUrl(baseUrl) && !trimmedKey) {
+      return NextResponse.json(
+        { error: "API key is required for Ollama Cloud (ollama.com)" },
+        { status: 400 },
+      );
     }
 
     const cred = await prisma.providerCredential.create({

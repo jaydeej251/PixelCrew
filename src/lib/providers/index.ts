@@ -1,9 +1,39 @@
 import type { ProviderType } from "@prisma/client";
-import { resolveApiKey, getEnvProviderKey } from "../run-setup";
+import {
+  resolveApiKey,
+} from "../run-setup";
+import {
+  isOllamaCloudBaseUrl,
+  OLLAMA_CLOUD_BASE_URL,
+  OLLAMA_LOCAL_BASE_URL,
+} from "../ollama-endpoints";
 import { MockProvider } from "./mock";
 import { createOpenAICompatible } from "./openai-compatible";
 import type { LLMProvider, ProviderConfig } from "./types";
 export { estimateCost } from "./types";
+
+function resolveOllamaBaseUrl(
+  credentialBaseUrl: string | null | undefined,
+  hasApiKey: boolean,
+): string {
+  const fromCredential = credentialBaseUrl?.trim();
+  if (fromCredential) return fromCredential.replace(/\/+$/, "");
+
+  const fromEnv = process.env.OLLAMA_BASE_URL?.trim();
+  if (fromEnv) {
+    const cleaned = fromEnv.replace(/\/+$/, "");
+    // .env.example defaults to local; a cloud API key should win over that default.
+    if (
+      hasApiKey &&
+      (cleaned === OLLAMA_LOCAL_BASE_URL || cleaned === "http://localhost:11434/v1")
+    ) {
+      return OLLAMA_CLOUD_BASE_URL;
+    }
+    return cleaned;
+  }
+
+  return hasApiKey ? OLLAMA_CLOUD_BASE_URL : OLLAMA_LOCAL_BASE_URL;
+}
 
 export function resolveProviderConfig(
   provider: ProviderType,
@@ -27,17 +57,17 @@ export function resolveProviderConfig(
         baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
         model,
       };
-    case "ollama":
+    case "ollama": {
+      const hasApiKey = Boolean(apiKey);
+      const baseUrl = resolveOllamaBaseUrl(credential?.baseUrl, hasApiKey);
       return {
         provider,
-        apiKey: "ollama",
-        baseUrl:
-          credential?.baseUrl?.trim() ||
-          getEnvProviderKey("ollama") ||
-          process.env.OLLAMA_BASE_URL?.trim() ||
-          "http://127.0.0.1:11434/v1",
+        // Local Ollama ignores the bearer token; cloud requires a real key.
+        apiKey: apiKey ?? "ollama",
+        baseUrl,
         model,
       };
+    }
     case "openai_compatible":
     case "anthropic":
       return {
@@ -62,9 +92,16 @@ export function createProvider(
   }
 
   const key = config.apiKey?.trim();
-  if (config.provider !== "ollama" && (!key || key.length < 8)) {
+  const ollamaNeedsKey =
+    config.provider === "ollama" && isOllamaCloudBaseUrl(config.baseUrl);
+  if (
+    (config.provider !== "ollama" || ollamaNeedsKey) &&
+    (!key || key.length < 8 || key === "ollama")
+  ) {
     throw new Error(
-      `No valid API key for ${config.provider}. Add OPENROUTER_API_KEY or OPEN_ROUTER_KEY to .env.local and restart the dev server, or save a key in the sidebar.`,
+      config.provider === "ollama"
+        ? "Ollama Cloud requires an API key from ollama.com/settings/keys. Save it under Ollama in the sidebar, or set OLLAMA_API_KEY in .env.local."
+        : `No valid API key for ${config.provider}. Add OPENROUTER_API_KEY or OPEN_ROUTER_KEY to .env.local and restart the dev server, or save a key in the sidebar.`,
     );
   }
 
