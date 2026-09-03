@@ -1,9 +1,9 @@
 import type { ProviderType } from "@prisma/client";
-import {
-  resolveApiKey,
-} from "../run-setup";
+import { resolveApiKey } from "../run-setup";
 import {
   isOllamaCloudBaseUrl,
+  isOllamaLocalBaseUrl,
+  normalizeOllamaBaseUrl,
   OLLAMA_CLOUD_BASE_URL,
   OLLAMA_LOCAL_BASE_URL,
 } from "../ollama-endpoints";
@@ -17,16 +17,13 @@ function resolveOllamaBaseUrl(
   hasApiKey: boolean,
 ): string {
   const fromCredential = credentialBaseUrl?.trim();
-  if (fromCredential) return fromCredential.replace(/\/+$/, "");
+  if (fromCredential) return normalizeOllamaBaseUrl(fromCredential);
 
   const fromEnv = process.env.OLLAMA_BASE_URL?.trim();
   if (fromEnv) {
-    const cleaned = fromEnv.replace(/\/+$/, "");
+    const cleaned = normalizeOllamaBaseUrl(fromEnv);
     // .env.example defaults to local; a cloud API key should win over that default.
-    if (
-      hasApiKey &&
-      (cleaned === OLLAMA_LOCAL_BASE_URL || cleaned === "http://localhost:11434/v1")
-    ) {
+    if (hasApiKey && isOllamaLocalBaseUrl(cleaned)) {
       return OLLAMA_CLOUD_BASE_URL;
     }
     return cleaned;
@@ -73,7 +70,7 @@ export function resolveProviderConfig(
       return {
         provider,
         apiKey,
-        baseUrl: credential?.baseUrl ?? undefined,
+        baseUrl: credential?.baseUrl?.trim() || undefined,
         model,
       };
     default:
@@ -94,10 +91,8 @@ export function createProvider(
   const key = config.apiKey?.trim();
   const ollamaNeedsKey =
     config.provider === "ollama" && isOllamaCloudBaseUrl(config.baseUrl);
-  if (
-    (config.provider !== "ollama" || ollamaNeedsKey) &&
-    (!key || key.length < 8 || key === "ollama")
-  ) {
+  const missingKey = !key || key.length < 8 || key === "ollama";
+  if ((config.provider !== "ollama" || ollamaNeedsKey) && missingKey) {
     throw new Error(
       config.provider === "ollama"
         ? "Ollama Cloud requires an API key from ollama.com/settings/keys. Save it under Ollama in the sidebar, or set OLLAMA_API_KEY in .env.local."
