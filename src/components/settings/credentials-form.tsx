@@ -20,7 +20,13 @@ const PROVIDERS = [
 
 const OPENAI_COMPATIBLE_DEFAULT_BASE_URL = "https://api.openai.com/v1";
 
-type SavedCred = { id: string; provider: string; label: string; baseUrl?: string | null };
+type SavedCred = {
+  id: string;
+  provider: string;
+  label: string;
+  baseUrl?: string | null;
+  isDefault?: boolean;
+};
 
 type CredentialsFormProps = {
   workspaceId: string;
@@ -75,29 +81,58 @@ export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
             {saved.map((c) => (
               <li key={c.id} className="flex items-center justify-between gap-2">
                 <span className="flex min-w-0 items-center gap-2">
-                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
+                  <span
+                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                      c.isDefault ? "bg-emerald-400" : "bg-zinc-600"
+                    }`}
+                  />
                   <span className="truncate">
                     {c.label} ({c.provider}
                     {c.baseUrl ? ` · ${c.baseUrl}` : ""})
+                    {c.isDefault ? " · active" : ""}
                   </span>
                 </span>
-                <button
-                  type="button"
-                  className="shrink-0 text-red-400 hover:text-red-300"
-                  onClick={async () => {
-                    const response = await fetch(`/api/credentials?id=${c.id}`, {
-                      method: "DELETE",
-                    });
-                    if (!response.ok) {
-                      setError("Could not remove credential");
-                      return;
-                    }
-                    setError("");
-                    reload();
-                  }}
-                >
-                  Remove
-                </button>
+                <span className="flex shrink-0 items-center gap-2">
+                  {!c.isDefault && (
+                    <button
+                      type="button"
+                      className="text-indigo-400 hover:text-indigo-300"
+                      onClick={async () => {
+                        const response = await fetch("/api/credentials", {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ action: "set_default", id: c.id }),
+                        });
+                        if (!response.ok) {
+                          setError("Could not set active credential");
+                          return;
+                        }
+                        setError("");
+                        setMessage("Active credential updated");
+                        reload();
+                      }}
+                    >
+                      Use
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="text-red-400 hover:text-red-300"
+                    onClick={async () => {
+                      const response = await fetch(`/api/credentials?id=${c.id}`, {
+                        method: "DELETE",
+                      });
+                      if (!response.ok) {
+                        setError("Could not remove credential");
+                        return;
+                      }
+                      setError("");
+                      reload();
+                    }}
+                  >
+                    Remove
+                  </button>
+                </span>
               </li>
             ))}
           </ul>

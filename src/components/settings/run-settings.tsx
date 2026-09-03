@@ -10,6 +10,10 @@ type ProviderStatus = {
   ready: boolean;
   source: "credential" | "env" | "none";
   defaultModel: string;
+  activeCredentialId?: string | null;
+  activeCredentialLabel?: string | null;
+  activeBaseUrl?: string | null;
+  isDefaultCredential?: boolean;
 };
 
 type RunSettingsProps = {
@@ -78,6 +82,20 @@ export function RunSettings({
               {current.ready ? (
                 <>
                   Key found via <span className="text-emerald-400">{current.source}</span>
+                  {current.activeBaseUrl ? (
+                    <>
+                      {" "}
+                      · agents use{" "}
+                      <span className="text-emerald-400">{current.activeBaseUrl}</span>
+                    </>
+                  ) : null}
+                  {current.activeCredentialLabel ? (
+                    <>
+                      {" "}
+                      ({current.activeCredentialLabel}
+                      {current.isDefaultCredential ? ", active" : ""})
+                    </>
+                  ) : null}
                 </>
               ) : (
                 <span className="text-amber-400">
@@ -85,6 +103,12 @@ export function RunSettings({
                 </span>
               )}
             </p>
+            {provider === "ollama" && current.ready && (
+              <p className="text-[11px] leading-snug text-zinc-500">
+                If you saved both local and cloud Ollama keys, click <span className="text-zinc-300">Use</span> on
+                the one you want under Your API keys. Newly saved keys become active automatically.
+              </p>
+            )}
             {provider === "openrouter" && current.ready && (
               <TestKeyButton workspaceId={workspaceId} />
             )}

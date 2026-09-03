@@ -1,8 +1,7 @@
 import type { ProviderType } from "@prisma/client";
 import { decrypt } from "./crypto";
-import {
-  isOllamaCloudBaseUrl,
-} from "./ollama-endpoints";
+import { isOllamaCloudBaseUrl } from "./ollama-endpoints";
+import { findProviderCredential } from "./provider-credentials";
 
 export {
   isOllamaCloudBaseUrl,
@@ -11,6 +10,7 @@ export {
   OLLAMA_CLOUD_BASE_URL,
   OLLAMA_LOCAL_BASE_URL,
 } from "./ollama-endpoints";
+export { findProviderCredential, setDefaultProviderCredential } from "./provider-credentials";
 
 const ENV_ALIASES: Record<ProviderType, string[]> = {
   mock: [],
@@ -118,9 +118,7 @@ export async function workspaceHasProvider(
 
   if (provider === "mock") return { ready: true, source: "none" };
   if (provider === "ollama") {
-    const cred = await prisma.providerCredential.findFirst({
-      where: { workspaceId, provider: "ollama" },
-    });
+    const cred = await findProviderCredential(prisma, workspaceId, "ollama");
     const resolved = resolveApiKey("ollama", cred);
     if (resolved.key) return { ready: true, source: resolved.source };
     // Local Ollama needs no key; cloud URLs require one.
@@ -130,9 +128,7 @@ export async function workspaceHasProvider(
     return { ready: true, source: cred?.baseUrl ? "credential" : "env" };
   }
 
-  const cred = await prisma.providerCredential.findFirst({
-    where: { workspaceId, provider },
-  });
+  const cred = await findProviderCredential(prisma, workspaceId, provider);
   const resolved = resolveApiKey(provider, cred);
   if (resolved.key) return { ready: true, source: resolved.source };
   return { ready: false, source: "none" };
