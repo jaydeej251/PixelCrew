@@ -1,22 +1,36 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { createSession, hashPassword, SESSION_COOKIE } from "@/lib/auth";
 import { slugify } from "@/lib/utils";
 import { createWorkspaceForUser } from "@/lib/workspace-bootstrap";
+import { consumeRateLimit, rateLimitResponse, requestClientIp } from "@/lib/rate-limit";
+
+const signupSchema = z.object({
+  email: z.email().trim().toLowerCase().max(320),
+  password: z.string().min(8).max(1_024),
+  name: z.string().trim().max(100).optional(),
+}).strict();
 
 export async function POST(req: Request) {
-  const body = await req.json();
-  const email = String(body.email ?? "").trim().toLowerCase();
-  const password = String(body.password ?? "");
-  const name = String(body.name ?? "").trim() || null;
+  const limit = await consumeRateLimit({
+    scope: "auth-signup-ip",
+    identifier: requestClientIp(req),
+    limit: 5,
+    windowMs: 60 * 60_000,
+  });
+  if (!limit.allowed) return rateLimitResponse(limit);
 
-  if (!email || !password) {
-    return NextResponse.json({ error: "Email and password required" }, { status: 400 });
+  const parsed = signupSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Valid email and password of at least 8 characters required" },
+      { status: 400 },
+    );
   }
-  if (password.length < 8) {
-    return NextResponse.json({ error: "Password must be at least 8 characters" }, { status: 400 });
-  }
+  const { email, password } = parsed.data;
+  const name = parsed.data.name || null;
 
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) {

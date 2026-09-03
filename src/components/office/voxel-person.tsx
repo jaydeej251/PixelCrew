@@ -161,7 +161,7 @@ export function VoxelPerson({
         : isWalk
           ? Math.atan2(gx - g.position.x, gz - g.position.z)
           : Math.PI;
-    let yaw = g.rotation.y;
+    const yaw = g.rotation.y;
     let diff = face - yaw;
     while (diff > Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;

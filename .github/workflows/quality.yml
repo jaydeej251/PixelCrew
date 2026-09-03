@@ -1,0 +1,39 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  gate-one:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: agenthq
+          POSTGRES_PASSWORD: agenthq
+          POSTGRES_DB: agenthq_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agenthq -d agenthq_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://agenthq:agenthq@127.0.0.1:5432/agenthq_test?schema=public
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      ENCRYPTION_KEY: gate-one-ci-encryption-key-with-at-least-32-characters
+      PREVIEW_TOKEN_SECRET: gate-one-ci-preview-token-secret-with-at-least-32-characters
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npx prisma migrate deploy
+      - run: npm run check

@@ -1,9 +1,14 @@
 import crypto from "crypto";
 
 const ALGORITHM = "aes-256-gcm";
+const DEVELOPMENT_KEY = "dev-only-key-do-not-use-in-production!!";
+const INSECURE_KEYS = new Set([DEVELOPMENT_KEY, "change-me-to-a-64-char-hex-string"]);
 
 function getKey(): Buffer {
-  const key = process.env.ENCRYPTION_KEY ?? "dev-only-key-do-not-use-in-production!!";
+  const key = process.env.ENCRYPTION_KEY?.trim() || DEVELOPMENT_KEY;
+  if (process.env.NODE_ENV === "production" && (key.length < 32 || INSECURE_KEYS.has(key))) {
+    throw new Error("ENCRYPTION_KEY must be a unique secret of at least 32 characters in production");
+  }
   return crypto.createHash("sha256").update(key).digest();
 }
 

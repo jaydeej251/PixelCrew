@@ -114,6 +114,7 @@ export const PLANNING_SEATS: Array<{ x: number; y: number }> = [
 ];
 
 export function cellRoom(x: number, y: number, _desks?: OfficeDesk[]): string {
+  void _desks;
   if (x < BUILDING.minX || y < BUILDING.minY || x > BUILDING.maxX || y > BUILDING.maxY) {
     return "grass";
   }

@@ -4,9 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Panel, PanelContent, PanelHeader, PanelTitle } from "@/components/ui/panel";
 
 const PLANS = [
-  { name: "Free", price: "$0", runs: "5 runs/mo", features: ["Mock agents", "1 workspace", "Simulate run"] },
-  { name: "Pro", price: "$29", runs: "100 runs/mo", features: ["BYOK", "Parallel agents", "Export zip", "Usage tracking"] },
-  { name: "Enterprise", price: "Contact", runs: "Unlimited", features: ["SSO", "Audit log", "Self-host", "Priority support"] },
+  { name: "Free", price: "$0", runs: "Available now · 5 runs/mo", features: ["Mock agents", "1 workspace", "Simulate run"] },
+  { name: "Pro", price: "Planned", runs: "Billing is not enabled", features: ["BYOK", "Parallel agents", "Export zip", "Usage tracking"] },
+  { name: "Enterprise", price: "Roadmap", runs: "Not currently available", features: ["SSO", "Audit log", "Self-host", "Priority support"] },
 ];
 
 export default function PricingPage() {
@@ -24,7 +24,9 @@ export default function PricingPage() {
       </header>
       <main className="mx-auto max-w-5xl px-6 py-16">
         <h1 className="text-center text-3xl font-bold">Pricing</h1>
-        <p className="mt-2 text-center text-zinc-400">Bring your own API keys. We charge for the office.</p>
+        <p className="mt-2 text-center text-zinc-400">
+          Bring your own API keys. Paid checkout is not available yet.
+        </p>
         <div className="mt-12 grid gap-6 md:grid-cols-3">
           {PLANS.map((plan) => (
             <Panel key={plan.name}>
