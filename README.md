@@ -25,9 +25,10 @@ Never commit keys. Copy `.env.example` to `.env.local` and add:
 
 - `OPENROUTER_API_KEY`
 - `GOOGLE_API_KEY`
-- `OLLAMA_BASE_URL` (default `http://127.0.0.1:11434/v1`)
+- `OLLAMA_BASE_URL` (default local `http://127.0.0.1:11434/v1`)
+- `OLLAMA_API_KEY` (Ollama Cloud from [ollama.com/settings/keys](https://ollama.com/settings/keys); with only this set, PixelCrew uses `https://ollama.com/v1`)
 
-Or add credentials in the app UI (encrypted at rest).
+Or add credentials in the app UI (encrypted at rest). For Ollama Cloud, choose **Ollama**, paste the API key, and keep Base URL as `https://ollama.com/v1` (the form switches there automatically when you paste a key).
 
 ## Production security requirements
 
