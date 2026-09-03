@@ -127,10 +127,14 @@ export function buildThoughtProcess(opts: {
       thinking = thinkingForAgent(agentId, events, taskIds);
     }
     const started = events.find(
-      (e) => e.type === "TASK_STARTED" && (e.payload.taskId === task.id || e.payload.taskTitle === task.title),
+      (e) =>
+        (e.type === "TASK_STARTED" || e.type === "EXECUTION_STARTED") &&
+        (e.payload.taskId === task.id || e.payload.taskTitle === task.title),
     );
     const finished = events.find(
-      (e) => e.type === "AGENT_TASK_DONE" && e.payload.taskId === task.id,
+      (e) =>
+        (e.type === "AGENT_TASK_DONE" || e.type === "EXECUTION_COMPLETED") &&
+        e.payload.taskId === task.id,
     );
     return {
       id: task.id,

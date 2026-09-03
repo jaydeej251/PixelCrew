@@ -12,6 +12,17 @@ const FRIENDLY: Partial<Record<RunEventMessage["type"], string>> = {
   AGENT_TASK_DONE: "finished",
   RUN_COMPLETED: "The team finished",
   RUN_CANCELLED: "Stopped",
+  EXECUTION_STARTED: "started execution",
+  TOOL_STARTED: "started a tool",
+  TOOL_COMPLETED: "completed a tool",
+  TOOL_FAILED: "had a tool fail",
+  CHECK_PASSED: "passed a check",
+  CHECK_FAILED: "failed a check",
+  APPROVAL_REQUIRED: "needs approval",
+  APPROVAL_RESOLVED: "received an approval decision",
+  DIFF_READY: "prepared changes",
+  EXECUTION_COMPLETED: "completed execution",
+  SANDBOX_TERMINATED: "closed the sandbox",
 };
 
 function lineFor(event: RunEventMessage): string {
