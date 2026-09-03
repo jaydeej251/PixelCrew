@@ -40,6 +40,7 @@ export function runStatusLabel(status: string): string {
   if (status === "paused") return "Planning";
   if (status === "running" || status === "pending") return "Building";
   if (status === "completed") return "Done";
-  if (status === "failed" || status === "cancelled") return "Failed";
+  if (status === "cancelled") return "Stopped";
+  if (status === "failed") return "Failed";
   return status;
 }

@@ -16,6 +16,7 @@ import {
   PLAN_DRAFT_TITLE,
   PLAN_PUBLISHED_TITLE,
   PLAN_QA_TITLE,
+  PLAN_DECISIONS_TITLE,
   PRE_PUBLISH_STAGES,
   POST_PUBLISH_STAGES,
   pickPlanTask,
@@ -30,6 +31,7 @@ import {
   workerSystemPrompt,
   parseNeededRoles,
   councilThreadFromTasks,
+  STATIC_SHIP_BAR,
 } from "./prompts";
 import {
   hasUnclosedFence,
@@ -37,6 +39,13 @@ import {
   parseFileFences,
   scaffoldGaps,
 } from "./project-files";
+import { evalShippedProject, formatShipReport } from "./ship-quality";
+import { evalPlanQuality, formatPlanReport } from "./plan-quality";
+import {
+  parsePlanDecisions,
+  stripDecisionFence,
+  type PlanDecision,
+} from "./plan-decisions";
 import {
   engineeringAssignment,
   ENGINEER_POSITIONS,
@@ -56,6 +65,28 @@ class RunAbortedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "RunAbortedError";
+  }
+}
+
+class UserStoppedError extends Error {
+  constructor() {
+    super("Run stopped");
+    this.name = "UserStoppedError";
+  }
+}
+
+async function isRunLoopActive(runId: string, loopStartedAt: Date): Promise<boolean> {
+  const live = await prisma.run.findUnique({
+    where: { id: runId },
+    select: { status: true, startedAt: true },
+  });
+  if (!live || live.status !== "running" || !live.startedAt) return false;
+  return live.startedAt.getTime() === loopStartedAt.getTime();
+}
+
+async function assertLoopActive(runId: string, loopStartedAt: Date) {
+  if (!(await isRunLoopActive(runId, loopStartedAt))) {
+    throw new UserStoppedError();
   }
 }
 
@@ -148,6 +179,7 @@ export async function executeAgentTask(
   task: Task,
   emit: EmitFn,
   organizationId: string,
+  loopStartedAt: Date,
 ) {
   await prisma.agent.update({
     where: { id: agent.id },
@@ -157,16 +189,9 @@ export async function executeAgentTask(
     where: { id: task.id },
     data: { status: "in_progress" },
   });
+  await assertLoopActive(runId, loopStartedAt);
 
   await emit("TASK_CLAIMED", {
-    agentId: agent.id,
-    agentName: agent.name,
-    position: agent.position,
-    taskId: task.id,
-    taskTitle: task.title,
-  });
-
-  await emit("TASK_STARTED", {
     agentId: agent.id,
     agentName: agent.name,
     position: agent.position,
@@ -191,6 +216,7 @@ export async function executeAgentTask(
   if (kind === "dispatch" || kind === "synth" || kind === "legacy") config.maxTokens = 2500;
   else if (kind === "council") config.maxTokens = 1200;
   else if (isEngineer) config.maxTokens = 6000;
+  else if (agent.position === "qa_engineer") config.maxTokens = 2500;
   else config.maxTokens = 1500;
 
   if (config.provider !== "mock" && config.provider !== "ollama") {
@@ -202,8 +228,27 @@ export async function executeAgentTask(
     );
   }
 
-  const provider = createProvider(config, agent.position, task.title);
-  const prior = await loadPriorContext(runId, task);
+  const runMeta = await prisma.run.findUnique({
+    where: { id: runId },
+    select: { ceoGoal: true },
+  });
+  const ceoGoal = runMeta?.ceoGoal ?? "";
+  const provider = createProvider(config, agent.position, task.title, ceoGoal);  const prior = await loadPriorContext(runId, task);
+  let shipContext = "";
+  if (agent.position === "qa_engineer") {
+    const codeFiles = await prisma.artifact.findMany({
+      where: { runId, type: "code" },
+      select: { filePath: true, content: true },
+    });
+    shipContext = formatShipReport(
+      evalShippedProject(
+        codeFiles
+          .filter((a) => a.filePath)
+          .map((a) => ({ path: a.filePath!, content: a.content })),
+        { ceoGoal },
+      ),
+    );
+  }
 
   const systemPrompt =
     kind === "dispatch"
@@ -223,9 +268,22 @@ export async function executeAgentTask(
 
   const userPrompt = kind
     ? `${task.description ?? ""}\n\n${prior ? `Council / upstream work:\n${prior}\n\n` : ""}Do the work. Do not refuse or hand this off.`
-    : prior
-      ? `CEO context and upstream work:\n${prior}\n\nYour task: ${task.title}\n${task.description ?? ""}`
-      : `Complete this task: ${task.title}\n${task.description ?? ""}`;
+    : [
+        prior ? `CEO context and upstream work:\n${prior}` : "",
+        `Your task: ${task.title}\n${task.description ?? ""}`,
+        shipContext,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+
+  await emit("TASK_STARTED", {
+    agentId: agent.id,
+    agentName: agent.name,
+    position: agent.position,
+    taskId: task.id,
+    taskTitle: task.title,
+    brief: userPrompt.slice(0, 12_000),
+  });
 
   let fullOutput = "";
   let thinkBuf = "";
@@ -296,6 +354,62 @@ export async function executeAgentTask(
     await flushThinking(true);
   }
 
+  if (isEngineer) {
+    const firstFiles = parseFileFences(fullOutput);
+    const ship = evalShippedProject(firstFiles, { role: agent.position, ceoGoal });
+    if (!ship.passed) {
+      const previous = fullOutput;
+      fullOutput = "";
+      thinkBuf = "";
+      result = await provider.stream(
+        [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+          { role: "assistant", content: previous },
+          {
+            role: "user",
+            content: `${formatShipReport(ship)}\n\nRewrite the files and fix every FAIL. Emit complete \`\`\`file:path fences. Build the CEO's product (not a PixelCrew portfolio). No placeholder copy, no missing image src, no secrets. Static HTML/CSS/JS only.`,
+          },
+        ],
+        onChunk,
+      );
+      fullOutput = fullOutput || result.content;
+      await flushThinking(true);
+      if (parseFileFences(fullOutput).length === 0) fullOutput = previous;
+    }
+  }
+
+  let pendingDecisions: PlanDecision[] = [];
+  if (kind === "synth" || kind === "legacy") {
+    const firstDecisions = parsePlanDecisions(fullOutput);
+    const quality = evalPlanQuality(stripDecisionFence(fullOutput));
+    if (!quality.passed) {
+      const previous = fullOutput;
+      fullOutput = "";
+      thinkBuf = "";
+      result = await provider.stream(
+        [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+          { role: "assistant", content: previous },
+          {
+            role: "user",
+            content: `${formatPlanReport(quality)}\n\nRewrite the combined plan and fix every FAIL. Keep Goal, stack, UX, features, out of scope, and a role-correct task list. Static HTML/CSS/JS. Size the timeline to hours for a one-pager — Engineer builds the files, not Product. Keep any decisions json fence at the end.`,
+          },
+        ],
+        onChunk,
+      );
+      fullOutput = fullOutput || result.content;
+      await flushThinking(true);
+      if (!fullOutput.trim()) fullOutput = previous;
+    }
+    pendingDecisions = parsePlanDecisions(fullOutput);
+    if (pendingDecisions.length === 0) pendingDecisions = firstDecisions;
+    fullOutput = stripDecisionFence(fullOutput);
+  }
+
+  await assertLoopActive(runId, loopStartedAt);
+
   const handoffMatch = !kind ? fullOutput.match(/HANDOFF:\s*(\w+)/i) : null;
   if (handoffMatch) {
     const targetPosition = handoffMatch[1].toLowerCase();
@@ -324,6 +438,10 @@ export async function executeAgentTask(
     data: { status: "done", output: fullOutput, completedAt: new Date() },
   });
   await prisma.agent.update({ where: { id: agent.id }, data: { status: "idle" } });
+
+  if (pendingDecisions.length > 0) {
+    await persistPlanDecisions(runId, pendingDecisions);
+  }
 
   await emit("AGENT_TASK_DONE", {
     agentId: agent.id,
@@ -573,6 +691,21 @@ async function seedSynthesizeTask(runId: string, ceoGoal: string, councilIds: st
   await refreshGraph(runId);
 }
 
+async function persistPlanDecisions(runId: string, items: PlanDecision[]) {
+  const existing = await prisma.artifact.findFirst({
+    where: { runId, title: PLAN_DECISIONS_TITLE },
+  });
+  if (existing) return;
+  await prisma.artifact.create({
+    data: {
+      runId,
+      type: "other",
+      title: PLAN_DECISIONS_TITLE,
+      content: JSON.stringify({ items }),
+    },
+  });
+}
+
 async function seedPlanQaThread(runId: string) {
   const existing = await prisma.artifact.findFirst({
     where: { runId, title: PLAN_QA_TITLE },
@@ -681,7 +814,7 @@ export async function publishAndDelegate(runId: string) {
         runId,
         title: "Implement frontend from the plan",
         description:
-          "Emit real UI files (index.html, CSS, JS) using ```file:path fences. Static app that runs in preview. Do not overwrite data.js.",
+          `Emit a complete demo UI (index.html, CSS, JS) using \`\`\`file:path fences. Specific copy from the CEO goal — not John Doe / Project One. CSS or inline SVG for avatars (no missing jpg). Do not overwrite data.js.\n${STATIC_SHIP_BAR}`,
         position: "frontend_engineer",
         priority: 80,
         dependsOnIds: dependsOn,
@@ -692,7 +825,7 @@ export async function publishAndDelegate(runId: string) {
         runId,
         title: "Implement backend from the plan",
         description:
-          "Emit data.js (localStorage is fine) and optional server/ sketches using ```file:path fences. Do not overwrite index.html.",
+          "Emit data.js helpers using localStorage and ```file:path fences. Collections are JSON arrays (parse, push, save) — do not overwrite a single key. Do not emit Express/Mongo/Nodemailer/reCAPTCHA. Do not overwrite index.html.",
         position: "backend_engineer",
         priority: 80,
         dependsOnIds: dependsOn,
@@ -705,7 +838,7 @@ export async function publishAndDelegate(runId: string) {
       data: {
         runId,
         title: "Implement product work from the plan",
-        description: `You are the only engineering capacity (${pos}). Emit a complete runnable static app as real files (index.html + CSS + JS) using \`\`\`file:path fences. localStorage is fine for v1.`,
+        description: `You are the only engineering capacity (${pos}). Emit a complete runnable static app (index.html + CSS + JS) using \`\`\`file:path fences. Specific copy from the CEO goal, CSS/SVG visuals — no missing images, no John Doe placeholders.\n${STATIC_SHIP_BAR}`,
         position: pos,
         priority: 80,
         dependsOnIds: dependsOn,
@@ -719,7 +852,8 @@ export async function publishAndDelegate(runId: string) {
       data: {
         runId,
         title: "QA the delegated work",
-        description: "Test plan and gaps. Do not rewrite the product.",
+        description:
+          "Review the actual emitted files against the CEO goal. Verdict FAIL or PASS, then a punch list. Fail inline JS, localStorage overwrites, hidden forms, and unsafe external links. Do not invent passing results. Do not rewrite the product.",
         position: "qa_engineer",
         priority: 40,
         dependsOnIds: buildIds,
@@ -756,10 +890,12 @@ export async function runOrchestrator(runId: string) {
     );
   };
 
-  await prisma.run.update({
+  const started = await prisma.run.update({
     where: { id: runId },
-    data: { status: "running", startedAt: new Date() },
+    data: { status: "running", startedAt: new Date(), completedAt: null },
+    select: { startedAt: true },
   });
+  const loopStartedAt = started.startedAt ?? new Date();
 
   const cap = Math.min(
     run.workspace.concurrencyCap || DEFAULT_MAX_CONCURRENT_LLM,
@@ -805,8 +941,7 @@ export async function runOrchestrator(runId: string) {
 
     agents = await loadRoster();
 
-    const live = await prisma.run.findUnique({ where: { id: runId } });
-    if (live?.status === "cancelled") break;
+    if (!(await isRunLoopActive(runId, loopStartedAt))) return;
 
     const stageTasks = await prisma.task.findMany({
       where: { runId, position: { in: stage.positions } },
@@ -844,24 +979,39 @@ export async function runOrchestrator(runId: string) {
 
       inFlight.add(agent.id);
       try {
-        const usage = await prisma.run.findUnique({
-          where: { id: runId },
-          select: { totalTokens: true, status: true },
-        });
-        if (usage?.status === "cancelled") {
+        if (!(await isRunLoopActive(runId, loopStartedAt))) {
           await prisma.task.update({
             where: { id: task.id },
             data: { status: "queued", claimedById: null, claimedAt: null },
           });
+          await prisma.agent.update({
+            where: { id: agent.id },
+            data: { status: "idle" },
+          });
           return;
         }
+        const usage = await prisma.run.findUnique({
+          where: { id: runId },
+          select: { totalTokens: true },
+        });
         if ((usage?.totalTokens ?? 0) >= DEFAULT_TOKEN_BUDGET) {
           throw new RunAbortedError(
             `Token budget reached (${DEFAULT_TOKEN_BUDGET}). Remaining work was not started.`,
           );
         }
-        await executeAgentTask(runId, agent, task, emit, orgId);
+        await executeAgentTask(runId, agent, task, emit, orgId, loopStartedAt);
       } catch (err) {
+        if (err instanceof UserStoppedError) {
+          await prisma.task.update({
+            where: { id: task.id },
+            data: { status: "queued", claimedById: null, claimedAt: null },
+          });
+          await prisma.agent.update({
+            where: { id: agent.id },
+            data: { status: "idle" },
+          });
+          return;
+        }
         const message = err instanceof Error ? err.message : "Unknown error";
         await emit("AGENT_ERROR", {
           agentId: agent.id,
@@ -886,8 +1036,7 @@ export async function runOrchestrator(runId: string) {
 
     let idleRounds = 0;
     while (!abortReason) {
-      const liveRun = await prisma.run.findUnique({ where: { id: runId } });
-      if (liveRun?.status === "cancelled") break;
+      if (!(await isRunLoopActive(runId, loopStartedAt))) break;
 
       const remaining = await prisma.task.count({
         where: {
@@ -910,6 +1059,7 @@ export async function runOrchestrator(runId: string) {
     }
 
     await waitForIdle();
+    if (!(await isRunLoopActive(runId, loopStartedAt))) return;
     if (abortReason) break;
 
     if (stage.id === "dispatch" && !published) {
@@ -952,10 +1102,11 @@ export async function runOrchestrator(runId: string) {
         break;
       }
       await emitRunEvent(runId, "TASK_STARTED", {
-        message: "Council plan ready — ask questions or publish",
+        message: "Council plan ready — confirm direction, then publish",
         taskTitle: "Plan review",
       });
       await seedPlanQaThread(runId);
+      if (!(await isRunLoopActive(runId, loopStartedAt))) return;
       await prisma.run.update({
         where: { id: runId },
         data: { status: "paused" },
@@ -963,6 +1114,8 @@ export async function runOrchestrator(runId: string) {
       return;
     }
   }
+
+  if (!(await isRunLoopActive(runId, loopStartedAt))) return;
 
   const remaining = await prisma.task.count({
     where: { runId, status: { not: "done" } },

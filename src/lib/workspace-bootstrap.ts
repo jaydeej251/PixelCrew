@@ -1,4 +1,5 @@
 import { DEFAULT_DESKS, AVATAR_COLORS } from "./constants";
+import { pickDeskForPosition } from "./office-desks";
 import { TEAM_TEMPLATES } from "./templates";
 import { getJobBoundary, getPositionLabel } from "./templates";
 import { prisma } from "./db";
@@ -36,11 +37,11 @@ export async function createWorkspaceForUser(userId: string, orgName: string, sl
   }
 
   const desks = await prisma.desk.findMany({ where: { workspaceId: workspace.id } });
-  let deskIdx = 1;
+  const taken = new Set<string>();
 
   for (const [i, agentDef] of template.agents.entries()) {
-    const desk = desks[deskIdx % desks.length];
-    deskIdx++;
+    const desk = pickDeskForPosition(desks, agentDef.position, taken);
+    if (desk) taken.add(desk.id);
     await prisma.agent.create({
       data: {
         name: agentDef.name,

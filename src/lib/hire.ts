@@ -6,6 +6,7 @@ import {
   POSITIONS,
   type PositionKey,
 } from "./constants";
+import { pickDeskForPosition } from "./office-desks";
 import { getJobBoundary, getPositionLabel } from "./templates";
 
 export const POSITION_DEPT: Record<string, string> = {
@@ -28,13 +29,14 @@ async function ensureDepartment(workspaceId: string, name: string) {
   return prisma.department.create({ data: { workspaceId, name } });
 }
 
-async function seatOnDesk(workspaceId: string) {
+async function seatOnDesk(workspaceId: string, position: PositionKey) {
   const desks = await prisma.desk.findMany({
     where: { workspaceId },
     include: { agents: true },
     orderBy: [{ y: "asc" }, { x: "asc" }],
   });
-  return desks.find((d) => d.agents.length === 0) ?? desks[0];
+  const taken = new Set(desks.filter((d) => d.agents.length > 0).map((d) => d.id));
+  return pickDeskForPosition(desks, position, taken) ?? desks[0];
 }
 
 export async function createHiredAgent(opts: {
@@ -45,7 +47,7 @@ export async function createHiredAgent(opts: {
   provider?: ProviderType;
   model?: string;
 }): Promise<Agent> {
-  const desk = await seatOnDesk(opts.workspaceId);
+  const desk = await seatOnDesk(opts.workspaceId, opts.position);
   const count = await prisma.agent.count({ where: { workspaceId: opts.workspaceId } });
   const dept = await ensureDepartment(
     opts.workspaceId,

@@ -3,7 +3,6 @@ import { prisma } from "@/lib/db";
 import {
   AuthError,
   assertRunAccess,
-  assertWorkspaceAccess,
   requireSession,
 } from "@/lib/auth";
 
@@ -84,7 +83,10 @@ export async function DELETE(
     const { runId } = await params;
     await assertRunAccess(runId, session);
 
-    const run = await prisma.run.findUnique({ where: { id: runId }, select: { status: true } });
+    const run = await prisma.run.findUnique({
+      where: { id: runId },
+      select: { status: true, workspaceId: true },
+    });
     if (!run) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     if (run.status === "running" || run.status === "pending") {
@@ -92,8 +94,12 @@ export async function DELETE(
         where: { id: runId },
         data: { status: "cancelled" },
       });
+      await prisma.agent.updateMany({
+        where: { workspaceId: run.workspaceId },
+        data: { status: "idle" },
+      });
       await prisma.runEvent.create({
-        data: { runId, type: "RUN_CANCELLED", payload: {} },
+        data: { runId, type: "RUN_CANCELLED", payload: { message: "Stopped by you" } },
       });
     }
 

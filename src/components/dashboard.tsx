@@ -17,6 +17,7 @@ import { GoalComposer } from "@/components/layout/goal-composer";
 import { DashboardSkeleton } from "@/components/layout/dashboard-skeleton";
 import { ActivityFeed } from "@/components/office/activity-feed";
 import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { SHOW_DEV_TOOLS } from "@/lib/dev-tools";
 import type { RunEventMessage } from "@/lib/events";
@@ -24,11 +25,27 @@ import type { OfficeAgent } from "@/lib/office";
 import type { AgentStatus } from "@prisma/client";
 import { PlanReview } from "@/components/plan/plan-review";
 import { OFFICE_VIEW_KEY, type OfficeViewMode } from "@/components/office/office-layout";
+import { PLAN_PUBLISHED_TITLE } from "@/lib/workflow";
+import { streamsFromEvents, type ThoughtTask } from "@/lib/thought-process";
+import { OfficeEditorHud } from "@/components/office/office-editor-hud";
+import {
+  applyBlueprintEdit,
+  cloneBlueprint,
+  cyclePlacementYaw,
+  eraseWallByKey,
+  hqBlueprint,
+  type EditorTool,
+  type OfficeBlueprint,
+  type OfficeLayoutSummary,
+  type TileEdge,
+} from "@/lib/office-blueprint";
 
 type WorkspaceData = {
   workspace: { id: string; name: string; ceoGoal: string | null };
   agents: OfficeAgent[];
   desks: Array<{ id: string; label: string; x: number; y: number; room: string }>;
+  officeLayouts?: OfficeLayoutSummary[];
+  officeLayout?: { id: string; name: string; isActive: boolean; data: OfficeBlueprint };
   user?: { email: string; name: string | null };
 };
 
@@ -46,6 +63,7 @@ type RunDetail = {
     createdAt: string;
     filePath?: string | null;
   }>;
+  tasks?: ThoughtTask[];
   events?: Array<{
     id: string;
     type: RunEventMessage["type"];
@@ -79,6 +97,7 @@ export function Dashboard() {
       filePath?: string | null;
     }>
   >([]);
+  const [tasks, setTasks] = useState<ThoughtTask[]>([]);
   const [runStats, setRunStats] = useState({ totalTokens: 0, estCostUsd: 0 });
   const [running, setRunning] = useState(false);
   const [simulating, setSimulating] = useState(false);
@@ -90,10 +109,20 @@ export function Dashboard() {
     "idle" | "running" | "paused" | "completed" | "failed"
   >("idle");
   const [officeView, setOfficeView] = useState<OfficeViewMode>("3d");
+  const [editingOffice, setEditingOffice] = useState(false);
+  const [officeDraft, setOfficeDraft] = useState<OfficeBlueprint | null>(null);
+  const [officeTool, setOfficeTool] = useState<EditorTool>("desk");
+  const [officeColor, setOfficeColor] = useState("#b45309");
+  const [officeYaw, setOfficeYaw] = useState(0);
+  const [officeDirty, setOfficeDirty] = useState(false);
+  const [officeBusy, setOfficeBusy] = useState(false);
+  const [layoutName, setLayoutName] = useState("HQ");
+  const editingOfficeRef = useRef(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   const seenEventIdsRef = useRef(new Set<string>());
   const subscribeToRunRef = useRef<(id: string) => void>(() => undefined);
   const floorBusyRef = useRef(false);
+  const hydratedLlmRef = useRef(false);
 
   const loadConversations = useCallback(async () => {
     const res = await fetch("/api/runs");
@@ -111,6 +140,16 @@ export function Dashboard() {
     }
     const json = await res.json();
     setData(json);
+    if (!hydratedLlmRef.current && json.agents?.[0]) {
+      hydratedLlmRef.current = true;
+      setRunProvider(json.agents[0].provider ?? "mock");
+      setRunModel(json.agents[0].model ?? "mock");
+    }
+    if (!editingOfficeRef.current && json.officeLayout) {
+      setOfficeDraft(cloneBlueprint(json.officeLayout.data));
+      setLayoutName(json.officeLayout.name);
+      setOfficeDirty(false);
+    }
     const statuses: Record<string, AgentStatus> = {};
     for (const a of json.agents as OfficeAgent[]) statuses[a.id] = a.status;
     if (!floorBusyRef.current) {
@@ -119,7 +158,7 @@ export function Dashboard() {
       setAgentStatuses((prev) => {
         const next = { ...prev };
         for (const a of json.agents as OfficeAgent[]) {
-          if (!(a.id in next)) next[a.id] = "walking";
+          if (!(a.id in next)) next[a.id] = a.status;
         }
         return next;
       });
@@ -127,22 +166,67 @@ export function Dashboard() {
     return json as WorkspaceData;
   }, [router]);
 
+  const saveOfficeLayout = useCallback(async () => {
+    if (!data?.officeLayout || !officeDraft) return;
+    setOfficeBusy(true);
+    try {
+      await fetch(`/api/workspace/layouts/${data.officeLayout.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: layoutName, data: officeDraft }),
+      });
+      setOfficeDirty(false);
+      await load();
+    } finally {
+      setOfficeBusy(false);
+    }
+  }, [data?.officeLayout, officeDraft, layoutName, load]);
+
+  const handleOfficeTile = useCallback((x: number, y: number, edge: TileEdge) => {
+    setOfficeDraft((prev) =>
+      applyBlueprintEdit(prev ?? hqBlueprint(), officeTool, officeColor, x, y, edge, officeYaw),
+    );
+    setOfficeDirty(true);
+  }, [officeTool, officeColor, officeYaw]);
+
+  const handleOfficeWall = useCallback((wallKey: string) => {
+    if (officeTool !== "erase") return;
+    setOfficeDraft((prev) => eraseWallByKey(prev ?? hqBlueprint(), wallKey));
+    setOfficeDirty(true);
+  }, [officeTool]);
+
+  const rotateOfficePlacement = useCallback(() => {
+    setOfficeYaw((yaw) => cyclePlacementYaw(yaw));
+  }, []);
+
   const applyRunDetail = useCallback((run: RunDetail) => {
     setRunId(run.id);
     setStoredActiveRunId(run.id);
     setCeoGoal(run.ceoGoal);
     setArtifacts(run.artifacts ?? []);
-    setRunStats({ totalTokens: run.totalTokens ?? 0, estCostUsd: run.estCostUsd ?? 0 });
-    setEvents(
-      (run.events ?? []).map((e) => ({
-        id: e.id,
-        type: e.type,
-        payload: e.payload,
-        createdAt: e.createdAt,
-        agentId: e.agentId,
+    setTasks(
+      (run.tasks ?? []).map((t) => ({
+        id: t.id,
+        title: t.title,
+        description: t.description ?? null,
+        status: t.status,
+        position: t.position,
+        output: t.output ?? null,
+        claimedById: t.claimedById ?? null,
+        completedAt: t.completedAt ?? null,
+        createdAt: t.createdAt,
       })),
     );
-    setStreamByAgent({});
+    setRunStats({ totalTokens: run.totalTokens ?? 0, estCostUsd: run.estCostUsd ?? 0 });
+    const mappedEvents = (run.events ?? []).map((e) => ({
+      id: e.id,
+      type: e.type,
+      payload: e.payload,
+      createdAt: e.createdAt,
+      agentId: e.agentId,
+    }));
+    setEvents(mappedEvents);
+    setStreamByAgent(streamsFromEvents(mappedEvents));
     seenEventIdsRef.current.clear();
 
     if (run.status === "paused") {
@@ -187,6 +271,7 @@ export function Dashboard() {
     setStoredActiveRunId(null);
     setCeoGoal("");
     setArtifacts([]);
+    setTasks([]);
     setRunStats({ totalTokens: 0, estCostUsd: 0 });
     setEvents([]);
     setStreamByAgent({});
@@ -242,7 +327,8 @@ export function Dashboard() {
       const event = JSON.parse(msg.data);
       if (event.type === "STREAM_END") {
         es.close();
-        if (eventSourceRef.current === es) eventSourceRef.current = null;
+        if (eventSourceRef.current !== es) return;
+        eventSourceRef.current = null;
         setRunning(false);
         if (event.runStatus === "paused") {
           floorBusyRef.current = true;
@@ -296,7 +382,8 @@ export function Dashboard() {
     };
     es.onerror = () => {
       es.close();
-      if (eventSourceRef.current === es) eventSourceRef.current = null;
+      if (eventSourceRef.current !== es) return;
+      eventSourceRef.current = null;
       setRunning(false);
     };
   };
@@ -307,11 +394,28 @@ export function Dashboard() {
     const res = await fetch(`/api/runs/${id}`);
     const run = await res.json();
     setArtifacts(run.artifacts ?? []);
+    setTasks(
+      (run.tasks ?? []).map((t: ThoughtTask & { createdAt?: string }) => ({
+        id: t.id,
+        title: t.title,
+        description: t.description ?? null,
+        status: t.status,
+        position: t.position,
+        output: t.output ?? null,
+        claimedById: t.claimedById ?? null,
+        completedAt: t.completedAt ?? null,
+        createdAt: t.createdAt,
+      })),
+    );
     setRunStats({ totalTokens: run.totalTokens ?? 0, estCostUsd: run.estCostUsd ?? 0 });
     if (run.status === "completed") setRunOutcome("completed");
     if (run.status === "paused") {
       setAwaitingPlan(true);
       setRunOutcome("paused");
+    }
+    if (run.status === "failed" || run.status === "cancelled") {
+      setAwaitingPlan(false);
+      setRunOutcome("failed");
     }
   };
 
@@ -348,14 +452,6 @@ export function Dashboard() {
     router.refresh();
   };
 
-  const recallEveryone = (agents: OfficeAgent[]) => {
-    setAgentStatuses((s) => {
-      const next = { ...s };
-      for (const a of agents) next[a.id] = "walking";
-      return next;
-    });
-  };
-
   const force3D = () => {
     setOfficeView("3d");
     window.localStorage.setItem(OFFICE_VIEW_KEY, "3d");
@@ -365,7 +461,6 @@ export function Dashboard() {
     if (!data) return;
     floorBusyRef.current = true;
     force3D();
-    recallEveryone(data.agents);
     setRunning(true);
     setAwaitingPlan(false);
     setRunOutcome("running");
@@ -410,7 +505,15 @@ export function Dashboard() {
       ]);
     }
     const fresh = await load();
-    recallEveryone(fresh?.agents ?? data.agents);
+    if (fresh?.agents) {
+      setAgentStatuses((s) => {
+        const next = { ...s };
+        for (const a of fresh.agents) {
+          if (!(a.id in next)) next[a.id] = a.status;
+        }
+        return next;
+      });
+    }
   };
 
   const simulateRun = async () => {
@@ -420,7 +523,6 @@ export function Dashboard() {
     setSimulating(true);
     setEvents([]);
     setStreamByAgent({});
-    recallEveryone(data.agents);
     const res = await fetch("/api/simulate", { method: "POST" });
     const { events: simEvents } = await res.json();
     const feAgents = data.agents.filter((a) => a.position === "frontend_engineer");
@@ -472,7 +574,61 @@ export function Dashboard() {
     floorBusyRef.current = false;
     await fetch(`/api/runs/${runId}`, { method: "DELETE" });
     setRunning(false);
+    setAwaitingPlan(false);
+    setRunOutcome("failed");
+    setAgentStatuses((prev) => {
+      const next = { ...prev };
+      for (const id of Object.keys(next)) next[id] = "idle";
+      return next;
+    });
+    setConversations((prev) =>
+      prev.map((c) => (c.id === runId ? { ...c, status: "cancelled" } : c)),
+    );
     void loadConversations();
+  };
+
+  const resumeRun = async () => {
+    if (!data || !runId) return;
+    floorBusyRef.current = true;
+    force3D();
+    setRunning(true);
+    setAwaitingPlan(false);
+    setRunOutcome("running");
+    setRunError("");
+    setStreamByAgent({});
+    setAgentStatuses((prev) => {
+      const next = { ...prev };
+      for (const id of Object.keys(next)) next[id] = "idle";
+      return next;
+    });
+    const res = await fetch(`/api/runs/${runId}/resume`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: runProvider,
+        model: runModel,
+      }),
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      floorBusyRef.current = false;
+      setRunError(json.error ?? "Couldn’t resume. Check settings and try again.");
+      setRunning(false);
+      setRunOutcome("failed");
+      return;
+    }
+    subscribeToRun(runId);
+    void loadConversations();
+    const fresh = await load();
+    if (fresh?.agents) {
+      setAgentStatuses((s) => {
+        const next = { ...s };
+        for (const a of fresh.agents) {
+          if (!(a.id in next)) next[a.id] = a.status;
+        }
+        return next;
+      });
+    }
   };
 
   if (!data) {
@@ -480,19 +636,23 @@ export function Dashboard() {
   }
 
   const onShift = running || simulating || awaitingPlan;
+  const inPlanning =
+    awaitingPlan || (running && !artifacts.some((a) => a.title === PLAN_PUBLISHED_TITLE));
   const codingAgents = data.agents.filter((a) => agentStatuses[a.id] === "working");
   const headingToDesk = data.agents.filter(
     (a) => agentStatuses[a.id] === "walking" || agentStatuses[a.id] === "handoff",
   );
   const names = codingAgents.map((a) => a.name.split(" ")[0]);
-  const shiftBanner = codingAgents.length === 1
+  const shiftBanner = inPlanning
+    ? "The team is in the planning room"
+    : codingAgents.length === 1
     ? `${names[0]} is coding`
     : codingAgents.length > 1
       ? `${names.slice(0, 2).join(" & ")}${names.length > 2 ? " + crew" : ""} coding`
-      : headingToDesk.length
-        ? "They're walking to their desks"
-        : onShift
-          ? "They're at their desks"
+      : headingToDesk.length === 1
+        ? `${headingToDesk[0]!.name.split(" ")[0]} is heading to their desk`
+        : headingToDesk.length > 1
+          ? "People are heading to their desks"
           : null;
 
   const chatsAside = (
@@ -519,6 +679,10 @@ export function Dashboard() {
       estCostUsd={runStats.estCostUsd}
       runId={runId ?? undefined}
       runFinished={runOutcome === "completed"}
+      ceoGoal={ceoGoal}
+      tasks={tasks}
+      events={events}
+      agents={data.agents.map((a) => ({ id: a.id, name: a.name }))}
     />
   );
 
@@ -531,6 +695,7 @@ export function Dashboard() {
         running={running}
         runOutcome={runOutcome}
         onCancel={cancelRun}
+        onResume={() => void resumeRun()}
         onOpenSettings={() => setSettingsOpen(true)}
         onLogout={logout}
         onSimulate={SHOW_DEV_TOOLS ? simulateRun : undefined}
@@ -557,6 +722,20 @@ export function Dashboard() {
             agentStatuses={agentStatuses}
             events={events}
             onShift={onShift}
+            inPlanning={inPlanning}
+            blueprint={officeDraft ?? data.officeLayout?.data}
+            editor={
+              editingOffice
+                ? {
+                    enabled: true,
+                    tool: officeTool,
+                    color: officeColor,
+                    yaw: officeYaw,
+                    onTile: handleOfficeTile,
+                    onWall: handleOfficeWall,
+                  }
+                : undefined
+            }
           />
 
           <div className="office-hud">
@@ -573,14 +752,22 @@ export function Dashboard() {
                   </div>
                 )}
                 {runError && <Alert variant="error">{runError}</Alert>}
-                {runOutcome === "failed" && runId && (
+                {runOutcome === "failed" && runId && !running && (
                   <Alert variant="error">
-                    Something went wrong and the team stopped. Click a teammate, or start a new chat.
+                    <p>The team stopped. Resume continues this chat with your current model — it does not start a new prompt.</p>
+                    <Button
+                      type="button"
+                      variant="primary"
+                      className="mt-2 !h-8 !px-3"
+                      onClick={() => void resumeRun()}
+                    >
+                      Resume
+                    </Button>
                   </Alert>
                 )}
                 {runOutcome === "completed" && runId && (
                   <Alert variant="success">
-                    Done. Open Files to preview the app, or download it.
+                    Done. Open Files → Thought process to compare your prompt with what each teammate wrote, or Preview your app.
                   </Alert>
                 )}
                 <ActivityFeed events={events} />
@@ -617,8 +804,97 @@ export function Dashboard() {
                     3D
                   </button>
                 </div>
+                <OfficeEditorHud
+                  editing={editingOffice}
+                  dirty={officeDirty}
+                  busy={officeBusy}
+                  tool={officeTool}
+                  color={officeColor}
+                  yaw={officeYaw}
+                  layoutName={layoutName}
+                  layouts={data.officeLayouts ?? []}
+                  activeLayoutId={data.officeLayout?.id ?? null}
+                  onToggleEdit={() => {
+                    if (editingOffice) {
+                      editingOfficeRef.current = false;
+                      void (async () => {
+                        if (officeDirty) await saveOfficeLayout();
+                        setEditingOffice(false);
+                      })();
+                      return;
+                    }
+                    editingOfficeRef.current = true;
+                    if (!officeDraft && data.officeLayout) {
+                      setOfficeDraft(cloneBlueprint(data.officeLayout.data));
+                      setLayoutName(data.officeLayout.name);
+                    }
+                    setEditingOffice(true);
+                  }}
+                  onTool={setOfficeTool}
+                  onColor={setOfficeColor}
+                  onRotate={rotateOfficePlacement}
+                  onRename={(name) => {
+                    setLayoutName(name);
+                    setOfficeDirty(true);
+                  }}
+                  onSave={() => void saveOfficeLayout()}
+                  onCreate={(name, source) => {
+                    setOfficeBusy(true);
+                    editingOfficeRef.current = false;
+                    void fetch("/api/workspace/layouts", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        name,
+                        source,
+                        copyId: source === "copy" ? data.officeLayout?.id : undefined,
+                      }),
+                    })
+                      .then(() => load())
+                      .finally(() => {
+                        setOfficeBusy(false);
+                        editingOfficeRef.current = true;
+                        setEditingOffice(true);
+                        setOfficeDirty(false);
+                      });
+                  }}
+                  onActivate={(id) => {
+                    setOfficeBusy(true);
+                    void fetch(`/api/workspace/layouts/${id}`, {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ action: "activate" }),
+                    })
+                      .then(() => load())
+                      .finally(() => setOfficeBusy(false));
+                  }}
+                  onDelete={(id) => {
+                    setOfficeBusy(true);
+                    void fetch(`/api/workspace/layouts/${id}`, { method: "DELETE" })
+                      .then(() => load())
+                      .finally(() => setOfficeBusy(false));
+                  }}
+                  onRestoreHq={() => {
+                    setOfficeBusy(true);
+                    void fetch("/api/workspace/layouts", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ action: "restore_hq" }),
+                    })
+                      .then(async (res) => {
+                        const json = await res.json();
+                        await load();
+                        if (json.data) {
+                          setOfficeDraft(cloneBlueprint(json.data));
+                          setLayoutName("HQ");
+                          setOfficeDirty(false);
+                        }
+                      })
+                      .finally(() => setOfficeBusy(false));
+                  }}
+                />
                 {awaitingPlan && runId && (
-                <div className="max-h-[70vh] w-full max-w-md overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950/90 p-4 shadow-xl backdrop-blur-md">
+                <div className="max-h-[75vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950/90 p-4 shadow-xl backdrop-blur-md">
                   <PlanReview
                     runId={runId}
                     onPublished={() => {
@@ -732,6 +1008,9 @@ export function Dashboard() {
         }
         events={events}
         streamText={selectedAgentId ? streamByAgent[selectedAgentId] : undefined}
+        ceoGoal={ceoGoal}
+        tasks={tasks}
+        agents={data.agents.map((a) => ({ id: a.id, name: a.name }))}
       />
     </div>
   );

@@ -5,6 +5,8 @@ export type AgentEventPayload = {
   agentName?: string;
   position?: string;
   message?: string;
+  /** What we asked the agent (user prompt / brief) — stored on TASK_STARTED for review. */
+  brief?: string;
   targetPosition?: string;
   targetAgentId?: string;
   taskId?: string;
