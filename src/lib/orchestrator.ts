@@ -57,6 +57,7 @@ import {
 } from "./roster";
 import { ensureRole, isPositionKey } from "./hire";
 import { configureAgentsForRun, getDefaultModel, workspaceHasProvider } from "./run-setup";
+import { findProviderCredential } from "./provider-credentials";
 import type { PositionKey } from "./constants";
 import {
   getOrCreateExecution,
@@ -205,9 +206,11 @@ export async function executeAgentTask(
     taskTitle: task.title,
   });
 
-  const credential = await prisma.providerCredential.findFirst({
-    where: { workspaceId: agent.workspaceId, provider: agent.provider },
-  });
+  const credential = await findProviderCredential(
+    prisma,
+    agent.workspaceId,
+    agent.provider,
+  );
 
   const config = resolveProviderConfig(
     agent.provider,

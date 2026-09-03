@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { findProviderCredential } from "@/lib/provider-credentials";
 import { resolveApiKey } from "@/lib/run-setup";
 import {
   AuthError,
@@ -28,9 +29,7 @@ export async function POST(req: Request) {
     });
     if (!limit.allowed) return rateLimitResponse(limit);
 
-    const cred = await prisma.providerCredential.findFirst({
-      where: { workspaceId, provider: "openrouter" },
-    });
+    const cred = await findProviderCredential(prisma, workspaceId, "openrouter");
     const resolved = resolveApiKey("openrouter", cred);
 
     if (!resolved.key) {
