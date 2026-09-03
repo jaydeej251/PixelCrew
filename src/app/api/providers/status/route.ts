@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import type { ProviderType } from "@prisma/client";
 import {
   RUN_PROVIDERS,
   workspaceHasProvider,

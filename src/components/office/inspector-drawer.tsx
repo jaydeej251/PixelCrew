@@ -63,14 +63,19 @@ export function InspectorDrawer({
   const writingLabel = agent?.status === "working" ? "Writing now" : "What they wrote";
 
   useEffect(() => {
-    if (!agent?.id || !open) {
-      setMemories([]);
-      return;
-    }
-    fetch(`/api/agents/${agent.id}`)
-      .then((r) => r.json())
-      .then(setMemories)
-      .catch(() => setMemories([]));
+    if (!agent?.id || !open) return;
+    const controller = new AbortController();
+    fetch(`/api/agents/${agent.id}`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Could not load agent memories");
+        return (await response.json()) as Memory[];
+      })
+      .then((nextMemories) => setMemories(nextMemories))
+      .catch((error: unknown) => {
+        if (error instanceof Error && error.name === "AbortError") return;
+        setMemories([]);
+      });
+    return () => controller.abort();
   }, [agent?.id, open, doneCount]);
 
   useEffect(() => {

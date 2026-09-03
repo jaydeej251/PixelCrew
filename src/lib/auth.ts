@@ -1,7 +1,9 @@
 import { cookies } from "next/headers";
 import { createHash, randomBytes } from "crypto";
 import bcrypt from "bcryptjs";
+import type { MembershipRole } from "@prisma/client";
 import { prisma } from "./db";
+import { agentAccessWhere, runAccessWhere, workspaceAccessWhere } from "./access";
 
 export const SESSION_COOKIE = "pc_session";
 const SESSION_DAYS = 30;
@@ -12,6 +14,7 @@ export type SessionUser = {
   name: string | null;
   organizationId: string;
   workspaceId: string;
+  role: MembershipRole;
 };
 
 function hashToken(token: string): string {
@@ -82,6 +85,7 @@ export async function getSessionFromToken(token: string): Promise<SessionUser | 
     name: session.user.name,
     organizationId: membership.organizationId,
     workspaceId: workspace.id,
+    role: membership.role,
   };
 }
 
@@ -105,13 +109,15 @@ export class AuthError extends Error {
   }
 }
 
+export function authErrorStatus(error: AuthError): 401 | 403 | 404 {
+  if (error.message === "Unauthorized") return 401;
+  if (error.message === "Forbidden") return 403;
+  return 404;
+}
+
 export async function assertRunAccess(runId: string, session: SessionUser) {
   const run = await prisma.run.findFirst({
-    where: {
-      id: runId,
-      archivedAt: null,
-      workspace: { organizationId: session.organizationId },
-    },
+    where: runAccessWhere(runId, session),
     select: { id: true, workspaceId: true },
   });
   if (!run) throw new AuthError("Not found");
@@ -120,11 +126,29 @@ export async function assertRunAccess(runId: string, session: SessionUser) {
 
 export async function assertWorkspaceAccess(workspaceId: string, session: SessionUser) {
   const workspace = await prisma.workspace.findFirst({
-    where: { id: workspaceId, organizationId: session.organizationId },
+    where: workspaceAccessWhere(workspaceId, session),
     select: { id: true },
   });
   if (!workspace) throw new AuthError("Not found");
   return workspace;
+}
+
+export async function assertAgentAccess(agentId: string, session: SessionUser) {
+  const agent = await prisma.agent.findFirst({
+    where: agentAccessWhere(agentId, session),
+    select: { id: true, workspaceId: true },
+  });
+  if (!agent) throw new AuthError("Not found");
+  return agent;
+}
+
+export function requireOrganizationRole(
+  session: SessionUser,
+  allowedRoles: readonly MembershipRole[],
+): void {
+  if (!allowedRoles.includes(session.role)) {
+    throw new AuthError("Forbidden");
+  }
 }
 
 export async function checkPlanLimits(organizationId: string): Promise<{

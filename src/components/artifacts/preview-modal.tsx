@@ -37,7 +37,7 @@ export function PreviewModal({ runId, onClose }: PreviewModalProps) {
           <div>
             <p className="text-sm font-medium text-zinc-100">Preview</p>
             <p className="text-xs text-zinc-500">
-              This is a preview in the browser — not a live website.
+              This generated app runs in a restricted browser sandbox.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -59,7 +59,8 @@ export function PreviewModal({ runId, onClose }: PreviewModalProps) {
           title="Run preview"
           src={src}
           className="min-h-0 flex-1 bg-white"
-          sandbox="allow-scripts allow-forms allow-same-origin"
+          sandbox="allow-scripts allow-forms"
+          referrerPolicy="no-referrer"
         />
       </div>
     </div>,

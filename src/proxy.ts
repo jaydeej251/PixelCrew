@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { isTrustedMutationRequest } from "@/lib/request-security";
 
 const PUBLIC_PREFIXES = [
   "/login",
@@ -19,6 +20,22 @@ function isPublic(pathname: string): boolean {
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  const providerCallback =
+    pathname === "/api/stripe" ||
+    pathname.startsWith("/api/stripe/") ||
+    pathname === "/api/inngest" ||
+    pathname.startsWith("/api/inngest/");
+
+  if (!providerCallback && !isTrustedMutationRequest(request)) {
+    console.warn(
+      JSON.stringify({
+        event: "cross_site_mutation_rejected",
+        method: request.method,
+        pathname,
+      }),
+    );
+    return NextResponse.json({ error: "Cross-site mutation rejected" }, { status: 403 });
+  }
 
   if (isPublic(pathname)) {
     return NextResponse.next();
