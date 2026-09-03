@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
+import { cancelExecutionsForRun } from "@/lib/execution-runtime";
 import {
   AuthError,
   assertRunAccess,
@@ -103,6 +104,7 @@ export async function DELETE(
     if (!run) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     if (run.status === "running" || run.status === "pending") {
+      await cancelExecutionsForRun(prisma, runId);
       await prisma.run.update({
         where: { id: runId },
         data: { status: "cancelled" },

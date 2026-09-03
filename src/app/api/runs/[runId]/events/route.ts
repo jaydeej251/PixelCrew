@@ -84,6 +84,8 @@ export async function GET(
             type: e.type,
             payload: e.payload,
             agentId: e.agentId,
+            sourceKind: e.sourceKind,
+            sourceId: e.sourceId,
             createdAt: e.createdAt.toISOString(),
           });
           lastCreatedAt = e.createdAt;

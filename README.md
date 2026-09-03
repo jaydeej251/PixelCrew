@@ -40,6 +40,23 @@ Or add credentials in the app UI (encrypted at rest).
 - Keep `npm run check` required in CI. It includes lint, unit/security contracts, two-tenant API
   isolation, browser preview isolation, and a production build.
 
+## Durable execution records
+
+`Execution` is the durable source of truth for task execution state. Each task has one stable
+execution row, which is reset and reused when a run resumes. Every start or resume creates an
+immutable, monotonically numbered `Attempt`; tool calls, checks, and approval decisions retain
+their own idempotency keys and bounded, redacted data.
+
+`RunEvent` remains the UI activity stream, not the execution ledger. Runtime milestones are
+projected into it with `sourceKind` and `sourceId`, making replay idempotent while existing events
+with null source fields continue to work. Raw tool input/output is never projected to `RunEvent`,
+and sandbox records store only an opaque `workspaceKey`, never a host filesystem path.
+
+Orchestrator work creates one durable `Execution` per task and an `Attempt` per claim. Stop and
+resume cancel or reset nonterminal execution rows. Constrained local sandbox tooling exists under
+`src/lib/sandbox/` but is not invoked during runs yet — Gate 2 ships the ledger and inspection API
+first. Inspect evidence via `GET /api/runs/:runId/executions` (org-scoped).
+
 ## Phases
 
 - **Phase 1:** Office floor, org builder, simulate run

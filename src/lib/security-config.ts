@@ -6,6 +6,9 @@ type SecurityEnvironment = {
   PREVIEW_ORIGIN?: string;
   ENCRYPTION_KEY?: string;
   PREVIEW_TOKEN_SECRET?: string;
+  SANDBOX_ENABLED?: string;
+  SANDBOX_PROVIDER?: string;
+  ALLOW_LOCAL_SANDBOX_IN_PRODUCTION?: string;
 };
 
 const INSECURE_ENCRYPTION_KEYS = new Set([
@@ -28,6 +31,20 @@ export function validateProductionSecurityConfig(
   if (previewTokenSecret.length < 32) {
     throw new Error(
       "PREVIEW_TOKEN_SECRET or ENCRYPTION_KEY must be at least 32 characters in production",
+    );
+  }
+
+  // Only treat local sandbox as "requested" when it is actually enabled.
+  // SANDBOX_PROVIDER=local with SANDBOX_ENABLED=false is a safe default for .env.example.
+  const provider = environment.SANDBOX_PROVIDER?.trim() || "local";
+  const localSandboxRequested =
+    environment.SANDBOX_ENABLED === "true" && provider === "local";
+  if (
+    localSandboxRequested &&
+    environment.ALLOW_LOCAL_SANDBOX_IN_PRODUCTION !== "true"
+  ) {
+    throw new Error(
+      "Production sandbox execution requires ALLOW_LOCAL_SANDBOX_IN_PRODUCTION=true",
     );
   }
 

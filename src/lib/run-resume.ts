@@ -1,5 +1,6 @@
 import type { ProviderType } from "@prisma/client";
 import { prisma } from "./db";
+import { resetExecutionsForRun } from "./execution-runtime";
 import { configureAgentsForRun } from "./run-setup";
 import { PLAN_PUBLISHED_TITLE } from "./workflow";
 
@@ -55,6 +56,7 @@ export async function prepareRunForResume(
     where: { runId, status: { in: ["claimed", "in_progress", "failed"] } },
     data: { status: "queued", claimedById: null, claimedAt: null },
   });
+  await resetExecutionsForRun(prisma, runId);
   await prisma.run.update({
     where: { id: runId },
     data: { status: "pending", completedAt: null },

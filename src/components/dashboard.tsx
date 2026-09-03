@@ -390,16 +390,25 @@ export function Dashboard() {
         if (event.type === "TASK_CLAIMED") {
           setAgentStatuses((s) => ({ ...s, [agentId]: "walking" }));
         }
-        if (event.type === "TASK_STARTED" || event.type === "AGENT_THINKING") {
+        if (
+          event.type === "TASK_STARTED" ||
+          event.type === "AGENT_THINKING" ||
+          event.type === "EXECUTION_STARTED"
+        ) {
           setAgentStatuses((s) => ({ ...s, [agentId]: "working" }));
         }
         if (event.type === "AGENT_HANDOFF") {
           setAgentStatuses((s) => ({ ...s, [agentId]: "handoff" }));
         }
-        if (event.type === "AGENT_BLOCKED" || event.type === "AGENT_ERROR") {
+        if (
+          event.type === "AGENT_BLOCKED" ||
+          event.type === "AGENT_ERROR" ||
+          event.type === "TOOL_FAILED" ||
+          event.type === "CHECK_FAILED"
+        ) {
           setAgentStatuses((s) => ({ ...s, [agentId]: "blocked" }));
         }
-        if (event.type === "AGENT_TASK_DONE") {
+        if (event.type === "AGENT_TASK_DONE" || event.type === "EXECUTION_COMPLETED") {
           setAgentStatuses((s) => ({ ...s, [agentId]: "idle" }));
           void refreshRun(id);
         }
