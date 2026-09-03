@@ -79,9 +79,16 @@ export function InspectorDrawer({
   }, [agent?.id, open, doneCount]);
 
   useEffect(() => {
-    setStepId(steps[steps.length - 1]?.id ?? null);
-    setSection(agent?.status === "working" ? "writing" : "writing");
-  }, [agent?.id, steps.length]);
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      setStepId(steps[steps.length - 1]?.id ?? null);
+      setSection("writing");
+    });
+    return () => {
+      active = false;
+    };
+  }, [agent?.id, steps]);
 
   return (
     <Drawer

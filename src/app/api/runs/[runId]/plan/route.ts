@@ -143,7 +143,7 @@ async function revisePlanForDecisions(
   const plannerAgent = pickOne(run.workspace.agents, PLANNER_POSITIONS);
   const planTask = pickPlanTask(run.tasks);
   const currentPlan = planTask?.output ?? "";
-  let thread = await getPlanThread(runId);
+  const thread = await getPlanThread(runId);
 
   if (!plannerAgent || !planTask || !picksDifferFromRecommended(state.items)) {
     const next = { ...state, appliedKey: decisionAnswersKey(state.items) };

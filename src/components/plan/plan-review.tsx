@@ -37,6 +37,29 @@ export function PlanReview({ runId, onPublished }: PlanReviewProps) {
     setCanPublish(Boolean(String(json.plan ?? "").trim()) && allDecisionsAnswered(items));
   };
 
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`/api/runs/${runId}/plan`, { signal: controller.signal })
+      .then((res) => res.json())
+      .then((json) => {
+        setThread(
+          json.thread?.length
+            ? json.thread
+            : json.plan
+              ? [{ role: "assistant", content: json.plan, speaker: "Plan" }]
+              : [],
+        );
+        const items = (json.decisions ?? []) as PlanDecision[];
+        setDecisions(items);
+        setCanPublish(Boolean(String(json.plan ?? "").trim()) && allDecisionsAnswered(items));
+      })
+      .catch((error: unknown) => {
+        if (error instanceof Error && error.name === "AbortError") return;
+        setError("Could not load the plan");
+      });
+    return () => controller.abort();
+  }, [runId]);
+
   const load = async () => {
     const res = await fetch(`/api/runs/${runId}/plan`);
     const json = await res.json();
@@ -51,10 +74,6 @@ export function PlanReview({ runId, onPublished }: PlanReviewProps) {
     setDecisions(items);
     setCanPublish(Boolean(String(json.plan ?? "").trim()) && allDecisionsAnswered(items));
   };
-
-  useEffect(() => {
-    void load();
-  }, [runId]);
 
   useEffect(() => {
     const el = scroller.current;

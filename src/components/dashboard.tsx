@@ -173,7 +173,7 @@ export function Dashboard() {
       await fetch(`/api/workspace/layouts/${data.officeLayout.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: layoutName, data: officeDraft }),
+        body: JSON.stringify({ action: "save", name: layoutName, data: officeDraft }),
       });
       setOfficeDirty(false);
       await load();
@@ -299,7 +299,9 @@ export function Dashboard() {
 
   useEffect(() => {
     const saved = window.localStorage.getItem(OFFICE_VIEW_KEY);
-    if (saved === "iso" || saved === "3d") setOfficeView(saved);
+    if (saved !== "iso" && saved !== "3d") return;
+    const frame = window.requestAnimationFrame(() => setOfficeView(saved));
+    return () => window.cancelAnimationFrame(frame);
   }, []);
 
   useEffect(() => {
@@ -317,6 +319,35 @@ export function Dashboard() {
   const handleSelectAgent = (id: string) => {
     setSelectedAgentId(id);
     setInspectorOpen(true);
+  };
+
+  const refreshRun = async (id: string) => {
+    const res = await fetch(`/api/runs/${id}`);
+    const run = await res.json();
+    setArtifacts(run.artifacts ?? []);
+    setTasks(
+      (run.tasks ?? []).map((t: ThoughtTask & { createdAt?: string }) => ({
+        id: t.id,
+        title: t.title,
+        description: t.description ?? null,
+        status: t.status,
+        position: t.position,
+        output: t.output ?? null,
+        claimedById: t.claimedById ?? null,
+        completedAt: t.completedAt ?? null,
+        createdAt: t.createdAt,
+      })),
+    );
+    setRunStats({ totalTokens: run.totalTokens ?? 0, estCostUsd: run.estCostUsd ?? 0 });
+    if (run.status === "completed") setRunOutcome("completed");
+    if (run.status === "paused") {
+      setAwaitingPlan(true);
+      setRunOutcome("paused");
+    }
+    if (run.status === "failed" || run.status === "cancelled") {
+      setAwaitingPlan(false);
+      setRunOutcome("failed");
+    }
   };
 
   const subscribeToRun = (id: string) => {
@@ -388,36 +419,9 @@ export function Dashboard() {
     };
   };
 
-  subscribeToRunRef.current = subscribeToRun;
-
-  const refreshRun = async (id: string) => {
-    const res = await fetch(`/api/runs/${id}`);
-    const run = await res.json();
-    setArtifacts(run.artifacts ?? []);
-    setTasks(
-      (run.tasks ?? []).map((t: ThoughtTask & { createdAt?: string }) => ({
-        id: t.id,
-        title: t.title,
-        description: t.description ?? null,
-        status: t.status,
-        position: t.position,
-        output: t.output ?? null,
-        claimedById: t.claimedById ?? null,
-        completedAt: t.completedAt ?? null,
-        createdAt: t.createdAt,
-      })),
-    );
-    setRunStats({ totalTokens: run.totalTokens ?? 0, estCostUsd: run.estCostUsd ?? 0 });
-    if (run.status === "completed") setRunOutcome("completed");
-    if (run.status === "paused") {
-      setAwaitingPlan(true);
-      setRunOutcome("paused");
-    }
-    if (run.status === "failed" || run.status === "cancelled") {
-      setAwaitingPlan(false);
-      setRunOutcome("failed");
-    }
-  };
+  useEffect(() => {
+    subscribeToRunRef.current = subscribeToRun;
+  });
 
   const requestNewChat = () => {
     if (running) {
@@ -845,6 +849,7 @@ export function Dashboard() {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({
+                        action: "create",
                         name,
                         source,
                         copyId: source === "copy" ? data.officeLayout?.id : undefined,
