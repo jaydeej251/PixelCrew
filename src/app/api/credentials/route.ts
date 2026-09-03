@@ -11,6 +11,7 @@ import {
   requireSession,
 } from "@/lib/auth";
 import { isOllamaCloudBaseUrl } from "@/lib/ollama-endpoints";
+import { setDefaultProviderCredential } from "@/lib/provider-credentials";
 
 const credentialSchema = z
   .object({
@@ -19,6 +20,13 @@ const credentialSchema = z
     label: z.string().trim().min(1).max(100),
     apiKey: z.string().trim().max(10_000).optional(),
     baseUrl: z.url().max(2_000).optional(),
+  })
+  .strict();
+
+const setDefaultSchema = z
+  .object({
+    action: z.literal("set_default"),
+    id: z.string().min(1),
   })
   .strict();
 
@@ -51,17 +59,59 @@ export async function POST(req: Request) {
       );
     }
 
-    const cred = await prisma.providerCredential.create({
-      data: {
-        workspaceId,
-        provider,
-        label,
-        encryptedKey: trimmedKey ? encrypt(trimmedKey) : null,
-        baseUrl: baseUrl?.trim() ?? null,
-      },
+    const cred = await prisma.$transaction(async (tx) => {
+      await tx.providerCredential.updateMany({
+        where: { workspaceId, provider },
+        data: { isDefault: false },
+      });
+      return tx.providerCredential.create({
+        data: {
+          workspaceId,
+          provider,
+          label,
+          encryptedKey: trimmedKey ? encrypt(trimmedKey) : null,
+          baseUrl: baseUrl?.trim() ?? null,
+          isDefault: true,
+        },
+      });
     });
 
-    return NextResponse.json({ id: cred.id, provider: cred.provider, label: cred.label });
+    return NextResponse.json({
+      id: cred.id,
+      provider: cred.provider,
+      label: cred.label,
+      baseUrl: cred.baseUrl,
+      isDefault: cred.isDefault,
+    });
+  } catch (err) {
+    return authErrorResponse(err);
+  }
+}
+
+export async function PATCH(req: Request) {
+  try {
+    const session = await requireSession();
+    requireOrganizationRole(session, ["owner", "admin"]);
+    const parsed = setDefaultSchema.safeParse(await req.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Invalid credential action" }, { status: 400 });
+    }
+
+    const existing = await prisma.providerCredential.findUnique({
+      where: { id: parsed.data.id },
+      select: { id: true, workspaceId: true },
+    });
+    if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    await assertWorkspaceAccess(existing.workspaceId, session);
+
+    const cred = await setDefaultProviderCredential(prisma, existing.id);
+    return NextResponse.json({
+      id: cred.id,
+      provider: cred.provider,
+      label: cred.label,
+      baseUrl: cred.baseUrl,
+      isDefault: cred.isDefault,
+    });
   } catch (err) {
     return authErrorResponse(err);
   }
@@ -76,7 +126,16 @@ export async function GET(req: Request) {
 
     const creds = await prisma.providerCredential.findMany({
       where: { workspaceId },
-      select: { id: true, provider: true, label: true, baseUrl: true, createdAt: true },
+      select: {
+        id: true,
+        provider: true,
+        label: true,
+        baseUrl: true,
+        isDefault: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+      orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }],
     });
     return NextResponse.json(creds);
   } catch (err) {

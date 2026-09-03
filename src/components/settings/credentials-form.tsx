@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Panel, PanelContent, PanelHeader, PanelTitle } from "@/components/ui/panel";
 import { Key } from "lucide-react";
 import {
+  isOllamaCloudBaseUrl,
+  isOllamaLocalBaseUrl,
   OLLAMA_CLOUD_BASE_URL,
   OLLAMA_LOCAL_BASE_URL,
 } from "@/lib/ollama-endpoints";
@@ -16,7 +18,15 @@ const PROVIDERS = [
   { id: "openai_compatible", label: "OpenAI-compatible" },
 ] as const;
 
-type SavedCred = { id: string; provider: string; label: string; baseUrl?: string | null };
+const OPENAI_COMPATIBLE_DEFAULT_BASE_URL = "https://api.openai.com/v1";
+
+type SavedCred = {
+  id: string;
+  provider: string;
+  label: string;
+  baseUrl?: string | null;
+  isDefault?: boolean;
+};
 
 type CredentialsFormProps = {
   workspaceId: string;
@@ -35,6 +45,7 @@ export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
   const [baseUrl, setBaseUrl] = useState(OLLAMA_LOCAL_BASE_URL);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
   const [saved, setSaved] = useState<SavedCred[]>([]);
 
   const reload = useCallback(() => {
@@ -43,7 +54,8 @@ export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
         if (!response.ok) throw new Error("Could not load credentials");
         return response.json();
       })
-      .then(setSaved);
+      .then(setSaved)
+      .catch(() => setError("Could not load credentials"));
   }, [workspaceId]);
 
   useEffect(() => {
@@ -68,21 +80,59 @@ export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
           <ul className="mb-3 space-y-1 text-xs text-zinc-400">
             {saved.map((c) => (
               <li key={c.id} className="flex items-center justify-between gap-2">
-                <span className="flex items-center gap-2">
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                  {c.label} ({c.provider}
-                  {c.baseUrl ? ` · ${c.baseUrl}` : ""})
+                <span className="flex min-w-0 items-center gap-2">
+                  <span
+                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                      c.isDefault ? "bg-emerald-400" : "bg-zinc-600"
+                    }`}
+                  />
+                  <span className="truncate">
+                    {c.label} ({c.provider}
+                    {c.baseUrl ? ` · ${c.baseUrl}` : ""})
+                    {c.isDefault ? " · active" : ""}
+                  </span>
                 </span>
-                <button
-                  type="button"
-                  className="text-red-400 hover:text-red-300"
-                  onClick={async () => {
-                    await fetch(`/api/credentials?id=${c.id}`, { method: "DELETE" });
-                    reload();
-                  }}
-                >
-                  Remove
-                </button>
+                <span className="flex shrink-0 items-center gap-2">
+                  {!c.isDefault && (
+                    <button
+                      type="button"
+                      className="text-indigo-400 hover:text-indigo-300"
+                      onClick={async () => {
+                        const response = await fetch("/api/credentials", {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ action: "set_default", id: c.id }),
+                        });
+                        if (!response.ok) {
+                          setError("Could not set active credential");
+                          return;
+                        }
+                        setError("");
+                        setMessage("Active credential updated");
+                        reload();
+                      }}
+                    >
+                      Use
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="text-red-400 hover:text-red-300"
+                    onClick={async () => {
+                      const response = await fetch(`/api/credentials?id=${c.id}`, {
+                        method: "DELETE",
+                      });
+                      if (!response.ok) {
+                        setError("Could not remove credential");
+                        return;
+                      }
+                      setError("");
+                      reload();
+                    }}
+                  >
+                    Remove
+                  </button>
+                </span>
               </li>
             ))}
           </ul>
@@ -93,18 +143,30 @@ export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
             e.preventDefault();
             setSaving(true);
             setMessage("");
+            setError("");
+
+            if (
+              provider === "ollama" &&
+              isOllamaCloudBaseUrl(baseUrl) &&
+              !apiKey.trim()
+            ) {
+              setError("API key is required for Ollama Cloud");
+              setSaving(false);
+              return;
+            }
+
             try {
               await onSave({
                 provider,
                 label: label || provider,
                 apiKey: apiKey || undefined,
-                baseUrl: needsBaseUrl ? baseUrl : undefined,
+                baseUrl: needsBaseUrl ? baseUrl.trim() || undefined : undefined,
               });
               setApiKey("");
               setMessage("Saved");
               reload();
-            } catch {
-              setMessage("Failed to save");
+            } catch (err) {
+              setError(err instanceof Error ? err.message : "Failed to save");
             }
             setSaving(false);
           }}
@@ -115,8 +177,12 @@ export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
             onChange={(e) => {
               const next = e.target.value;
               setProvider(next);
+              setError("");
+              setMessage("");
               if (next === "ollama") setBaseUrl(OLLAMA_LOCAL_BASE_URL);
-              if (next === "openai_compatible") setBaseUrl(OLLAMA_CLOUD_BASE_URL);
+              if (next === "openai_compatible") {
+                setBaseUrl(OPENAI_COMPATIBLE_DEFAULT_BASE_URL);
+              }
             }}
           >
             {PROVIDERS.map((p) => (
@@ -146,12 +212,13 @@ export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
               if (
                 provider === "ollama" &&
                 next.trim() &&
-                (baseUrl === OLLAMA_LOCAL_BASE_URL || !baseUrl.trim())
+                (isOllamaLocalBaseUrl(baseUrl) || !baseUrl.trim())
               ) {
                 setBaseUrl(OLLAMA_CLOUD_BASE_URL);
               }
             }}
             required={provider !== "ollama"}
+            autoComplete="off"
           />
           {provider === "ollama" && (
             <div className="flex gap-2">
@@ -161,6 +228,7 @@ export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
                 onClick={() => {
                   setBaseUrl(OLLAMA_LOCAL_BASE_URL);
                   setApiKey("");
+                  setError("");
                 }}
               >
                 Use local
@@ -168,7 +236,10 @@ export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
               <button
                 type="button"
                 className="rounded-lg border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
-                onClick={() => setBaseUrl(OLLAMA_CLOUD_BASE_URL)}
+                onClick={() => {
+                  setBaseUrl(OLLAMA_CLOUD_BASE_URL);
+                  setError("");
+                }}
               >
                 Use cloud
               </button>
@@ -180,6 +251,7 @@ export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
               placeholder="Base URL"
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
+              required
             />
           )}
           {provider === "ollama" && (
@@ -192,6 +264,7 @@ export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
             {saving ? "Saving…" : "Save key"}
           </Button>
           {message && <p className="text-xs text-emerald-400">{message}</p>}
+          {error && <p className="text-xs text-red-400">{error}</p>}
         </form>
       </PanelContent>
     </Panel>

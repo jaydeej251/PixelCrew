@@ -71,11 +71,17 @@ export function SettingsDrawer({
         <CredentialsForm
           workspaceId={workspaceId}
           onSave={async (cred) => {
-            await fetch("/api/credentials", {
+            const response = await fetch("/api/credentials", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ workspaceId, ...cred }),
             });
+            if (!response.ok) {
+              const body = (await response.json().catch(() => null)) as {
+                error?: string;
+              } | null;
+              throw new Error(body?.error || "Failed to save credential");
+            }
           }}
         />
         <RunSettings
