@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { resolveProviderConfig } from "./index";
+import { createProvider, resolveProviderConfig } from "./index";
 import {
+  isOllamaCloudBaseUrl,
+  isOllamaLocalBaseUrl,
   OLLAMA_CLOUD_BASE_URL,
   OLLAMA_LOCAL_BASE_URL,
 } from "../ollama-endpoints";
@@ -18,6 +20,17 @@ afterEach(() => {
   else env.OLLAMA_API_KEY = originalApiKey;
   if (originalNodeEnv === undefined) delete env.NODE_ENV;
   else env.NODE_ENV = originalNodeEnv;
+});
+
+describe("ollama endpoint helpers", () => {
+  it("detects local and cloud hosts including localhost aliases", () => {
+    assert.equal(isOllamaLocalBaseUrl(OLLAMA_LOCAL_BASE_URL), true);
+    assert.equal(isOllamaLocalBaseUrl("http://localhost:11434/v1"), true);
+    assert.equal(isOllamaLocalBaseUrl(OLLAMA_CLOUD_BASE_URL), false);
+    assert.equal(isOllamaCloudBaseUrl(OLLAMA_CLOUD_BASE_URL), true);
+    assert.equal(isOllamaCloudBaseUrl("https://ollama.com/v1/"), true);
+    assert.equal(isOllamaCloudBaseUrl(OLLAMA_LOCAL_BASE_URL), false);
+  });
 });
 
 describe("ollama provider config", () => {
@@ -42,7 +55,7 @@ describe("ollama provider config", () => {
   });
 
   it("prefers cloud over the local .env default when an API key is set", () => {
-    env.OLLAMA_BASE_URL = OLLAMA_LOCAL_BASE_URL;
+    env.OLLAMA_BASE_URL = "http://localhost:11434/v1";
     env.OLLAMA_API_KEY = "ollama-cloud-test-key-12345";
     env.NODE_ENV = "development";
 
@@ -70,5 +83,22 @@ describe("ollama provider config", () => {
       baseUrl: `${OLLAMA_CLOUD_BASE_URL}/`,
     });
     assert.equal(config.baseUrl, OLLAMA_CLOUD_BASE_URL);
+  });
+
+  it("rejects creating a cloud provider without a real API key", () => {
+    assert.throws(
+      () =>
+        createProvider(
+          {
+            provider: "ollama",
+            apiKey: "ollama",
+            baseUrl: OLLAMA_CLOUD_BASE_URL,
+            model: "gpt-oss:120b",
+          },
+          "engineer",
+          "Build a page",
+        ),
+      /Ollama Cloud requires an API key/,
+    );
   });
 });
