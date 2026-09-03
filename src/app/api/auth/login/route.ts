@@ -1,12 +1,36 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { createSession, SESSION_COOKIE, verifyPassword } from "@/lib/auth";
+import { consumeRateLimit, rateLimitResponse, requestClientIp } from "@/lib/rate-limit";
+
+const loginSchema = z.object({
+  email: z.email().trim().toLowerCase().max(320),
+  password: z.string().min(1).max(1_024),
+}).strict();
 
 export async function POST(req: Request) {
-  const body = await req.json();
-  const email = String(body.email ?? "").trim().toLowerCase();
-  const password = String(body.password ?? "");
+  const ipLimit = await consumeRateLimit({
+    scope: "auth-login-ip",
+    identifier: requestClientIp(req),
+    limit: 10,
+    windowMs: 10 * 60_000,
+  });
+  if (!ipLimit.allowed) return rateLimitResponse(ipLimit);
+
+  const parsed = loginSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Email and password required" }, { status: 400 });
+  }
+  const { email, password } = parsed.data;
+  const accountLimit = await consumeRateLimit({
+    scope: "auth-login-account",
+    identifier: email || "missing",
+    limit: 10,
+    windowMs: 10 * 60_000,
+  });
+  if (!accountLimit.allowed) return rateLimitResponse(accountLimit);
 
   if (!email || !password) {
     return NextResponse.json({ error: "Email and password required" }, { status: 400 });

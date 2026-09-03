@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Panel, PanelContent, PanelHeader, PanelTitle } from "@/components/ui/panel";
 import { Key } from "lucide-react";
@@ -33,15 +33,18 @@ export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
   const [message, setMessage] = useState("");
   const [saved, setSaved] = useState<SavedCred[]>([]);
 
-  const reload = () => {
+  const reload = useCallback(() => {
     fetch(`/api/credentials?workspaceId=${workspaceId}`)
-      .then((r) => r.json())
+      .then((response) => {
+        if (!response.ok) throw new Error("Could not load credentials");
+        return response.json();
+      })
       .then(setSaved);
-  };
+  }, [workspaceId]);
 
   useEffect(() => {
     reload();
-  }, [workspaceId]);
+  }, [reload]);
 
   return (
     <Panel>

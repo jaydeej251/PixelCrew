@@ -10,9 +10,11 @@ export function previewUrl(runId: string): string {
 }
 
 export async function executeInSandbox(
-  _code: string,
-  _language: string,
+  code: string,
+  language: string,
 ): Promise<SandboxResult> {
+  void code;
+  void language;
   return {
     success: false,
     stdout: "",
@@ -22,9 +24,12 @@ export async function executeInSandbox(
 }
 
 export async function createGitHubPR(
-  _repo: string,
-  _branch: string,
-  _title: string,
+  repo: string,
+  branch: string,
+  title: string,
 ): Promise<{ url: string } | null> {
+  void repo;
+  void branch;
+  void title;
   return null;
 }

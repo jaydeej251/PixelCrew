@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { createProvider, resolveProviderConfig } from "@/lib/providers";
 import { PLANNER_POSITIONS, pickOne } from "@/lib/roster";
@@ -22,6 +23,26 @@ import {
   withRecommendedAnswers,
   type PlanDecisionsState,
 } from "@/lib/plan-decisions";
+import { consumeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
+
+const planMutationSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("publish") }).strict(),
+  z.object({
+    action: z.literal("ask"),
+    message: z.string().trim().min(1).max(20_000),
+  }).strict(),
+  z.object({
+    action: z.literal("decide"),
+    decisionId: z.string().trim().min(1).max(100).optional(),
+    optionId: z.string().trim().min(1).max(100).optional(),
+    useRecommended: z.boolean().optional(),
+  }).strict().refine(
+    (value) =>
+      value.useRecommended === true ||
+      (value.decisionId !== undefined && value.optionId !== undefined),
+    { message: "A decision and option are required" },
+  ),
+]);
 
 function authErrorResponse(err: unknown) {
   if (err instanceof AuthError) {
@@ -122,7 +143,7 @@ async function revisePlanForDecisions(
   const plannerAgent = pickOne(run.workspace.agents, PLANNER_POSITIONS);
   const planTask = pickPlanTask(run.tasks);
   const currentPlan = planTask?.output ?? "";
-  let thread = await getPlanThread(runId);
+  const thread = await getPlanThread(runId);
 
   if (!plannerAgent || !planTask || !picksDifferFromRecommended(state.items)) {
     const next = { ...state, appliedKey: decisionAnswersKey(state.items) };
@@ -217,8 +238,19 @@ export async function POST(
     const session = await requireSession();
     const { runId } = await params;
     await assertRunAccess(runId, session);
-  const body = await req.json();
-  const action = body.action as "ask" | "publish" | "decide";
+    const limit = await consumeRateLimit({
+      scope: "plan-mutation-user-run",
+      identifier: `${session.id}:${runId}`,
+      limit: 60,
+      windowMs: 60 * 60_000,
+    });
+    if (!limit.allowed) return rateLimitResponse(limit);
+  const parsed = planMutationSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Invalid plan request" }, { status: 400 });
+  }
+  const body = parsed.data;
+  const { action } = body;
 
   if (action === "publish") {
     const run = await prisma.run.findUnique({
@@ -314,7 +346,7 @@ export async function POST(
     return NextResponse.json({ error: "No plan to revise" }, { status: 400 });
   }
 
-  const question = String(body.message).trim();
+  const question = body.message;
   let thread = await getPlanThread(runId);
   if (thread.length === 0) {
     thread = councilThreadFromTasks(run.tasks.filter((t) => t.status === "done"));

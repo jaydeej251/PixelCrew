@@ -1,57 +1,104 @@
 import { NextResponse } from "next/server";
-import { AuthError, requireSession } from "@/lib/auth";
+import { z } from "zod";
+import {
+  AuthError,
+  assertWorkspaceAccess,
+  authErrorStatus,
+  requireSession,
+} from "@/lib/auth";
 import {
   activateOfficeLayout,
   deleteOfficeLayout,
   restoreHqLayout,
   saveOfficeLayout,
 } from "@/lib/office-layouts";
+import { prisma } from "@/lib/db";
 
-function authErrorResponse(err: unknown) {
-  if (err instanceof AuthError) {
-    return NextResponse.json({ error: err.message }, { status: err.message === "Unauthorized" ? 401 : 404 });
+const updateLayoutSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("activate") }).strict(),
+  z.object({ action: z.literal("restore_hq") }).strict(),
+  z.object({
+    action: z.literal("save"),
+    name: z.string().trim().min(1).max(48).optional(),
+    data: z.unknown(),
+  }).strict(),
+]);
+
+function errorResponse(error: unknown) {
+  if (error instanceof AuthError) {
+    return NextResponse.json({ error: error.message }, { status: authErrorStatus(error) });
   }
-  throw err;
+  throw error;
 }
 
 export async function PATCH(
-  req: Request,
+  request: Request,
   { params }: { params: Promise<{ layoutId: string }> },
 ) {
   try {
     const session = await requireSession();
+    await assertWorkspaceAccess(session.workspaceId, session);
     const { layoutId } = await params;
-    const body = (await req.json()) as { action?: string; name?: string; data?: unknown };
-    if (body.action === "activate") {
-      const row = await activateOfficeLayout(session.workspaceId, layoutId);
-      if (!row) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const scopedLayout = await prisma.officeLayout.findFirst({
+      where: { id: layoutId, workspace: { organizationId: session.organizationId } },
+      select: { id: true, workspaceId: true, isProtected: true, name: true },
+    });
+    if (!scopedLayout || scopedLayout.workspaceId !== session.workspaceId) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    const parsed = updateLayoutSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Invalid layout update" }, { status: 400 });
+    }
+    if (parsed.data.action === "activate") {
+      const layout = await activateOfficeLayout(session.workspaceId, layoutId);
+      if (!layout) return NextResponse.json({ error: "Not found" }, { status: 404 });
       return NextResponse.json({ ok: true });
     }
-    if (body.action === "restore_hq") {
+    if (parsed.data.action === "restore_hq") {
+      if (!scopedLayout.isProtected && scopedLayout.name.toLowerCase() !== "hq") {
+        return NextResponse.json({ error: "Not found" }, { status: 404 });
+      }
       const layout = await restoreHqLayout(session.workspaceId);
       return NextResponse.json({ ok: true, id: layout.id, name: layout.name, data: layout.data });
     }
-    const row = await saveOfficeLayout(session.workspaceId, layoutId, body.name, body.data);
-    if (!row) return NextResponse.json({ error: "Not found" }, { status: 404 });
-    return NextResponse.json({ ok: true, id: row.id, name: row.name });
-  } catch (err) {
-    return authErrorResponse(err);
+    const layout = await saveOfficeLayout(
+      session.workspaceId,
+      layoutId,
+      parsed.data.name,
+      parsed.data.data,
+    );
+    if (!layout) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return NextResponse.json({ ok: true, id: layout.id, name: layout.name });
+  } catch (error) {
+    return errorResponse(error);
   }
 }
 
 export async function DELETE(
-  _req: Request,
+  _request: Request,
   { params }: { params: Promise<{ layoutId: string }> },
 ) {
   try {
     const session = await requireSession();
+    await assertWorkspaceAccess(session.workspaceId, session);
     const { layoutId } = await params;
+    const scopedLayout = await prisma.officeLayout.findFirst({
+      where: { id: layoutId, workspace: { organizationId: session.organizationId } },
+      select: { id: true, workspaceId: true },
+    });
+    if (!scopedLayout || scopedLayout.workspaceId !== session.workspaceId) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
     const result = await deleteOfficeLayout(session.workspaceId, layoutId);
     if ("error" in result) {
-      return NextResponse.json({ error: result.error }, { status: result.error === "Not found" ? 404 : 400 });
+      return NextResponse.json(
+        { error: result.error },
+        { status: result.error === "Not found" ? 404 : 400 },
+      );
     }
     return NextResponse.json({ ok: true });
-  } catch (err) {
-    return authErrorResponse(err);
+  } catch (error) {
+    return errorResponse(error);
   }
 }

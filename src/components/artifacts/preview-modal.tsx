@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -12,10 +12,13 @@ type PreviewModalProps = {
 
 export function PreviewModal({ runId, onClose }: PreviewModalProps) {
   const src = `/api/runs/${runId}/preview`;
-  const [mounted, setMounted] = useState(false);
+  const mounted = useSyncExternalStore(
+    () => () => undefined,
+    () => true,
+    () => false,
+  );
 
   useEffect(() => {
-    setMounted(true);
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const onKey = (e: KeyboardEvent) => {
@@ -37,7 +40,7 @@ export function PreviewModal({ runId, onClose }: PreviewModalProps) {
           <div>
             <p className="text-sm font-medium text-zinc-100">Preview</p>
             <p className="text-xs text-zinc-500">
-              This is a preview in the browser — not a live website.
+              This generated app runs in a restricted browser sandbox.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -59,7 +62,8 @@ export function PreviewModal({ runId, onClose }: PreviewModalProps) {
           title="Run preview"
           src={src}
           className="min-h-0 flex-1 bg-white"
-          sandbox="allow-scripts allow-forms allow-same-origin"
+          sandbox="allow-scripts allow-forms"
+          referrerPolicy="no-referrer"
         />
       </div>
     </div>,

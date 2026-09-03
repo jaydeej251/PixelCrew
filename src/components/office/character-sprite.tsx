@@ -1,6 +1,5 @@
 "use client";
 
-import { motion } from "framer-motion";
 import type { AgentStatus } from "@prisma/client";
 import { statusToAnimation } from "@/lib/office";
 import { shade } from "./iso";

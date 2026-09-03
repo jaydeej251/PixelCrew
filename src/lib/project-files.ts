@@ -392,9 +392,14 @@ export function findPreviewIndex(files: Map<string, string>, ceoGoal = ""): stri
   return anyHtml ?? "index.html";
 }
 
-export function injectBaseHref(html: string, runId: string, filePath = "index.html"): string {
+export function injectBaseHref(
+  html: string,
+  runId: string,
+  filePath = "index.html",
+  baseRoot = `/api/runs/${runId}/preview/`,
+): string {
   const dir = filePath.includes("/") ? filePath.slice(0, filePath.lastIndexOf("/") + 1) : "";
-  const base = `<base href="/api/runs/${runId}/preview/${dir}">`;
+  const base = `<base href="${baseRoot}${dir}">`;
   if (/<base\s/i.test(html)) return html;
   if (/<head[^>]*>/i.test(html)) {
     return html.replace(/<head[^>]*>/i, (m) => `${m}\n    ${base}`);

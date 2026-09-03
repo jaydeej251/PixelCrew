@@ -1,10 +1,36 @@
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import {
+  AuthError,
+  assertRunAccess,
+  authErrorStatus,
+  requireSession,
+} from "@/lib/auth";
+import { consumeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ runId: string }> },
 ) {
-  const { runId } = await params;
+  let runId: string;
+  try {
+    const session = await requireSession();
+    ({ runId } = await params);
+    await assertRunAccess(runId, session);
+    const limit = await consumeRateLimit({
+      scope: "sse-user",
+      identifier: session.id,
+      limit: 30,
+      windowMs: 60_000,
+    });
+    if (!limit.allowed) return rateLimitResponse(limit);
+  } catch (err) {
+    if (err instanceof AuthError) {
+      return NextResponse.json({ error: err.message }, { status: authErrorStatus(err) });
+    }
+    throw err;
+  }
+
   const encoder = new TextEncoder();
   let lastCreatedAt: Date | null = null;
   let lastId = "";
