@@ -149,7 +149,7 @@ export async function claimNextTask(
 async function loadPriorContext(runId: string, task: Task): Promise<string> {
   if (task.dependsOnIds.length === 0) return "";
   const priors = await prisma.task.findMany({
-    where: { id: { in: task.dependsOnIds }, status: "done" },
+    where: { runId, id: { in: task.dependsOnIds }, status: "done" },
     select: { title: true, output: true, position: true },
   });
   if (priors.length === 0) return "";
@@ -242,7 +242,8 @@ export async function executeAgentTask(
     select: { ceoGoal: true },
   });
   const ceoGoal = runMeta?.ceoGoal ?? "";
-  const provider = createProvider(config, agent.position, task.title, ceoGoal);  const prior = await loadPriorContext(runId, task);
+  const provider = createProvider(config, agent.position, task.title, ceoGoal);
+  const prior = await loadPriorContext(runId, task);
   let shipContext = "";
   if (agent.position === "qa_engineer") {
     const codeFiles = await prisma.artifact.findMany({
@@ -276,8 +277,9 @@ export async function executeAgentTask(
               );
 
   const userPrompt = kind
-    ? `${task.description ?? ""}\n\n${prior ? `Council / upstream work:\n${prior}\n\n` : ""}Do the work. Do not refuse or hand this off.`
+    ? `${task.description ?? ""}\n\n${prior ? `Council / upstream work:\n${prior}\n\n` : ""}CEO source of truth (never replace this with a template):\n${ceoGoal}\n\nDo the work. Do not refuse or hand this off.`
     : [
+        `CEO source of truth (acceptance criteria):\n${ceoGoal}`,
         prior ? `CEO context and upstream work:\n${prior}` : "",
         `Your task: ${task.title}\n${task.description ?? ""}`,
         shipContext,
@@ -415,13 +417,22 @@ export async function executeAgentTask(
       fullOutput = fullOutput || result.content;
       await flushThinking(true);
       if (parseFileFences(fullOutput).length === 0) fullOutput = previous;
+      const rewritten = evalShippedProject(parseFileFences(fullOutput), {
+        role: agent.position,
+        ceoGoal,
+      });
+      if (!rewritten.passed) {
+        throw new RunAbortedError(
+          `Engineering output still failed acceptance after rewrite.\n${formatShipReport(rewritten)}`,
+        );
+      }
     }
   }
 
   let pendingDecisions: PlanDecision[] = [];
   if (kind === "synth" || kind === "legacy") {
     const firstDecisions = parsePlanDecisions(fullOutput);
-    const quality = evalPlanQuality(stripDecisionFence(fullOutput));
+    const quality = evalPlanQuality(stripDecisionFence(fullOutput), { ceoGoal });
     if (!quality.passed) {
       const previous = fullOutput;
       fullOutput = "";
@@ -441,6 +452,12 @@ export async function executeAgentTask(
       fullOutput = fullOutput || result.content;
       await flushThinking(true);
       if (!fullOutput.trim()) fullOutput = previous;
+      const rewritten = evalPlanQuality(stripDecisionFence(fullOutput), { ceoGoal });
+      if (!rewritten.passed) {
+        throw new RunAbortedError(
+          `Combined plan still drifted from the CEO goal after rewrite.\n${formatPlanReport(rewritten)}`,
+        );
+      }
     }
     pendingDecisions = parsePlanDecisions(fullOutput);
     if (pendingDecisions.length === 0) pendingDecisions = firstDecisions;
@@ -817,6 +834,12 @@ export async function publishAndDelegate(runId: string) {
   if (!planText.trim()) {
     throw new Error("No combined plan to publish");
   }
+  const publishQuality = evalPlanQuality(planText, { ceoGoal: run.ceoGoal });
+  if (!publishQuality.passed) {
+    throw new Error(
+      `This plan no longer matches the CEO goal and cannot be published.\n${formatPlanReport(publishQuality)}`,
+    );
+  }
   let agents = run.workspace.agents;
   const sample = agents[0];
   const reviewer = pickOne(agents, REVIEWER_POSITIONS);
@@ -850,7 +873,7 @@ export async function publishAndDelegate(runId: string) {
         data: {
           runId,
           title: "Review published plan and delegate",
-          description: `The CEO published this plan. Review it. Engineering capacity: ${assignment.positions.join(", ") || "none"}.\n\nPlan:\n${planText.slice(0, 4000)}`,
+          description: `The CEO goal is the source of truth:\n${run.ceoGoal}\n\nThe CEO published this plan. Review it without changing the product. Engineering capacity: ${assignment.positions.join(", ") || "none"}.\n\nPlan:\n${planText.slice(0, 4000)}`,
           position: reviewer.position,
           priority: 90,
           dependsOnIds: planTask ? [planTask.id] : [],
@@ -879,7 +902,7 @@ export async function publishAndDelegate(runId: string) {
         runId,
         title: "Implement frontend from the plan",
         description:
-          `Emit a complete demo UI (index.html, CSS, JS) using \`\`\`file:path fences. Specific copy from the CEO goal — not John Doe / Project One. CSS or inline SVG for avatars (no missing jpg). Do not overwrite data.js.\n${STATIC_SHIP_BAR}`,
+          `CEO source of truth:\n${run.ceoGoal}\n\nEmit a complete demo UI (index.html, CSS, JS) using \`\`\`file:path fences. Implement every named screen, control, state, formula, and visual constraint. Specific copy from the CEO goal — not John Doe / Project One. CSS or inline SVG for visuals (no missing assets). Do not overwrite data.js.\n${STATIC_SHIP_BAR}`,
         position: "frontend_engineer",
         priority: 80,
         dependsOnIds: dependsOn,
@@ -890,7 +913,7 @@ export async function publishAndDelegate(runId: string) {
         runId,
         title: "Implement backend from the plan",
         description:
-          "Emit data.js helpers using localStorage and ```file:path fences. Collections are JSON arrays (parse, push, save) — do not overwrite a single key. Do not emit Express/Mongo/Nodemailer/reCAPTCHA. Do not overwrite index.html.",
+          `CEO source of truth:\n${run.ceoGoal}\n\nEmit data.js helpers only for persistence requested by the CEO goal, using localStorage and \`\`\`file:path fences. Collections are JSON arrays (parse, push, save). Do not invent contact-message storage. Do not emit Express/Mongo/Nodemailer/reCAPTCHA. Do not overwrite index.html.`,
         position: "backend_engineer",
         priority: 80,
         dependsOnIds: dependsOn,
@@ -903,7 +926,7 @@ export async function publishAndDelegate(runId: string) {
       data: {
         runId,
         title: "Implement product work from the plan",
-        description: `You are the only engineering capacity (${pos}). Emit a complete runnable static app (index.html + CSS + JS) using \`\`\`file:path fences. Specific copy from the CEO goal, CSS/SVG visuals — no missing images, no John Doe placeholders.\n${STATIC_SHIP_BAR}`,
+        description: `CEO source of truth:\n${run.ceoGoal}\n\nYou are the only engineering capacity (${pos}). Emit a complete runnable static app (index.html + CSS + JS) using \`\`\`file:path fences. Implement every named screen, control, state, formula, and visual constraint. Specific copy from the CEO goal, CSS/SVG visuals — no missing images, no John Doe placeholders.\n${STATIC_SHIP_BAR}`,
         position: pos,
         priority: 80,
         dependsOnIds: dependsOn,
@@ -918,7 +941,7 @@ export async function publishAndDelegate(runId: string) {
         runId,
         title: "QA the delegated work",
         description:
-          "Review the actual emitted files against the CEO goal. Verdict FAIL or PASS, then a punch list. Fail inline JS, localStorage overwrites, hidden forms, and unsafe external links. Do not invent passing results. Do not rewrite the product.",
+          `CEO source of truth:\n${run.ceoGoal}\n\nReview the actual emitted files against every acceptance criterion in that goal. Verdict FAIL or PASS, then a punch list. Fail wrong product type/name, missing screens or controls, invented template sections, inline JS, localStorage overwrites, hidden forms, and unsafe external links. Do not invent passing results. Do not rewrite the product.`,
         position: "qa_engineer",
         priority: 40,
         dependsOnIds: buildIds,
