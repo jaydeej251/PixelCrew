@@ -1,3 +1,8 @@
+import {
+  missingProductHints,
+  violatedForbiddenTerms,
+} from "./goal-fidelity";
+
 export type ProjectFile = {
   path: string;
   content: string;
@@ -119,35 +124,7 @@ const PLATFORM_BRAND = /\bPixelCrew\b/i;
 /** Old engineer / template portfolio demos — not a real CEO product unless named in the goal. */
 const KNOWN_STUB_PROJECTS = ["ColorVision", "NeuralArt"] as const;
 
-/** Pull likely product names from the CEO goal so ships can be checked for goal fit. */
-export function productHintsFromGoal(goal: string): string[] {
-  const hints = new Set<string>();
-  const push = (raw: string) => {
-    const name = raw.replace(/\s+/g, " ").trim();
-    if (name.length < 3 || name.length > 48) return;
-    if (/^(HTML|CSS|JSON|API|CEO|SPA|UI|UX|JS|MERN)$/i.test(name)) return;
-    if (PLATFORM_BRAND.test(name)) return;
-    hints.add(name);
-  };
-
-  for (const m of goal.matchAll(/["“]([A-Z][A-Za-z0-9]{2,}(?:\s+[A-Za-z0-9][A-Za-z0-9-]*){0,3})["”]/g)) {
-    push(m[1]!.split(/[—–-]/)[0]!.trim());
-  }
-  for (const m of goal.matchAll(/\*\*["“]?([A-Z][A-Za-z0-9]{2,}(?:\s*[—–-]\s*[^"*]*)?)/g)) {
-    push(m[1]!.split(/[—–-]/)[0]!.trim());
-  }
-  for (const m of goal.matchAll(
-    /\b([A-Z][a-z]+(?:Board|App|Tracker|Dash|Hub|Kit|Lab|Cast|Flow|Base|Desk|Pad|Pulse))\b/g,
-  )) {
-    push(m[1]!);
-  }
-  // CamelCase compounds like PulseBoard
-  for (const m of goal.matchAll(/\b([A-Z][a-z]+[A-Z][A-Za-z0-9]+)\b/g)) {
-    push(m[1]!);
-  }
-
-  return [...hints];
-}
+export { productHintsFromGoal } from "./goal-fidelity";
 
 function brandsAsPlatform(html: string): boolean {
   return (
@@ -216,16 +193,21 @@ export function evalShippedProject(
       });
     }
 
-    const hints = productHintsFromGoal(ceoGoal);
-    if (hints.length > 0) {
-      const blob = `${htmlBlob}\n${files.map((f) => f.content).join("\n")}`;
-      const hit = hints.some((h) => blob.toLowerCase().includes(h.toLowerCase()));
-      if (!hit) {
-        issues.push({
-          severity: "fail",
-          message: `Shipped UI never mentions the CEO product (${hints.slice(0, 3).join(", ")}). Rebuild the demo around that goal — do not invent an unrelated portfolio.`,
-        });
-      }
+    const blob = `${htmlBlob}\n${files.map((f) => f.content).join("\n")}`;
+    const missingHints = missingProductHints(blob, ceoGoal);
+    if (missingHints.length > 0) {
+      issues.push({
+        severity: "fail",
+        message: `Shipped UI never mentions the CEO product (${missingHints.slice(0, 3).join(", ")}). Rebuild the demo around that goal — do not invent an unrelated portfolio.`,
+      });
+    }
+
+    const forbidden = violatedForbiddenTerms(htmlBlob, ceoGoal);
+    if (forbidden.length > 0) {
+      issues.push({
+        severity: "fail",
+        message: `Shipped UI violates explicit CEO bans (${forbidden.join(", ")}). Remove unrequested template sections and follow the goal literally.`,
+      });
     }
   }
 
