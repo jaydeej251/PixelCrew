@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
 import { runOrchestrator } from "@/lib/orchestrator";
 import { configureAgentsForRun, workspaceHasProvider } from "@/lib/run-setup";
+import { normalizeNewRunGoal } from "@/lib/run-goal";
 import {
   AuthError,
   assertWorkspaceAccess,
@@ -25,6 +26,13 @@ export async function POST(req: Request) {
     const session = await requireSession();
     const body = await req.json();
     const { workspaceId, ceoGoal, provider = "mock", model } = body;
+    const goal = normalizeNewRunGoal(ceoGoal);
+    if (!goal) {
+      return NextResponse.json(
+        { error: "A CEO goal is required for every new run." },
+        { status: 400 },
+      );
+    }
 
     await assertWorkspaceAccess(workspaceId, session);
 
@@ -49,7 +57,6 @@ export async function POST(req: Request) {
       }
     }
 
-    const goal = ceoGoal ?? workspace.ceoGoal ?? "Build something";
     const llm = await configureAgentsForRun(workspaceId, providerType, model);
 
     await prisma.workspace.update({
