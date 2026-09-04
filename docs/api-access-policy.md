@@ -15,7 +15,14 @@ provider signatures are their trust boundary.
 | `/api/auth/oauth/:provider` | GET | Public | Starts Google/GitHub OAuth; sets signed state cookie; rate limited |
 | `/api/auth/callback/:provider` | GET | Public | OAuth callback; verifies state, links/creates user, sets `pc_session` |
 | `/api/auth/logout` | POST | Session-aware | Deletes the presented session when present |
-| `/api/auth/me` | GET | Session-aware | Returns only the current session identity |
+| `/api/auth/me` | GET | Session-aware | Returns only the current session identity including `platformRole` |
+| `/api/admin/overview` | GET | Platform ops | `requirePlatformRole`; aggregate counts only |
+| `/api/admin/organizations` | GET | Platform ops | Lists orgs with plan and monthly run usage |
+| `/api/admin/organizations/:id` | PATCH | Platform ops | Sets org `plan` (`free`/`pro`/`enterprise`); writes `AdminAuditLog` |
+| `/api/admin/runs` | GET | Platform ops | Lists recent runs; `status=stuck` filters pending/running/paused |
+| `/api/admin/runs/:id/cancel` | POST | Platform ops | Cancels nonterminal runs; audit logged |
+| `/api/admin/users` | GET | Platform ops | Lists users (no secrets) |
+| `/api/admin/users/:id/revoke-sessions` | POST | Platform ops | Deletes all sessions for a user; audit logged |
 | `/api/waitlist` | POST | Public | Email-only intake; rate limit required before public launch |
 | `/api/stripe/webhook` | POST | Provider-signed | Stub only; must reject unsigned requests before billing is enabled |
 | `/api/inngest` | GET, POST, PUT | Provider-signed | Inngest handler/signing configuration |

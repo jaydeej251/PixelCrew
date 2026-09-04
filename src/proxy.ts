@@ -47,7 +47,9 @@ export function proxy(request: NextRequest) {
   const session = request.cookies.get("pc_session");
   const needsAuth =
     pathname.startsWith("/app") ||
+    pathname.startsWith("/admin") ||
     pathname.startsWith("/account") ||
+    pathname.startsWith("/api/admin") ||
     pathname.startsWith("/api/runs") ||
     pathname.startsWith("/api/workspace") ||
     pathname.startsWith("/api/credentials") ||

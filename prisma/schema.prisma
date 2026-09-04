@@ -126,6 +126,12 @@ enum MembershipRole {
   member
 }
 
+enum PlatformRole {
+  none
+  ops
+  owner
+}
+
 enum PlanTier {
   free
   pro
@@ -133,17 +139,33 @@ enum PlanTier {
 }
 
 model User {
-  id                 String         @id @default(cuid())
-  email              String         @unique
+  id                 String          @id @default(cuid())
+  email              String          @unique
   name               String?
   passwordHash       String?
-  createdAt          DateTime       @default(now())
-  updatedAt          DateTime       @updatedAt
+  platformRole       PlatformRole    @default(none)
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
   memberships        Membership[]
   sessions           Session[]
   oauthAccounts      OAuthAccount[]
-  requestedApprovals Approval[]     @relation("ApprovalRequestedBy")
-  resolvedApprovals  Approval[]     @relation("ApprovalResolvedBy")
+  requestedApprovals Approval[]      @relation("ApprovalRequestedBy")
+  resolvedApprovals  Approval[]      @relation("ApprovalResolvedBy")
+  adminAuditLogs     AdminAuditLog[]
+}
+
+model AdminAuditLog {
+  id         String   @id @default(cuid())
+  actorId    String
+  action     String
+  targetType String
+  targetId   String?
+  meta       Json?
+  createdAt  DateTime @default(now())
+  actor      User     @relation(fields: [actorId], references: [id], onDelete: Cascade)
+
+  @@index([createdAt])
+  @@index([actorId])
 }
 
 model OAuthAccount {

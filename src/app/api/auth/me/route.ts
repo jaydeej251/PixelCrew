@@ -11,6 +11,7 @@ export async function GET() {
       name: session.name,
       organizationId: session.organizationId,
       workspaceId: session.workspaceId,
+      platformRole: session.platformRole,
     },
   });
 }
