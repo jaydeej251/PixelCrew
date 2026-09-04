@@ -5,6 +5,7 @@ import { TEAM_TEMPLATES } from "./templates";
 import { getJobBoundary, getPositionLabel } from "./templates";
 import type { PositionKey } from "./constants";
 import { hashPassword } from "./auth";
+import type { PlanTier, PlatformRole } from "@prisma/client";
 
 async function bootstrapWorkspaceAgents(workspaceId: string) {
   if ((await prisma.agent.count({ where: { workspaceId } })) > 0) return;
@@ -50,32 +51,123 @@ async function bootstrapWorkspaceAgents(workspaceId: string) {
   }
 }
 
-export async function seedDatabase() {
-  const email = "ceo@pixelcrew.local";
-  const passwordHash = await hashPassword("password123");
-  let user = await prisma.user.findUnique({ where: { email } });
-  if (!user) {
-    user = await prisma.user.create({
-      data: { email, name: "CEO", passwordHash },
-    });
-  } else if (!user.passwordHash || user.passwordHash === "dev") {
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { passwordHash },
+type SeedAccountSpec = {
+  kind: "free" | "pro" | "admin";
+  email: string;
+  password: string;
+  plan: PlanTier;
+  platformRole: PlatformRole;
+  orgName: string;
+  orgSlug: string;
+  displayName: string;
+};
+
+function readSeedPair(
+  emailKey: string,
+  passwordKey: string,
+): { email: string; password: string } | null {
+  const email = process.env[emailKey]?.trim().toLowerCase();
+  const password = process.env[passwordKey];
+  if (!email || !password) return null;
+  return { email, password };
+}
+
+function collectSeedSpecs(): SeedAccountSpec[] {
+  const specs: SeedAccountSpec[] = [];
+
+  const free = readSeedPair("SEED_FREE_EMAIL", "SEED_FREE_PASSWORD");
+  if (free) {
+    specs.push({
+      kind: "free",
+      email: free.email,
+      password: free.password,
+      plan: "free",
+      platformRole: "none",
+      orgName: "Seed Free Company",
+      orgSlug: "seed-free",
+      displayName: "Free Seed",
     });
   }
 
-  let org = await prisma.organization.findUnique({ where: { slug: "default" } });
+  const pro = readSeedPair("SEED_PRO_EMAIL", "SEED_PRO_PASSWORD");
+  if (pro) {
+    specs.push({
+      kind: "pro",
+      email: pro.email,
+      password: pro.password,
+      plan: "pro",
+      platformRole: "none",
+      orgName: "Seed Pro Company",
+      orgSlug: "seed-pro",
+      displayName: "Pro Seed",
+    });
+  }
+
+  const admin = readSeedPair("SEED_ADMIN_EMAIL", "SEED_ADMIN_PASSWORD");
+  if (admin) {
+    specs.push({
+      kind: "admin",
+      email: admin.email,
+      password: admin.password,
+      plan: "free",
+      platformRole: "ops",
+      orgName: "Seed Admin Company",
+      orgSlug: "seed-admin",
+      displayName: "Platform Admin",
+    });
+  }
+
+  return specs;
+}
+
+function assertSeedAllowed(): void {
+  const allow =
+    process.env.ALLOW_DB_SEED === "true" || process.env.NODE_ENV !== "production";
+  if (!allow) {
+    throw new Error(
+      "Database seed is blocked in production. Set ALLOW_DB_SEED=true only for controlled recovery.",
+    );
+  }
+}
+
+async function upsertSeedAccount(spec: SeedAccountSpec) {
+  const passwordHash = await hashPassword(spec.password);
+  let user = await prisma.user.findUnique({ where: { email: spec.email } });
+  if (!user) {
+    user = await prisma.user.create({
+      data: {
+        email: spec.email,
+        name: spec.displayName,
+        passwordHash,
+        platformRole: spec.platformRole,
+      },
+    });
+  } else {
+    user = await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordHash,
+        platformRole: spec.platformRole,
+        name: user.name ?? spec.displayName,
+      },
+    });
+  }
+
+  let org = await prisma.organization.findUnique({ where: { slug: spec.orgSlug } });
   if (!org) {
     org = await prisma.organization.create({
       data: {
-        name: "Default Company",
-        slug: "default",
-        plan: "free",
+        name: spec.orgName,
+        slug: spec.orgSlug,
+        plan: spec.plan,
         memberships: { create: { userId: user.id, role: "owner" } },
       },
     });
   } else {
+    org = await prisma.organization.update({
+      where: { id: org.id },
+      data: { plan: spec.plan, name: spec.orgName },
+    });
     const membership = await prisma.membership.findUnique({
       where: { userId_organizationId: { userId: user.id, organizationId: org.id } },
     });
@@ -101,7 +193,27 @@ export async function seedDatabase() {
 
   await bootstrapWorkspaceAgents(workspace.id);
 
-  return { user, org, workspace };
+  return { user, org, workspace, kind: spec.kind };
+}
+
+export async function seedDatabase() {
+  assertSeedAllowed();
+
+  const specs = collectSeedSpecs();
+  if (specs.length === 0) {
+    return {
+      accounts: [] as Awaited<ReturnType<typeof upsertSeedAccount>>[],
+      message:
+        "No SEED_* email/password pairs set. Add SEED_FREE_*, SEED_PRO_*, and/or SEED_ADMIN_* in .env.local.",
+    };
+  }
+
+  const accounts = [];
+  for (const spec of specs) {
+    accounts.push(await upsertSeedAccount(spec));
+  }
+
+  return { accounts, message: `Seeded ${accounts.length} account(s).` };
 }
 
 export async function applyTemplate(workspaceId: string, templateId: string) {
@@ -142,9 +254,4 @@ export async function applyTemplate(workspaceId: string, templateId: string) {
       },
     });
   }
-}
-
-export async function getOrCreateWorkspace() {
-  const seeded = await seedDatabase();
-  return seeded.workspace!;
 }

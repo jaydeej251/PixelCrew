@@ -11,13 +11,16 @@ npm run docker:up
 # Install & setup DB
 npm install
 npm run db:push
+# Optional local accounts — set SEED_* in .env.local first (see .env.example)
 npm run db:seed
 
 # Run dev server
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) for marketing, [http://localhost:3000/app](http://localhost:3000/app) for the office.
+Open [http://localhost:3000](http://localhost:3000) for marketing, [http://localhost:3000/app](http://localhost:3000/app) for the office, and [http://localhost:3000/admin](http://localhost:3000/admin) if your user has platform ops (seed admin or `PLATFORM_ADMIN_EMAILS`).
+
+Seed never embeds passwords in git. Put `SEED_FREE_*`, `SEED_PRO_*`, and/or `SEED_ADMIN_*` only in `.env.local`. Production seed is blocked unless `ALLOW_DB_SEED=true` (avoid in normal deploys). Grant prod ops with `PLATFORM_ADMIN_EMAILS` after signup/OAuth, then set org plans from `/admin`.
 
 ## API keys
 
@@ -36,6 +39,8 @@ Or add credentials in the app UI (encrypted at rest). For Ollama Cloud, choose *
 - Set `NEXT_PUBLIC_APP_URL` to the application HTTPS origin.
 - Set `PREVIEW_ORIGIN` to a different HTTPS host routed to the same deployment, such as
   `https://preview.example.com`. Do not set the `pc_session` cookie on this host.
+- Set `PLATFORM_ADMIN_EMAILS` to your ops inbox(es) when you need `/admin` in production.
+  Do not run `db:seed` against production.
 - Apply committed migrations with `npx prisma migrate deploy`; production rate limiting depends on
   the `RateLimitBucket` table.
 - Keep `npm run check` required in CI. It includes lint, unit/security contracts, two-tenant API
