@@ -6,6 +6,7 @@ type SecurityEnvironment = {
   PREVIEW_ORIGIN?: string;
   ENCRYPTION_KEY?: string;
   PREVIEW_TOKEN_SECRET?: string;
+  AUTH_SECRET?: string;
   SANDBOX_ENABLED?: string;
   SANDBOX_PROVIDER?: string;
   ALLOW_LOCAL_SANDBOX_IN_PRODUCTION?: string;
@@ -16,6 +17,12 @@ const INSECURE_ENCRYPTION_KEYS = new Set([
   "change-me-to-a-64-char-hex-string",
 ]);
 
+const INSECURE_AUTH_SECRETS = new Set([
+  "dev-only-oauth-secret-do-not-use-in-production",
+  "change-me",
+  "change-me-to-a-random-secret",
+]);
+
 export function validateProductionSecurityConfig(
   environment: SecurityEnvironment = process.env,
 ): void {
@@ -24,6 +31,11 @@ export function validateProductionSecurityConfig(
   const encryptionKey = environment.ENCRYPTION_KEY?.trim() ?? "";
   if (encryptionKey.length < 32 || INSECURE_ENCRYPTION_KEYS.has(encryptionKey)) {
     throw new Error("A unique ENCRYPTION_KEY of at least 32 characters is required in production");
+  }
+
+  const authSecret = environment.AUTH_SECRET?.trim() ?? "";
+  if (authSecret.length < 32 || INSECURE_AUTH_SECRETS.has(authSecret)) {
+    throw new Error("A unique AUTH_SECRET of at least 32 characters is required in production");
   }
 
   const previewTokenSecret =

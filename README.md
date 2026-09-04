@@ -63,6 +63,6 @@ first. Inspect evidence via `GET /api/runs/:runId/executions` (org-scoped).
 - **Phase 1:** Office floor, org builder, simulate run
 - **Phase 2:** Real orchestrator, BYOK providers, SSE, export
 - **Phase 3:** Workflows, memory, evals
-- **Phase 4:** Auth (email/password sessions), conversation history sidebar
+- **Phase 4:** Auth (email/password sessions + Google/GitHub OAuth), conversation history sidebar
 - **Phase 5:** Marketing, pricing, waitlist
 - **Phase 6:** Real project files, drop-in zip export, in-office preview (static). E2B/GitHub still later.
