@@ -1,8 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Panel, PanelContent, PanelHeader, PanelTitle } from "@/components/ui/panel";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 import { Cpu } from "lucide-react";
+import {
+  getOllamaDefaultModelForMode,
+  getOllamaEndpointMode,
+  getOllamaSuggestedModels,
+  ollamaModelHasLocalCloudSuffix,
+  ollamaModelLooksMismatched,
+  type OllamaEndpointMode,
+} from "@/lib/ollama-models";
 
 type ProviderStatus = {
   provider: string;
@@ -22,6 +33,8 @@ type RunSettingsProps = {
   model: string;
   onProviderChange: (provider: string) => void;
   onModelChange: (model: string) => void;
+  /** Bump when credentials change so endpoint/status stay in sync. */
+  credentialsRevision?: number;
 };
 
 export function RunSettings({
@@ -30,16 +43,27 @@ export function RunSettings({
   model,
   onProviderChange,
   onModelChange,
+  credentialsRevision = 0,
 }: RunSettingsProps) {
   const [statuses, setStatuses] = useState<ProviderStatus[]>([]);
 
-  useEffect(() => {
+  const reload = useCallback(() => {
     fetch(`/api/providers/status?workspaceId=${workspaceId}`)
       .then((r) => r.json())
-      .then((d) => setStatuses(d.providers ?? []));
+      .then((d) => setStatuses(d.providers ?? []))
+      .catch(() => setStatuses([]));
   }, [workspaceId]);
 
+  useEffect(() => {
+    reload();
+  }, [reload, credentialsRevision]);
+
   const current = statuses.find((s) => s.provider === provider);
+  const ollamaMode =
+    provider === "ollama" ? getOllamaEndpointMode(current?.activeBaseUrl) : null;
+  const suggestions = getOllamaSuggestedModels(ollamaMode);
+  const mismatched =
+    provider === "ollama" && ollamaModelLooksMismatched(model, ollamaMode);
 
   return (
     <Panel>
@@ -49,46 +73,120 @@ export function RunSettings({
           Which AI to use
         </PanelTitle>
       </PanelHeader>
-      <PanelContent className="space-y-2">
+      <PanelContent className="space-y-3">
         <p className="text-xs text-zinc-500">
-          Mock is free and fine for trying the product. Pick another option after you add a key
-          below.
+          Pick a provider, then a model. For Ollama, the active key under{" "}
+          <span className="text-zinc-400">Your API keys</span> chooses cloud or local —
+          the model field stays required either way.
         </p>
-        <select
-          className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm"
-          value={provider}
-          onChange={(e) => {
-            onProviderChange(e.target.value);
-            const next = statuses.find((s) => s.provider === e.target.value);
-            if (next) onModelChange(next.defaultModel);
-          }}
-        >
-          {statuses.map((s) => (
-            <option key={s.provider} value={s.provider}>
-              {s.label}
-              {s.provider !== "mock" && (s.ready ? " ✓" : " (no key)")}
-            </option>
-          ))}
-        </select>
-        <input
-          className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm"
-          placeholder="Model name"
-          value={model}
-          onChange={(e) => onModelChange(e.target.value)}
-        />
+
+        <div className="space-y-1.5">
+          <Label htmlFor="run-provider" className="text-xs text-zinc-400">
+            Provider
+          </Label>
+          <select
+            id="run-provider"
+            className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm"
+            value={provider}
+            onChange={(e) => {
+              const nextId = e.target.value;
+              onProviderChange(nextId);
+              const next = statuses.find((s) => s.provider === nextId);
+              if (!next) return;
+              if (nextId === "ollama") {
+                const mode = getOllamaEndpointMode(next.activeBaseUrl);
+                onModelChange(getOllamaDefaultModelForMode(mode));
+              } else {
+                onModelChange(next.defaultModel);
+              }
+            }}
+          >
+            {statuses.map((s) => (
+              <option key={s.provider} value={s.provider}>
+                {s.label}
+                {s.provider !== "mock" && (s.ready ? " ✓" : " (no key)")}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {provider === "ollama" && current?.ready && (
+          <OllamaEndpointCard
+            mode={ollamaMode}
+            baseUrl={current.activeBaseUrl}
+            label={current.activeCredentialLabel}
+          />
+        )}
+
+        {provider !== "mock" && (
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="run-model" className="text-xs text-zinc-400">
+                Model
+              </Label>
+              {ollamaMode && ollamaMode !== "custom" && (
+                <span className="text-[10px] uppercase tracking-wide text-zinc-500">
+                  {ollamaMode === "cloud" ? "Cloud catalog" : "Local pulls"}
+                </span>
+              )}
+            </div>
+            <Input
+              id="run-model"
+              placeholder={modelPlaceholder(provider, ollamaMode)}
+              value={model}
+              onChange={(e) => onModelChange(e.target.value)}
+            />
+            {suggestions.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 pt-0.5">
+                {suggestions.map((name) => {
+                  const active = model.trim() === name;
+                  return (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => onModelChange(name)}
+                      className={`rounded-md border px-2 py-0.5 text-[11px] transition-colors ${
+                        active
+                          ? "border-indigo-500/60 bg-indigo-500/15 text-indigo-200"
+                          : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200"
+                      }`}
+                    >
+                      {name}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {mismatched && (
+              <p className="text-[11px] leading-snug text-amber-400/90">
+                {ollamaMode === "cloud" && ollamaModelHasLocalCloudSuffix(model)
+                  ? "Drop the -cloud suffix here. That name is for local Ollama (localhost). Direct ollama.com uses gpt-oss:20b, not gpt-oss:20b-cloud."
+                  : ollamaMode === "cloud"
+                    ? "That name is a common local pull. On cloud, pick a model from the chips above or ollama.com/search."
+                    : "That name is a common cloud model. Local Ollama needs a model you’ve already pulled."}
+              </p>
+            )}
+            {!mismatched && ollamaMode === "cloud" && (
+              <p className="text-[11px] leading-snug text-zinc-500">
+                Direct ollama.com API — no <code className="text-zinc-400">-cloud</code> suffix
+                (that’s only for local offload). Key authenticates; chips are the model name we send.
+              </p>
+            )}
+            {!mismatched && ollamaMode === "local" && (
+              <p className="text-[11px] leading-snug text-zinc-500">
+                Local needs no API key. Use a model from{" "}
+                <code className="text-zinc-400">ollama list</code>, or click a starter above.
+              </p>
+            )}
+          </div>
+        )}
+
         {current && provider !== "mock" && (
           <div className="space-y-2">
             <p className="text-xs text-zinc-500">
               {current.ready ? (
                 <>
                   Key found via <span className="text-emerald-400">{current.source}</span>
-                  {current.activeBaseUrl ? (
-                    <>
-                      {" "}
-                      · agents use{" "}
-                      <span className="text-emerald-400">{current.activeBaseUrl}</span>
-                    </>
-                  ) : null}
                   {current.activeCredentialLabel ? (
                     <>
                       {" "}
@@ -105,12 +203,16 @@ export function RunSettings({
             </p>
             {provider === "ollama" && current.ready && (
               <p className="text-[11px] leading-snug text-zinc-500">
-                If you saved both local and cloud Ollama keys, click <span className="text-zinc-300">Use</span> on
-                the one you want under Your API keys. Newly saved keys become active automatically.
+                Saved both local and cloud? Click{" "}
+                <span className="text-zinc-300">Use</span> on the one you want under Your API
+                keys — this panel updates the endpoint badge above.
               </p>
             )}
             {provider === "openrouter" && current.ready && (
-              <TestKeyButton workspaceId={workspaceId} />
+              <TestKeyButton workspaceId={workspaceId} provider="openrouter" />
+            )}
+            {provider === "ollama" && current.ready && ollamaMode === "cloud" && (
+              <TestKeyButton workspaceId={workspaceId} provider="ollama" />
             )}
           </div>
         )}
@@ -119,9 +221,72 @@ export function RunSettings({
   );
 }
 
-function TestKeyButton({ workspaceId }: { workspaceId: string }) {
+function modelPlaceholder(
+  provider: string,
+  mode: OllamaEndpointMode | null,
+): string {
+  if (provider === "ollama") {
+    if (mode === "cloud") return "e.g. gpt-oss:20b";
+    if (mode === "local") return "e.g. qwen2.5-coder:14b";
+    return "Model name";
+  }
+  if (provider === "openrouter") return "e.g. openai/gpt-4o-mini";
+  if (provider === "google") return "e.g. gemini-2.0-flash";
+  return "Model name";
+}
+
+function OllamaEndpointCard({
+  mode,
+  baseUrl,
+  label,
+}: {
+  mode: OllamaEndpointMode | null;
+  baseUrl?: string | null;
+  label?: string | null;
+}) {
+  const title =
+    mode === "cloud" ? "Cloud" : mode === "local" ? "Local" : "Custom endpoint";
+  const badgeVariant =
+    mode === "cloud" ? "building" : mode === "local" ? "done" : "default";
+
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 py-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+          Endpoint
+        </span>
+        <Badge variant={badgeVariant}>{title}</Badge>
+      </div>
+      <p className="mt-1.5 truncate text-sm text-zinc-200">
+        {baseUrl || "Default Ollama endpoint"}
+      </p>
+      <p className="mt-1 text-[11px] leading-snug text-zinc-500">
+        {mode === "cloud"
+          ? "Requests go to ollama.com with your API key."
+          : mode === "local"
+            ? "Requests go to your machine — no cloud key required."
+            : "Using the base URL on the active credential."}
+        {label ? (
+          <>
+            {" "}
+            Active key: <span className="text-zinc-400">{label}</span>.
+          </>
+        ) : null}
+      </p>
+    </div>
+  );
+}
+
+function TestKeyButton({
+  workspaceId,
+  provider,
+}: {
+  workspaceId: string;
+  provider: "openrouter" | "ollama";
+}) {
   const [result, setResult] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const label = provider === "ollama" ? "Test Ollama Cloud key" : "Test OpenRouter key";
 
   return (
     <div>
@@ -135,14 +300,19 @@ function TestKeyButton({ workspaceId }: { workspaceId: string }) {
           const res = await fetch("/api/providers/test", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ workspaceId, provider: "openrouter" }),
+            body: JSON.stringify({ workspaceId, provider }),
           });
           const json = await res.json();
-          setResult(json.ok ? `✓ ${json.message} (${json.source})` : `✗ ${json.message}`);
+          const detail = json.message ?? json.error ?? "Test failed";
+          const probeBits =
+            json.probes && typeof json.probes === "object"
+              ? ` [models=${json.probes.models?.status ?? "?"} tags=${json.probes.tags?.status ?? "?"} api/chat=${json.probes.nativeChat?.status ?? "?"} v1/chat=${json.probes.openaiChat?.status ?? "?"}]`
+              : "";
+          setResult(json.ok ? `✓ ${detail} (${json.source})` : `✗ ${detail}${probeBits}`);
           setLoading(false);
         }}
       >
-        {loading ? "Testing…" : "Test OpenRouter key"}
+        {loading ? "Testing…" : label}
       </button>
       {result && <p className="mt-1 text-xs text-zinc-400">{result}</p>}
     </div>

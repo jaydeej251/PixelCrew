@@ -1,3 +1,4 @@
+import { formatLlmHttpError } from "./http-errors";
 import type { LLMProvider, ChatMessage, StreamChunk, ProviderConfig } from "./types";
 
 export class OpenAICompatibleProvider implements LLMProvider {
@@ -35,22 +36,19 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     if (!res.ok) {
       const err = await res.text();
-      let friendly = err;
-      try {
-        const parsed = JSON.parse(err);
-        const msg = parsed?.error?.message ?? parsed?.message ?? err;
-        if (msg.includes("more credits") || msg.includes("Insufficient")) {
-          friendly =
-            "OpenRouter: not enough credits. Add funds at openrouter.ai/settings/credits, use a free model, or switch to Ollama locally.";
-        } else if (msg.includes("Authentication") || msg.includes("API key")) {
-          friendly = "OpenRouter: invalid API key. Check sk-or-v1- prefix in .env.local.";
-        } else {
-          friendly = msg;
-        }
-      } catch {
-        // keep raw err
-      }
-      throw new Error(friendly);
+      const url = `${baseUrl}/chat/completions`;
+      console.warn(
+        `[PixelCrew] ${this.config.provider} HTTP ${res.status} ${url} model=${this.config.model} body=${err.slice(0, 300)}`,
+      );
+      throw new Error(
+        formatLlmHttpError({
+          provider: this.config.provider,
+          baseUrl,
+          model: this.config.model,
+          status: res.status,
+          body: err,
+        }),
+      );
     }
 
     const reader = res.body?.getReader();

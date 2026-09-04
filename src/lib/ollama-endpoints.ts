@@ -31,3 +31,14 @@ export function isOllamaLocalBaseUrl(baseUrl: string | null | undefined): boolea
   const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
   return LOCAL_HOSTS.has(parsed.hostname.toLowerCase()) && port === "11434";
 }
+
+/**
+ * Direct ollama.com chat lives at `/api/chat`, not OpenAI `/v1/chat/completions`.
+ * Settings still store the OpenAI-style `/v1` URL for local + display.
+ */
+export function ollamaNativeChatUrl(openaiCompatBaseUrl: string): string {
+  const cleaned = normalizeOllamaBaseUrl(openaiCompatBaseUrl);
+  const parsed = parseUrl(cleaned);
+  const origin = parsed?.origin ?? "https://ollama.com";
+  return `${origin}/api/chat`;
+}

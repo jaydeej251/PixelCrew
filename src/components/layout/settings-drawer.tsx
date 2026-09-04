@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { Drawer } from "@/components/ui/drawer";
 import { OrgBuilder } from "@/components/org/org-builder";
 import { CredentialsForm } from "@/components/settings/credentials-form";
@@ -32,6 +33,8 @@ export function SettingsDrawer({
   onRefresh,
   onAgentRemoved,
 }: SettingsDrawerProps) {
+  const [credentialsRevision, setCredentialsRevision] = useState(0);
+
   return (
     <Drawer open={open} onClose={onClose} title="Settings">
       <div className="space-y-6">
@@ -70,6 +73,7 @@ export function SettingsDrawer({
         />
         <CredentialsForm
           workspaceId={workspaceId}
+          onCredentialsChange={() => setCredentialsRevision((n) => n + 1)}
           onSave={async (cred) => {
             const response = await fetch("/api/credentials", {
               method: "POST",
@@ -90,6 +94,7 @@ export function SettingsDrawer({
           model={runModel}
           onProviderChange={onProviderChange}
           onModelChange={onModelChange}
+          credentialsRevision={credentialsRevision}
         />
       </div>
     </Drawer>
