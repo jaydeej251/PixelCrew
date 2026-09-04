@@ -15,7 +15,25 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: PRODUCT_NAME,
-  description: "Watch your AI company work — hire agents, run in parallel, bring your own keys.",
+  description:
+    "Watch your AI company work — hire agents by role, approve the plan, bring your own keys.",
+  icons: {
+    icon: [{ url: "/marketing/icon.png", type: "image/png" }],
+    apple: [{ url: "/marketing/icon.png", type: "image/png" }],
+  },
+  openGraph: {
+    title: PRODUCT_NAME,
+    description:
+      "Your AI company, visible. Hire by role. Watch the floor. You approve.",
+    images: [{ url: "/marketing/og-with-logo.png" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: PRODUCT_NAME,
+    description:
+      "Your AI company, visible. Hire by role. Watch the floor. You approve.",
+    images: ["/marketing/og-with-logo.png"],
+  },
 };
 
 export default function RootLayout({

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { getSession } from "@/lib/auth";
+import { getSession, getPlanUsage } from "@/lib/auth";
 import { syncOfficeDesks } from "@/lib/office-desks";
 import { listOfficeLayouts, getActiveOfficeLayout } from "@/lib/office-layouts";
 
@@ -17,7 +17,7 @@ export async function GET() {
 
   await syncOfficeDesks(workspace.id);
 
-  const [agents, desks, departments, officeLayouts, officeLayout] = await Promise.all([
+  const [agents, desks, departments, officeLayouts, officeLayout, usage] = await Promise.all([
     prisma.agent.findMany({
       where: { workspaceId: workspace.id },
       include: { desk: true, department: true },
@@ -26,6 +26,7 @@ export async function GET() {
     prisma.department.findMany({ where: { workspaceId: workspace.id } }),
     listOfficeLayouts(workspace.id),
     getActiveOfficeLayout(workspace.id),
+    getPlanUsage(session.organizationId),
   ]);
 
   return NextResponse.json({
@@ -48,5 +49,12 @@ export async function GET() {
       data: officeLayout.data,
     },
     user: { email: session.email, name: session.name },
+    usage: {
+      used: usage.used,
+      limit: usage.limit,
+      plan: usage.plan,
+      canRun: usage.canRun,
+      reason: usage.reason ?? null,
+    },
   });
 }
