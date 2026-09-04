@@ -1,7 +1,14 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { findProviderCredential } from "@/lib/provider-credentials";
-import { resolveApiKey } from "@/lib/run-setup";
+import { getDefaultModel, resolveApiKey } from "@/lib/run-setup";
+import { resolveProviderConfig } from "@/lib/providers";
+import { isOllamaCloudBaseUrl, ollamaNativeChatUrl } from "@/lib/ollama-endpoints";
+import {
+  getOllamaDefaultModelForMode,
+  looksLikeIncompleteOllamaApiKey,
+} from "@/lib/ollama-models";
+import { extractErrorText } from "@/lib/providers/http-errors";
 import {
   AuthError,
   assertWorkspaceAccess,
@@ -14,9 +21,12 @@ export async function POST(req: Request) {
   try {
     const session = await requireSession();
     const { workspaceId, provider } = await req.json();
-    if (typeof workspaceId !== "string" || provider !== "openrouter") {
+    if (
+      typeof workspaceId !== "string" ||
+      (provider !== "openrouter" && provider !== "ollama")
+    ) {
       return NextResponse.json(
-        { error: "A valid workspaceId and the openrouter provider are required" },
+        { error: "A valid workspaceId and openrouter or ollama provider are required" },
         { status: 400 },
       );
     }
@@ -28,6 +38,10 @@ export async function POST(req: Request) {
       windowMs: 10 * 60_000,
     });
     if (!limit.allowed) return rateLimitResponse(limit);
+
+    if (provider === "ollama") {
+      return NextResponse.json(await testOllamaCloud(workspaceId));
+    }
 
     const cred = await findProviderCredential(prisma, workspaceId, "openrouter");
     const resolved = resolveApiKey("openrouter", cred);
@@ -80,4 +94,168 @@ export async function POST(req: Request) {
     }
     throw err;
   }
+}
+
+async function testOllamaCloud(workspaceId: string) {
+  const cred = await findProviderCredential(prisma, workspaceId, "ollama");
+  const resolved = resolveApiKey("ollama", cred);
+  const config = resolveProviderConfig("ollama", getDefaultModel("ollama"), cred ?? undefined);
+
+  if (!isOllamaCloudBaseUrl(config.baseUrl)) {
+    return {
+      ok: false,
+      source: resolved.source,
+      message:
+        "Active Ollama endpoint is local. Click Use on your cloud key first, then test again.",
+    };
+  }
+
+  if (!resolved.key) {
+    return {
+      ok: false,
+      source: resolved.source,
+      message:
+        "No Ollama Cloud API key found. Create one at ollama.com/settings/keys and save it as the cloud credential.",
+    };
+  }
+
+  const key = resolved.key;
+  const keyMeta = {
+    length: key.length,
+    prefix: key.slice(0, 4),
+    hasWhitespace: /\s/.test(key),
+  };
+
+  const authHeaders = {
+    Authorization: `Bearer ${key}`,
+    Accept: "application/json",
+  };
+
+  const chatModel = getOllamaDefaultModelForMode("cloud");
+  const nativeChatUrl = ollamaNativeChatUrl(config.baseUrl ?? "https://ollama.com/v1");
+  const openaiChatUrl = `${(config.baseUrl ?? "https://ollama.com/v1").replace(/\/+$/, "")}/chat/completions`;
+  const modelsUrl = `${(config.baseUrl ?? "https://ollama.com/v1").replace(/\/+$/, "")}/models`;
+  const tagsUrl = "https://ollama.com/api/tags";
+
+  const [modelsRes, tagsRes, nativeChatRes, openaiChatRes] = await Promise.all([
+    fetch(modelsUrl, { headers: authHeaders }),
+    fetch(tagsUrl, { headers: authHeaders }),
+    fetch(nativeChatUrl, {
+      method: "POST",
+      headers: { ...authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: chatModel,
+        messages: [{ role: "user", content: "Reply with OK" }],
+        stream: false,
+      }),
+    }),
+    fetch(openaiChatUrl, {
+      method: "POST",
+      headers: { ...authHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: chatModel,
+        messages: [{ role: "user", content: "Reply with OK" }],
+        max_tokens: 8,
+        stream: false,
+      }),
+    }),
+  ]);
+
+  const probes = {
+    models: summarizeProbe(modelsRes.status, await modelsRes.text()),
+    tags: summarizeProbe(tagsRes.status, await tagsRes.text()),
+    nativeChat: summarizeProbe(nativeChatRes.status, await nativeChatRes.text()),
+    openaiChat: summarizeProbe(openaiChatRes.status, await openaiChatRes.text()),
+  };
+
+  if (probes.nativeChat.ok) {
+    return {
+      ok: true,
+      source: resolved.source,
+      status: probes.nativeChat.status,
+      keyMeta,
+      probes,
+      message: `Ollama Cloud chat works on ${nativeChatUrl} (model ${chatModel})`,
+    };
+  }
+
+  if (probes.openaiChat.ok && !probes.nativeChat.ok) {
+    return {
+      ok: false,
+      source: resolved.source,
+      status: probes.nativeChat.status,
+      keyMeta,
+      probes,
+      message:
+        `OpenAI /v1/chat/completions works, but PixelCrew runs use native ${nativeChatUrl} ` +
+        `which returned HTTP ${probes.nativeChat.status} (${probes.nativeChat.body || "—"}). ` +
+        `Treat this as a failed test until /api/chat succeeds.`,
+    };
+  }
+
+  const listOk = probes.models.ok || probes.tags.ok;
+  const chatUnauthorized =
+    probes.nativeChat.status === 401 ||
+    /unauthorized/i.test(probes.nativeChat.body);
+
+  if (listOk && chatUnauthorized) {
+    const incompleteHint = looksLikeIncompleteOllamaApiKey(key)
+      ? " This key looks incomplete (Ollama keys usually look like id.secret — copy the full value once)."
+      : "";
+    return {
+      ok: false,
+      source: resolved.source,
+      status: probes.nativeChat.status,
+      keyMeta,
+      probes,
+      message:
+        `Listing models is not enough — chat at ${nativeChatUrl} returned HTTP ${probes.nativeChat.status} (${probes.nativeChat.body || "—"}). ` +
+        `/api/tags can succeed without a usable chat key.` +
+        incompleteHint +
+        ` Key looks like ${keyMeta.prefix}… (${keyMeta.length} chars` +
+        `${keyMeta.hasWhitespace ? ", contains whitespace — re-paste carefully" : ""}). ` +
+        `Create a fresh key at ollama.com/settings/keys and paste the entire secret.`,
+    };
+  }
+
+  if (
+    probes.nativeChat.status === 404 ||
+    probes.openaiChat.status === 404 ||
+    /not found|unknown model|subscription|upgrade|credits|payment/i.test(
+      `${probes.nativeChat.body} ${probes.openaiChat.body}`,
+    )
+  ) {
+    return {
+      ok: false,
+      source: resolved.source,
+      status: probes.nativeChat.status || probes.openaiChat.status,
+      keyMeta,
+      probes,
+      message:
+        `Key reached Ollama, but model “${chatModel}” failed ` +
+        `(native: ${probes.nativeChat.body || probes.nativeChat.status}; ` +
+        `openai: ${probes.openaiChat.body || probes.openaiChat.status}). ` +
+        `Try a free-tier cloud model from ollama.com/search?c=cloud.`,
+    };
+  }
+
+  return {
+    ok: false,
+    source: resolved.source,
+    status: probes.nativeChat.status,
+    keyMeta,
+    probes,
+    message:
+      `Ollama Cloud chat failed. native /api/chat HTTP ${probes.nativeChat.status}: ${probes.nativeChat.body}; ` +
+      `/v1/chat/completions HTTP ${probes.openaiChat.status}: ${probes.openaiChat.body}; ` +
+      `/v1/models HTTP ${probes.models.status}; /api/tags HTTP ${probes.tags.status}.`,
+  };
+}
+
+function summarizeProbe(status: number, body: string) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    body: extractErrorText(body) || (status >= 200 && status < 300 ? "ok" : ""),
+  };
 }

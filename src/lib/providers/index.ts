@@ -8,6 +8,7 @@ import {
   OLLAMA_LOCAL_BASE_URL,
 } from "../ollama-endpoints";
 import { MockProvider } from "./mock";
+import { OllamaNativeChatProvider } from "./ollama-native";
 import { createOpenAICompatible } from "./openai-compatible";
 import type { LLMProvider, ProviderConfig } from "./types";
 export { estimateCost } from "./types";
@@ -98,6 +99,10 @@ export function createProvider(
         ? "Ollama Cloud requires an API key from ollama.com/settings/keys. Save it under Ollama in the sidebar, or set OLLAMA_API_KEY in .env.local."
         : `No valid API key for ${config.provider}. Add OPENROUTER_API_KEY or OPEN_ROUTER_KEY to .env.local and restart the dev server, or save a key in the sidebar.`,
     );
+  }
+
+  if (config.provider === "ollama" && ollamaNeedsKey) {
+    return new OllamaNativeChatProvider({ ...config, apiKey: key });
   }
 
   return createOpenAICompatible({ ...config, apiKey: key });
