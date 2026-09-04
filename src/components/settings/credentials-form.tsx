@@ -10,6 +10,7 @@ import {
   OLLAMA_CLOUD_BASE_URL,
   OLLAMA_LOCAL_BASE_URL,
 } from "@/lib/ollama-endpoints";
+import { looksLikeIncompleteOllamaApiKey } from "@/lib/ollama-models";
 
 const PROVIDERS = [
   { id: "openrouter", label: "OpenRouter" },
@@ -36,9 +37,15 @@ type CredentialsFormProps = {
     apiKey?: string;
     baseUrl?: string;
   }) => Promise<void>;
+  /** Fired after save / Use / Remove so dependent panels can refresh. */
+  onCredentialsChange?: () => void;
 };
 
-export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
+export function CredentialsForm({
+  workspaceId,
+  onSave,
+  onCredentialsChange,
+}: CredentialsFormProps) {
   const [provider, setProvider] = useState("openrouter");
   const [label, setLabel] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -88,7 +95,16 @@ export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
                   />
                   <span className="truncate">
                     {c.label} ({c.provider}
-                    {c.baseUrl ? ` · ${c.baseUrl}` : ""})
+                    {c.provider === "ollama" && c.baseUrl
+                      ? isOllamaCloudBaseUrl(c.baseUrl)
+                        ? " · cloud"
+                        : isOllamaLocalBaseUrl(c.baseUrl)
+                          ? " · local"
+                          : ` · ${c.baseUrl}`
+                      : c.baseUrl
+                        ? ` · ${c.baseUrl}`
+                        : ""}
+                    )
                     {c.isDefault ? " · active" : ""}
                   </span>
                 </span>
@@ -110,6 +126,7 @@ export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
                         setError("");
                         setMessage("Active credential updated");
                         reload();
+                        onCredentialsChange?.();
                       }}
                     >
                       Use
@@ -128,6 +145,7 @@ export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
                       }
                       setError("");
                       reload();
+                      onCredentialsChange?.();
                     }}
                   >
                     Remove
@@ -165,6 +183,7 @@ export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
               setApiKey("");
               setMessage("Saved");
               reload();
+              onCredentialsChange?.();
             } catch (err) {
               setError(err instanceof Error ? err.message : "Failed to save");
             }
@@ -202,7 +221,7 @@ export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
             className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm"
             placeholder={
               provider === "ollama"
-                ? "API key (required for Ollama Cloud)"
+                ? "Ollama Cloud API key (paste full id.secret)"
                 : "API key"
             }
             value={apiKey}
@@ -256,10 +275,20 @@ export function CredentialsForm({ workspaceId, onSave }: CredentialsFormProps) {
           )}
           {provider === "ollama" && (
             <p className="text-[11px] leading-snug text-zinc-500">
-              Local: leave the key empty and use {OLLAMA_LOCAL_BASE_URL}. Cloud: paste your
-              ollama.com API key (Base URL becomes {OLLAMA_CLOUD_BASE_URL}).
+              Local: leave the key empty and use {OLLAMA_LOCAL_BASE_URL}. Cloud: paste the
+              full key from ollama.com/settings/keys (usually includes a{" "}
+              <code className="text-zinc-400">.</code> secret suffix). Base URL becomes{" "}
+              {OLLAMA_CLOUD_BASE_URL}.
             </p>
           )}
+          {provider === "ollama" &&
+            isOllamaCloudBaseUrl(baseUrl) &&
+            looksLikeIncompleteOllamaApiKey(apiKey) && (
+              <p className="text-[11px] leading-snug text-amber-400/90">
+                That key looks incomplete. Copy the entire value once when Ollama shows it —
+                a truncated key can list models but chat returns Unauthorized.
+              </p>
+            )}
           <Button type="submit" disabled={saving} className="w-full">
             {saving ? "Saving…" : "Save key"}
           </Button>
