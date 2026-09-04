@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { isTrustedMutationRequest } from "./request-security";
+import { isTrustedMutationRequest, resolvePublicRequestOrigin } from "./request-security";
 
 describe("isTrustedMutationRequest", () => {
   it("accepts safe methods and same-origin mutations", () => {
@@ -58,5 +58,70 @@ describe("isTrustedMutationRequest", () => {
       }),
       false,
     );
+  });
+
+  it("accepts production mutations behind a local reverse proxy (loopback URL)", () => {
+    const request = new Request("http://127.0.0.1:3000/api/auth/login", {
+      method: "POST",
+      headers: {
+        origin: "https://pixel-crew.online",
+        "sec-fetch-site": "same-origin",
+      },
+    });
+    assert.equal(
+      isTrustedMutationRequest(request, {
+        NODE_ENV: "production",
+        NEXT_PUBLIC_APP_URL: "https://pixel-crew.online",
+      }),
+      true,
+    );
+  });
+
+  it("accepts production mutations when X-Forwarded-* matches the app URL", () => {
+    const request = new Request("http://127.0.0.1:3000/api/auth/login", {
+      method: "POST",
+      headers: {
+        origin: "https://pixel-crew.online",
+        "sec-fetch-site": "same-origin",
+        "x-forwarded-host": "pixel-crew.online",
+        "x-forwarded-proto": "https",
+      },
+    });
+    assert.equal(
+      isTrustedMutationRequest(request, {
+        NODE_ENV: "production",
+        NEXT_PUBLIC_APP_URL: "https://pixel-crew.online",
+      }),
+      true,
+    );
+  });
+
+  it("rejects loopback production mutations whose Origin is not the app URL", () => {
+    const request = new Request("http://127.0.0.1:3000/api/auth/login", {
+      method: "POST",
+      headers: {
+        origin: "https://evil.example",
+        "sec-fetch-site": "same-origin",
+      },
+    });
+    assert.equal(
+      isTrustedMutationRequest(request, {
+        NODE_ENV: "production",
+        NEXT_PUBLIC_APP_URL: "https://pixel-crew.online",
+      }),
+      false,
+    );
+  });
+});
+
+describe("resolvePublicRequestOrigin", () => {
+  it("prefers forwarded host and proto", () => {
+    const request = new Request("http://127.0.0.1:3000/api/auth/login", {
+      headers: {
+        "x-forwarded-host": "pixel-crew.online",
+        "x-forwarded-proto": "https",
+      },
+    });
+    assert.equal(resolvePublicRequestOrigin(request), "https://pixel-crew.online");
   });
 });
