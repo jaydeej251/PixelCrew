@@ -63,8 +63,8 @@ describe("evalPlanQuality", () => {
     assert.ok(report.issues.some((i) => /inline js/i.test(i.message)));
   });
 
-  it("fails when a MoodLedger goal is merged into a portfolio plan", () => {
-    const goal = `Build **MoodLedger**, a mood tracking SPA with Check-in, History,
+  it("fails when a named product goal is merged into a portfolio plan", () => {
+    const goal = `Build **VibeLog**, a mood tracking SPA with Check-in, History,
 Insights, a burnout risk gauge, and localStorage. Do not build a portfolio,
 marketing landing page, Contact / Privacy footer.`;
     const drifted = `# Goal
@@ -97,9 +97,9 @@ No backend.
 
   it("allows a matching plan to preserve the CEO's negative requirements", () => {
     const goal =
-      "Build **MoodLedger**, a mood tracking SPA. Do not build a portfolio or add a Contact / Privacy footer.";
+      "Build **VibeLog**, a mood tracking SPA. Do not build a portfolio or add a Contact / Privacy footer.";
     const plan = `# Goal
-Build MoodLedger as a mood tracking SPA.
+Build VibeLog as a mood tracking SPA.
 
 # Stack
 Static HTML + CSS + JS with localStorage.

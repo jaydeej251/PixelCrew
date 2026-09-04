@@ -215,7 +215,7 @@ describe("evalShippedProject", () => {
     assert.equal(report.passed, true, formatShipReport(report));
   });
 
-  it("fails a renamed landing page that violates explicit MoodLedger bans", () => {
+  it("fails a renamed landing page that violates explicit product bans", () => {
     const report = evalShippedProject(
       [
         {
@@ -245,12 +245,12 @@ describe("evalShippedProject", () => {
       ],
       {
         ceoGoal:
-          "Build **MoodLedger**, a mood tracking SPA. Do not build a portfolio, marketing landing page, Contact / Privacy footer.",
+          "Build **VibeLog**, a mood tracking SPA. Do not build a portfolio, marketing landing page, Contact / Privacy footer.",
       },
     );
 
     assert.equal(report.passed, false);
-    assert.ok(report.issues.some((issue) => /MoodLedger/i.test(issue.message)));
+    assert.ok(report.issues.some((issue) => /VibeLog/i.test(issue.message)));
     assert.ok(report.issues.some((issue) => /explicit CEO bans/i.test(issue.message)));
   });
 });
