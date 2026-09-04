@@ -1,7 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
+import { LogOut } from "lucide-react";
 import { Drawer } from "@/components/ui/drawer";
+import { Button } from "@/components/ui/button";
 import { OrgBuilder } from "@/components/org/org-builder";
 import { CredentialsForm } from "@/components/settings/credentials-form";
 import { RunSettings } from "@/components/settings/run-settings";
@@ -21,6 +24,7 @@ type SettingsDrawerProps = {
   onAgentRemoved?: (id: string) => void;
   onCredentialsChange?: () => void;
   onProviderTestResult?: (ok: boolean) => void;
+  onLogout?: () => void;
 };
 
 export function SettingsDrawer({
@@ -36,6 +40,7 @@ export function SettingsDrawer({
   onAgentRemoved,
   onCredentialsChange,
   onProviderTestResult,
+  onLogout,
 }: SettingsDrawerProps) {
   const [credentialsRevision, setCredentialsRevision] = useState(0);
 
@@ -47,6 +52,32 @@ export function SettingsDrawer({
   return (
     <Drawer open={open} onClose={onClose} title="Settings">
       <div className="space-y-6">
+        <div className="flex flex-wrap gap-2 rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
+          <Link href="/account" onClick={onClose}>
+            <Button type="button" variant="secondary" className="!h-8 !text-xs">
+              Account
+            </Button>
+          </Link>
+          <Link href="/support" onClick={onClose}>
+            <Button type="button" variant="ghost" className="!h-8 !text-xs">
+              Support
+            </Button>
+          </Link>
+          {onLogout && (
+            <Button
+              type="button"
+              variant="ghost"
+              className="!h-8 !text-xs text-red-300"
+              onClick={() => {
+                onClose();
+                onLogout();
+              }}
+            >
+              <LogOut size={14} />
+              Log out
+            </Button>
+          )}
+        </div>
         <OrgBuilder
           agents={agents}
           templates={TEAM_TEMPLATES}

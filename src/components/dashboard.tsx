@@ -48,6 +48,13 @@ type WorkspaceData = {
   officeLayouts?: OfficeLayoutSummary[];
   officeLayout?: { id: string; name: string; isActive: boolean; data: OfficeBlueprint };
   user?: { email: string; name: string | null };
+  usage?: {
+    used: number;
+    limit: number;
+    plan: string;
+    canRun: boolean;
+    reason: string | null;
+  };
 };
 
 type RunDetail = {
@@ -476,6 +483,13 @@ export function Dashboard() {
 
   const startRun = async () => {
     if (!data) return;
+    if (data.usage && !data.usage.canRun) {
+      setRunError(
+        data.usage.reason ??
+          `Free beta limit reached (${data.usage.used}/${data.usage.limit} runs this month).`,
+      );
+      return;
+    }
     if (!runReady) {
       setRunError(runReadyReason ?? "Finish the checklist before starting.");
       setSettingsOpen(true);
@@ -506,6 +520,8 @@ export function Dashboard() {
       setRunError(json.error ?? "Couldn’t start. Check settings and try again.");
       setRunning(false);
       setRunOutcome("idle");
+      // Refresh usage so the N/5 chip matches a server-side plan limit block.
+      void load();
       return;
     }
     setRunId(json.runId);
@@ -727,6 +743,15 @@ export function Dashboard() {
           runId ? () => setMobilePane((p) => (p === "files" ? "work" : "files")) : undefined
         }
         filesCount={artifacts.length}
+        runUsage={
+          data.usage
+            ? {
+                used: data.usage.used,
+                limit: data.usage.limit,
+                canRun: data.usage.canRun,
+              }
+            : null
+        }
       />
 
       <div className="relative flex min-h-0 flex-1">
@@ -955,11 +980,22 @@ export function Dashboard() {
                   value={ceoGoal}
                   onChange={setCeoGoal}
                   onSubmit={() => void startRun()}
-                  disabled={!runReady}
+                  disabled={!runReady || Boolean(data.usage && !data.usage.canRun)}
                   submitting={running}
                   showExamples
                   compact
                 />
+                {data.usage && !data.usage.canRun && (
+                  <p className="mt-2 text-center text-[11px] text-amber-400/90">
+                    {data.usage.reason ??
+                      `${data.usage.used}/${data.usage.limit} runs used this month. Resume an existing chat anytime.`}
+                  </p>
+                )}
+                {data.usage?.canRun && (
+                  <p className="mt-2 text-center text-[11px] text-zinc-600">
+                    Free beta · {data.usage.used}/{data.usage.limit} new runs this month
+                  </p>
+                )}
                 {!runReady && runReadyReason && (
                   <p className="mt-2 text-center text-[11px] text-amber-400/90">
                     {runReadyReason}
@@ -1022,6 +1058,7 @@ export function Dashboard() {
             setRunReadyReason(null);
           }
         }}
+        onLogout={logout}
         onRefresh={async () => {
           await load();
         }}

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { PRODUCT_NAME } from "@/lib/constants";
+import { BrandMark } from "@/components/layout/brand-mark";
 
 type AuthLayoutProps = {
   title: string;
@@ -13,12 +13,7 @@ export function AuthLayout({ title, subtitle, children, footer }: AuthLayoutProp
     <div className="auth-grid min-h-screen text-zinc-100">
       <header className="border-b border-zinc-800/80 px-6 py-4">
         <div className="mx-auto flex max-w-5xl items-center justify-between">
-          <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight">
-            <span className="flex size-8 items-center justify-center rounded-lg bg-indigo-500/20 text-sm text-indigo-300">
-              P
-            </span>
-            {PRODUCT_NAME}
-          </Link>
+          <BrandMark priority />
           <Link href="/pricing" className="text-sm text-zinc-500 hover:text-zinc-300">
             Pricing
           </Link>
