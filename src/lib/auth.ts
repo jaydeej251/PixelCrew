@@ -5,7 +5,7 @@ import type { MembershipRole, PlatformRole } from "@prisma/client";
 import { prisma } from "./db";
 import { agentAccessWhere, runAccessWhere, workspaceAccessWhere } from "./access";
 import { FREE_RUNS_PER_MONTH } from "./constants";
-import { persistPlatformRoleUpgrade, PLATFORM_OPS_ROLES } from "./platform-admin";
+import { persistPlatformRoleUpgrade, PLATFORM_OPS_ROLES, isPlatformOps } from "./platform-admin";
 
 export const SESSION_COOKIE = "pc_session";
 const SESSION_DAYS = 30;
@@ -28,10 +28,18 @@ export type SessionUser = {
   id: string;
   email: string;
   name: string | null;
+  /** Null for platform-ops accounts that are not product tenants. */
+  organizationId: string | null;
+  workspaceId: string | null;
+  role: MembershipRole | null;
+  platformRole: PlatformRole;
+};
+
+/** Authenticated product tenant (office / runs). Platform ops are excluded. */
+export type ProductSessionUser = SessionUser & {
   organizationId: string;
   workspaceId: string;
   role: MembershipRole;
-  platformRole: PlatformRole;
 };
 
 function hashToken(token: string): string {
@@ -94,13 +102,25 @@ export async function getSessionFromToken(token: string): Promise<SessionUser | 
 
   const membership = session.user.memberships[0];
   const workspace = membership?.organization.workspaces[0];
-  if (!membership || !workspace) return null;
 
   const platformRole = await persistPlatformRoleUpgrade(
     session.user.id,
     session.user.email,
     session.user.platformRole,
   );
+
+  if (!membership || !workspace) {
+    if (!isPlatformOps(platformRole)) return null;
+    return {
+      id: session.user.id,
+      email: session.user.email,
+      name: session.user.name,
+      organizationId: null,
+      workspaceId: null,
+      role: null,
+      platformRole,
+    };
+  }
 
   return {
     id: session.user.id,
@@ -126,6 +146,18 @@ export async function requireSession(): Promise<SessionUser> {
   return session;
 }
 
+/** Product APIs only — platform operators must use /admin. */
+export async function requireProductSession(): Promise<ProductSessionUser> {
+  const session = await requireSession();
+  if (isPlatformOps(session.platformRole)) {
+    throw new AuthError("Not found");
+  }
+  if (!session.organizationId || !session.workspaceId || !session.role) {
+    throw new AuthError("Unauthorized");
+  }
+  return session as ProductSessionUser;
+}
+
 export class AuthError extends Error {
   constructor(message: string) {
     super(message);
@@ -139,7 +171,7 @@ export function authErrorStatus(error: AuthError): 401 | 403 | 404 {
   return 404;
 }
 
-export async function assertRunAccess(runId: string, session: SessionUser) {
+export async function assertRunAccess(runId: string, session: ProductSessionUser) {
   const run = await prisma.run.findFirst({
     where: runAccessWhere(runId, session),
     select: { id: true, workspaceId: true },
@@ -148,7 +180,7 @@ export async function assertRunAccess(runId: string, session: SessionUser) {
   return run;
 }
 
-export async function assertWorkspaceAccess(workspaceId: string, session: SessionUser) {
+export async function assertWorkspaceAccess(workspaceId: string, session: ProductSessionUser) {
   const workspace = await prisma.workspace.findFirst({
     where: workspaceAccessWhere(workspaceId, session),
     select: { id: true },
@@ -157,7 +189,7 @@ export async function assertWorkspaceAccess(workspaceId: string, session: Sessio
   return workspace;
 }
 
-export async function assertAgentAccess(agentId: string, session: SessionUser) {
+export async function assertAgentAccess(agentId: string, session: ProductSessionUser) {
   const agent = await prisma.agent.findFirst({
     where: agentAccessWhere(agentId, session),
     select: { id: true, workspaceId: true },
@@ -167,7 +199,7 @@ export async function assertAgentAccess(agentId: string, session: SessionUser) {
 }
 
 export function requireOrganizationRole(
-  session: SessionUser,
+  session: ProductSessionUser,
   allowedRoles: readonly MembershipRole[],
 ): void {
   if (!allowedRoles.includes(session.role)) {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import {
   parsePlatformAdminEmails,
+  postAuthPath,
   resolvePlatformRole,
 } from "./platform-admin";
 
@@ -15,9 +16,10 @@ afterEach(() => {
 
 describe("parsePlatformAdminEmails", () => {
   it("returns empty set for blank input", () => {
+    delete env.PLATFORM_ADMIN_EMAILS;
     assert.equal(parsePlatformAdminEmails("").size, 0);
     assert.equal(parsePlatformAdminEmails("  ").size, 0);
-    assert.equal(parsePlatformAdminEmails(undefined).size, 0);
+    assert.equal(parsePlatformAdminEmails().size, 0);
   });
 
   it("normalizes and splits emails", () => {
@@ -38,5 +40,13 @@ describe("resolvePlatformRole", () => {
     const allow = new Set(["admin@pixelcrew.test"]);
     assert.equal(resolvePlatformRole("Admin@PixelCrew.test", "none", allow), "ops");
     assert.equal(resolvePlatformRole("other@pixelcrew.test", "none", allow), "none");
+  });
+});
+
+describe("postAuthPath", () => {
+  it("sends ops to admin and tenants to app", () => {
+    assert.equal(postAuthPath("ops"), "/admin");
+    assert.equal(postAuthPath("owner"), "/admin");
+    assert.equal(postAuthPath("none"), "/app");
   });
 });

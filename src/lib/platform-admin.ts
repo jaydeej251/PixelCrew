@@ -52,6 +52,11 @@ export function isPlatformOps(role: PlatformRole): boolean {
   return PLATFORM_OPS_ROLES.includes(role);
 }
 
+/** Where to send the user after login/signup/OAuth. */
+export function postAuthPath(platformRole: PlatformRole): "/admin" | "/app" {
+  return isPlatformOps(platformRole) ? "/admin" : "/app";
+}
+
 export async function writeAdminAuditLog(input: {
   actorId: string;
   action: string;

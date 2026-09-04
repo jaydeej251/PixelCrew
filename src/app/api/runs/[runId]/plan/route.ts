@@ -12,7 +12,7 @@ import {
 } from "@/lib/workflow";
 import { councilThreadFromTasks, plannerSystemPrompt } from "@/lib/prompts";
 import { runOrchestrator, publishAndDelegate } from "@/lib/orchestrator";
-import { AuthError, assertRunAccess, requireSession } from "@/lib/auth";
+import { AuthError, assertRunAccess, requireProductSession } from "@/lib/auth";
 import {
   allDecisionsAnswered,
   applyAnswer,
@@ -198,7 +198,7 @@ export async function GET(
   { params }: { params: Promise<{ runId: string }> },
 ) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     const { runId } = await params;
     await assertRunAccess(runId, session);
   const run = await prisma.run.findUnique({
@@ -238,7 +238,7 @@ export async function POST(
   { params }: { params: Promise<{ runId: string }> },
 ) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     const { runId } = await params;
     await assertRunAccess(runId, session);
     const limit = await consumeRateLimit({

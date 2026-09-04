@@ -5,7 +5,7 @@ import { inngest } from "@/lib/inngest";
 import { runOrchestrator } from "@/lib/orchestrator";
 import { workspaceHasProvider } from "@/lib/run-setup";
 import { isResumable, prepareRunForResume, resumePhase } from "@/lib/run-resume";
-import { AuthError, assertRunAccess, requireSession } from "@/lib/auth";
+import { AuthError, assertRunAccess, requireProductSession } from "@/lib/auth";
 
 function authErrorResponse(err: unknown) {
   if (err instanceof AuthError) {
@@ -19,7 +19,7 @@ export async function POST(
   { params }: { params: Promise<{ runId: string }> },
 ) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     const { runId } = await params;
     await assertRunAccess(runId, session);
 

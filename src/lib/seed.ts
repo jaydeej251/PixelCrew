@@ -5,7 +5,7 @@ import { TEAM_TEMPLATES } from "./templates";
 import { getJobBoundary, getPositionLabel } from "./templates";
 import type { PositionKey } from "./constants";
 import { hashPassword } from "./auth";
-import type { PlanTier, PlatformRole } from "@prisma/client";
+import type { PlanTier } from "@prisma/client";
 
 async function bootstrapWorkspaceAgents(workspaceId: string) {
   if ((await prisma.agent.count({ where: { workspaceId } })) > 0) return;
@@ -51,14 +51,20 @@ async function bootstrapWorkspaceAgents(workspaceId: string) {
   }
 }
 
-type SeedAccountSpec = {
-  kind: "free" | "pro" | "admin";
+type TenantSeedSpec = {
+  kind: "free" | "pro";
   email: string;
   password: string;
   plan: PlanTier;
-  platformRole: PlatformRole;
   orgName: string;
   orgSlug: string;
+  displayName: string;
+};
+
+type AdminSeedSpec = {
+  kind: "admin";
+  email: string;
+  password: string;
   displayName: string;
 };
 
@@ -72,8 +78,8 @@ function readSeedPair(
   return { email, password };
 }
 
-function collectSeedSpecs(): SeedAccountSpec[] {
-  const specs: SeedAccountSpec[] = [];
+function collectTenantSpecs(): TenantSeedSpec[] {
+  const specs: TenantSeedSpec[] = [];
 
   const free = readSeedPair("SEED_FREE_EMAIL", "SEED_FREE_PASSWORD");
   if (free) {
@@ -82,7 +88,6 @@ function collectSeedSpecs(): SeedAccountSpec[] {
       email: free.email,
       password: free.password,
       plan: "free",
-      platformRole: "none",
       orgName: "Seed Free Company",
       orgSlug: "seed-free",
       displayName: "Free Seed",
@@ -96,28 +101,24 @@ function collectSeedSpecs(): SeedAccountSpec[] {
       email: pro.email,
       password: pro.password,
       plan: "pro",
-      platformRole: "none",
       orgName: "Seed Pro Company",
       orgSlug: "seed-pro",
       displayName: "Pro Seed",
     });
   }
 
-  const admin = readSeedPair("SEED_ADMIN_EMAIL", "SEED_ADMIN_PASSWORD");
-  if (admin) {
-    specs.push({
-      kind: "admin",
-      email: admin.email,
-      password: admin.password,
-      plan: "free",
-      platformRole: "ops",
-      orgName: "Seed Admin Company",
-      orgSlug: "seed-admin",
-      displayName: "Platform Admin",
-    });
-  }
-
   return specs;
+}
+
+function collectAdminSpec(): AdminSeedSpec | null {
+  const admin = readSeedPair("SEED_ADMIN_EMAIL", "SEED_ADMIN_PASSWORD");
+  if (!admin) return null;
+  return {
+    kind: "admin",
+    email: admin.email,
+    password: admin.password,
+    displayName: "Platform Admin",
+  };
 }
 
 function assertSeedAllowed(): void {
@@ -130,7 +131,7 @@ function assertSeedAllowed(): void {
   }
 }
 
-async function upsertSeedAccount(spec: SeedAccountSpec) {
+async function upsertTenantAccount(spec: TenantSeedSpec) {
   const passwordHash = await hashPassword(spec.password);
   let user = await prisma.user.findUnique({ where: { email: spec.email } });
   if (!user) {
@@ -139,7 +140,7 @@ async function upsertSeedAccount(spec: SeedAccountSpec) {
         email: spec.email,
         name: spec.displayName,
         passwordHash,
-        platformRole: spec.platformRole,
+        platformRole: "none",
       },
     });
   } else {
@@ -147,7 +148,7 @@ async function upsertSeedAccount(spec: SeedAccountSpec) {
       where: { id: user.id },
       data: {
         passwordHash,
-        platformRole: spec.platformRole,
+        platformRole: "none",
         name: user.name ?? spec.displayName,
       },
     });
@@ -196,21 +197,58 @@ async function upsertSeedAccount(spec: SeedAccountSpec) {
   return { user, org, workspace, kind: spec.kind };
 }
 
+/** Ops-only account: no tenant org/workspace — home is /admin. */
+async function upsertAdminAccount(spec: AdminSeedSpec) {
+  const passwordHash = await hashPassword(spec.password);
+  let user = await prisma.user.findUnique({ where: { email: spec.email } });
+  if (!user) {
+    user = await prisma.user.create({
+      data: {
+        email: spec.email,
+        name: spec.displayName,
+        passwordHash,
+        platformRole: "ops",
+      },
+    });
+  } else {
+    user = await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordHash,
+        platformRole: "ops",
+        name: user.name ?? spec.displayName,
+      },
+    });
+  }
+
+  // Detach any leftover playable seed memberships so ops is not a CEO tenant.
+  await prisma.membership.deleteMany({ where: { userId: user.id } });
+
+  return { user, org: null, workspace: null, kind: "admin" as const };
+}
+
 export async function seedDatabase() {
   assertSeedAllowed();
 
-  const specs = collectSeedSpecs();
-  if (specs.length === 0) {
+  const tenants = collectTenantSpecs();
+  const admin = collectAdminSpec();
+  if (tenants.length === 0 && !admin) {
     return {
-      accounts: [] as Awaited<ReturnType<typeof upsertSeedAccount>>[],
+      accounts: [] as Array<
+        | Awaited<ReturnType<typeof upsertTenantAccount>>
+        | Awaited<ReturnType<typeof upsertAdminAccount>>
+      >,
       message:
         "No SEED_* email/password pairs set. Add SEED_FREE_*, SEED_PRO_*, and/or SEED_ADMIN_* in .env.local.",
     };
   }
 
   const accounts = [];
-  for (const spec of specs) {
-    accounts.push(await upsertSeedAccount(spec));
+  for (const spec of tenants) {
+    accounts.push(await upsertTenantAccount(spec));
+  }
+  if (admin) {
+    accounts.push(await upsertAdminAccount(admin));
   }
 
   return { accounts, message: `Seeded ${accounts.length} account(s).` };

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { createSession, SESSION_COOKIE, verifyPassword } from "@/lib/auth";
 import { consumeRateLimit, rateLimitResponse, requestClientIp } from "@/lib/rate-limit";
+import { persistPlatformRoleUpgrade, postAuthPath } from "@/lib/platform-admin";
 
 const loginSchema = z.object({
   email: z.email().trim().toLowerCase().max(320),
@@ -46,6 +47,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid email or password" }, { status: 401 });
   }
 
+  const platformRole = await persistPlatformRoleUpgrade(
+    user.id,
+    user.email,
+    user.platformRole,
+  );
+
   const token = await createSession(user.id);
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE, token, {
@@ -56,5 +63,9 @@ export async function POST(req: Request) {
     maxAge: 60 * 60 * 24 * 30,
   });
 
-  return NextResponse.json({ ok: true, email: user.email });
+  return NextResponse.json({
+    ok: true,
+    email: user.email,
+    redirectTo: postAuthPath(platformRole),
+  });
 }

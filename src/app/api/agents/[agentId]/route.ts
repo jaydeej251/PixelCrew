@@ -8,7 +8,7 @@ import {
   AuthError,
   assertAgentAccess,
   authErrorStatus,
-  requireSession,
+  requireProductSession,
 } from "@/lib/auth";
 
 const POSITION_DEPT: Record<string, string> = {
@@ -54,7 +54,7 @@ export async function GET(
   { params }: { params: Promise<{ agentId: string }> },
 ) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     const { agentId } = await params;
     await assertAgentAccess(agentId, session);
     const memories = await prisma.agentMemory.findMany({
@@ -73,7 +73,7 @@ export async function PATCH(
   { params }: { params: Promise<{ agentId: string }> },
 ) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     const { agentId } = await params;
     await assertAgentAccess(agentId, session);
     const parsed = updateAgentSchema.safeParse(await req.json().catch(() => null));
@@ -127,7 +127,7 @@ export async function DELETE(
   { params }: { params: Promise<{ agentId: string }> },
 ) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     const { agentId } = await params;
     await assertAgentAccess(agentId, session);
     await prisma.agent.delete({ where: { id: agentId } });

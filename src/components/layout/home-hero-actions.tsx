@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { useSessionUser } from "@/hooks/use-session-user";
+import { isOpsSessionUser, useSessionUser } from "@/hooks/use-session-user";
 
 /**
  * Home hero CTAs must match session — never show "Create free account" while signed in.
@@ -19,10 +19,13 @@ export function HomeHeroActions() {
   }
 
   if (session.status === "signedIn") {
+    const ops = isOpsSessionUser(session.user);
     return (
       <div className="mt-8 flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
-        <Link href="/app">
-          <Button className="min-w-[160px] px-6 py-3">Open office</Button>
+        <Link href={ops ? "/admin" : "/app"}>
+          <Button className="min-w-[160px] px-6 py-3">
+            {ops ? "Open admin" : "Open office"}
+          </Button>
         </Link>
         <Link href="/pricing">
           <Button variant="secondary" className="min-w-[160px] px-6 py-3">

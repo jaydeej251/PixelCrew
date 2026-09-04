@@ -4,7 +4,8 @@ async function main() {
   const result = await seedDatabase();
   console.log(result.message);
   for (const account of result.accounts) {
-    console.log(`- ${account.kind}: ${account.user.email} (${account.org.plan})`);
+    const plan = account.org?.plan ?? "ops-only";
+    console.log(`- ${account.kind}: ${account.user.email} (${plan})`);
   }
 }
 

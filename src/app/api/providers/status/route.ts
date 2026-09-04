@@ -7,7 +7,7 @@ import {
 } from "@/lib/run-setup";
 import { findProviderCredential } from "@/lib/provider-credentials";
 import { resolveProviderConfig } from "@/lib/providers";
-import { AuthError, assertWorkspaceAccess, requireSession } from "@/lib/auth";
+import { AuthError, assertWorkspaceAccess, requireProductSession } from "@/lib/auth";
 
 function authErrorResponse(err: unknown) {
   if (err instanceof AuthError) {
@@ -18,7 +18,7 @@ function authErrorResponse(err: unknown) {
 
 export async function GET(req: Request) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     const workspaceId = new URL(req.url).searchParams.get("workspaceId");
     if (!workspaceId) {
       return NextResponse.json({ error: "workspaceId required" }, { status: 400 });

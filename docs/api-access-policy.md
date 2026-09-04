@@ -10,8 +10,8 @@ provider signatures are their trust boundary.
 
 | Route | Methods | Policy | Enforcement |
 | --- | --- | --- | --- |
-| `/api/auth/login` | POST | Public | Credential verification; rate limit required before public launch |
-| `/api/auth/signup` | POST | Public | Creates a new organization; rate limit required before public launch |
+| `/api/auth/login` | POST | Public | Credential verification; returns `redirectTo` `/admin` for platform ops else `/app` |
+| `/api/auth/signup` | POST | Public | Creates a new organization; returns `redirectTo` based on platform role / allowlist |
 | `/api/auth/oauth/:provider` | GET | Public | Starts Google/GitHub OAuth; sets signed state cookie; rate limited |
 | `/api/auth/callback/:provider` | GET | Public | OAuth callback; verifies state, links/creates user, sets `pc_session` |
 | `/api/auth/logout` | POST | Session-aware | Deletes the presented session when present |

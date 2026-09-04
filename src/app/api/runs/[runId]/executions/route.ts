@@ -4,7 +4,7 @@ import {
   AuthError,
   assertRunAccess,
   authErrorStatus,
-  requireSession,
+  requireProductSession,
 } from "@/lib/auth";
 import { boundedText } from "@/lib/execution-runtime";
 import { consumeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
@@ -17,7 +17,7 @@ export async function GET(
   { params }: { params: Promise<{ runId: string }> },
 ) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     const { runId } = await params;
     await assertRunAccess(runId, session);
 
