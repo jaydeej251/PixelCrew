@@ -1,47 +1,32 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { useSessionUser } from "@/hooks/use-session-user";
 
 /**
  * Home hero CTAs must match session — never show "Create free account" while signed in.
  */
 export function HomeHeroActions() {
-  const [signedIn, setSignedIn] = useState<boolean | null>(null);
+  const session = useSessionUser();
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/auth/me")
-      .then((res) => res.json())
-      .then((json: { user?: unknown }) => {
-        if (!cancelled) setSignedIn(Boolean(json.user));
-      })
-      .catch(() => {
-        if (!cancelled) setSignedIn(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (signedIn === null) {
+  if (session.status === "loading") {
     return (
-      <div className="mt-10 flex h-12 items-center justify-center text-xs text-zinc-600">
+      <div className="mt-8 flex h-12 items-center justify-center text-xs text-zinc-600 sm:justify-start">
         …
       </div>
     );
   }
 
-  if (signedIn) {
+  if (session.status === "signedIn") {
     return (
-      <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
+      <div className="mt-8 flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
         <Link href="/app">
           <Button className="min-w-[160px] px-6 py-3">Open office</Button>
         </Link>
-        <Link href="/account">
+        <Link href="/pricing">
           <Button variant="secondary" className="min-w-[160px] px-6 py-3">
-            Account
+            View pricing
           </Button>
         </Link>
       </div>
@@ -49,7 +34,7 @@ export function HomeHeroActions() {
   }
 
   return (
-    <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
+    <div className="mt-8 flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
       <Link href="/signup">
         <Button className="min-w-[160px] px-6 py-3">Create free account</Button>
       </Link>

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, LogOut, Settings, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { PRODUCT_NAME } from "@/lib/constants";
+import { BrandMark } from "@/components/layout/brand-mark";
 import { SHOW_DEV_TOOLS } from "@/lib/dev-tools";
 import { cn } from "@/lib/utils";
 
@@ -66,20 +66,28 @@ export function AppHeader({
 
   useEffect(() => {
     if (!menuOpen) return;
-    const close = (e: MouseEvent) => {
+    const onPointerDown = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setMenuOpen(false);
       }
     };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
   }, [menuOpen]);
 
   const displayName = userName?.trim() || userEmail?.split("@")[0] || "Account";
   const initials = displayName.slice(0, 1).toUpperCase();
 
   return (
-    <header className="shrink-0 border-b border-zinc-800/80 bg-zinc-950/90 backdrop-blur">
+    // z-40 keeps the account menu above the office canvas (sibling uses relative).
+    <header className="relative z-40 shrink-0 border-b border-zinc-800/80 bg-zinc-950/90 backdrop-blur">
       <div className="flex h-12 items-center justify-between gap-3 px-3 sm:px-4">
         <div className="flex min-w-0 items-center gap-3">
           {onOpenChats && (
@@ -91,15 +99,14 @@ export function AppHeader({
               Chats
             </button>
           )}
-          <Link href="/app" className="flex shrink-0 items-center gap-2">
-            <span className="flex size-7 items-center justify-center rounded-md bg-indigo-500/20 text-xs font-semibold text-indigo-300">
-              P
-            </span>
-            <span className="hidden font-medium text-zinc-100 sm:inline">{PRODUCT_NAME}</span>
-            <span className="hidden rounded bg-amber-500/15 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-amber-200 sm:inline">
-              Beta
-            </span>
-          </Link>
+          <BrandMark
+            href="/app"
+            size="sm"
+            showBeta
+            priority
+            className="shrink-0"
+            wordmarkClassName="hidden font-medium sm:inline"
+          />
           <span className="hidden h-4 w-px bg-zinc-800 sm:block" />
           <p className="hidden truncate text-sm text-zinc-500 sm:block">{workspaceName}</p>
         </div>
