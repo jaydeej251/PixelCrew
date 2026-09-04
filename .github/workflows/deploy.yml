@@ -1,0 +1,94 @@
+# Deploy production (GCP VM via SSH)
+#
+# Runs after Quality succeeds on main, or manually via workflow_dispatch.
+# Server must already have: Node, PM2, Caddy, cloned repo, and a populated .env
+# (this workflow never writes secrets to the host).
+#
+# GitHub Secrets (Settings → Secrets and variables → Actions):
+#   DEPLOY_HOST      VM external IP or hostname (e.g. 34.x.x.x)
+#   DEPLOY_USER      SSH user (e.g. markdjjunio)
+#   DEPLOY_SSH_KEY   Private key whose public key is on the VM (~/.ssh/authorized_keys)
+#   DEPLOY_PATH      Absolute app path (e.g. /home/markdjjunio/PixelCrew)
+#
+# Optional secret:
+#   DEPLOY_KNOWN_HOSTS  Output of: ssh-keyscan -H <DEPLOY_HOST>
+#                       If omitted, the job accepts the host key once (less strict).
+#
+# One-time Mac setup for the deploy key:
+#   ssh-keygen -t ed25519 -f ~/.ssh/pixelcrew_deploy -N "" -C "pixelcrew-github-deploy"
+#   # append ~/.ssh/pixelcrew_deploy.pub to the VM authorized_keys
+#   # paste ~/.ssh/pixelcrew_deploy private key into DEPLOY_SSH_KEY
+
+name: Deploy
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [Quality]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: SSH deploy to GCP
+    runs-on: ubuntu-latest
+    # Only ship green main (or an explicit manual run).
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    steps:
+      - name: Resolve deploy SHA
+        id: ref
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            echo "sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Start SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Trust host key
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          if [ -n "${DEPLOY_KNOWN_HOSTS}" ]; then
+            printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" >> ~/.ssh/known_hosts
+          else
+            ssh-keyscan -H "${DEPLOY_HOST}" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Run deploy.sh on server
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SHA: ${{ steps.ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test -n "${DEPLOY_HOST}"
+          test -n "${DEPLOY_USER}"
+          test -n "${DEPLOY_PATH}"
+          test -n "${DEPLOY_SHA}"
+
+          ssh -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "set -euo pipefail
+             export DEPLOY_SHA='${DEPLOY_SHA}' APP_DIR='${DEPLOY_PATH}'
+             cd '${DEPLOY_PATH}'
+             git fetch --prune origin
+             git checkout --detach '${DEPLOY_SHA}'
+             test -x ./scripts/deploy.sh || chmod +x ./scripts/deploy.sh
+             ./scripts/deploy.sh"
