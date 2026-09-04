@@ -13,6 +13,7 @@ describe("validateProductionSecurityConfig", () => {
         validateProductionSecurityConfig({
           NODE_ENV: "production",
           ENCRYPTION_KEY: "a-secure-encryption-key-with-at-least-32-characters",
+          AUTH_SECRET: "a-secure-auth-secret-with-at-least-32-characters!!",
           NEXT_PUBLIC_APP_URL: "https://app.example",
           PREVIEW_ORIGIN: "https://app.example",
         }),
@@ -25,10 +26,24 @@ describe("validateProductionSecurityConfig", () => {
       validateProductionSecurityConfig({
         NODE_ENV: "production",
         ENCRYPTION_KEY: "a-secure-encryption-key-with-at-least-32-characters",
+        AUTH_SECRET: "a-secure-auth-secret-with-at-least-32-characters!!",
         PREVIEW_TOKEN_SECRET: "a-separate-preview-secret-with-at-least-32-characters",
         NEXT_PUBLIC_APP_URL: "https://app.example",
         PREVIEW_ORIGIN: "https://preview.example",
       }),
+    );
+  });
+
+  it("requires AUTH_SECRET in production", () => {
+    assert.throws(
+      () =>
+        validateProductionSecurityConfig({
+          NODE_ENV: "production",
+          ENCRYPTION_KEY: "a-secure-encryption-key-with-at-least-32-characters",
+          NEXT_PUBLIC_APP_URL: "https://app.example",
+          PREVIEW_ORIGIN: "https://preview.example",
+        }),
+      /AUTH_SECRET/,
     );
   });
 });
