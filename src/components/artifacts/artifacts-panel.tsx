@@ -1,10 +1,11 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Download, Eye } from "lucide-react";
+import { Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Markdown, plainTextFromMarkdown } from "@/components/ui/markdown";
 import { ThoughtProcessView } from "@/components/artifacts/thought-process-view";
+import { RunDeliverableActions } from "@/components/artifacts/run-deliverable-actions";
 import { isPackagerFallbackHtml, hasPreviewableApp, isProjectPath } from "@/lib/project-files";
 import { PreviewModal } from "@/components/artifacts/preview-modal";
 import type { ThoughtTask } from "@/lib/thought-process";
@@ -86,28 +87,13 @@ export function ArtifactsPanel({
           </p>
         </div>
         {runId && artifacts.length > 0 && tab === "files" && (
-          <div className="flex items-center gap-1">
-            {previewReady && (
-              <Button
-                variant="ghost"
-                className="!h-8 !px-2"
-                type="button"
-                onClick={() => setPreview(true)}
-              >
-                <Eye size={14} />
-                Preview
-              </Button>
-            )}
-            {!previewReady && runFinished && (
-              <span className="px-1 text-[11px] text-zinc-500">No previewable HTML yet</span>
-            )}
-            <a href={`/api/runs/${runId}/export`} download>
-              <Button variant="ghost" className="!h-8 !px-2">
-                <Download size={14} />
-                Download
-              </Button>
-            </a>
-          </div>
+          <RunDeliverableActions
+            runId={runId}
+            artifacts={artifacts}
+            ceoGoal={ceoGoal}
+            runFinished={runFinished}
+            variant="panel"
+          />
         )}
       </div>
 
@@ -211,7 +197,7 @@ export function ArtifactsPanel({
         )}
       </div>
 
-      {tab === "files" && runFinished && files.length > 0 && runId && (
+      {tab === "files" && runFinished && previewReady && runId && (
         <div className="border-t border-zinc-800/80 p-3">
           <Button type="button" className="w-full" onClick={() => setPreview(true)}>
             <Eye size={14} />

@@ -263,6 +263,9 @@ export const DOORWAYS: Array<{ axis: "h" | "v"; x: number; y: number }> = [
   { axis: "h", x: 6.5, y: 5.65 },
 ];
 
+/** Reception entrance — new hires spawn here and walk in. */
+export const FRONT_DOOR = { x: 6.5, y: BUILDING.maxY };
+
 export function deskClearOfDoors(x: number, y: number): boolean {
   const half = 0.85 / 2 + 0.25;
   const depth = 0.6;

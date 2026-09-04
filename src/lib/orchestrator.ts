@@ -693,7 +693,8 @@ async function staffRoles(
       model,
     });
     if (created) {
-      await emit("TASK_STARTED", {
+      // TASK_CLAIMED → walking so the floor can spawn them at the front door.
+      await emit("TASK_CLAIMED", {
         agentId: agent.id,
         agentName: agent.name,
         position: agent.position,
