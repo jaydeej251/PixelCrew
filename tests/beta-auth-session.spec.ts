@@ -62,9 +62,10 @@ test.describe("beta auth session across marketing pages", () => {
 
     await page.goto("/");
     await expect(page.getByRole("link", { name: "Open office" }).first()).toBeVisible();
-    await expect(page.getByRole("link", { name: "Account" })).toBeVisible();
-    // Must not look logged out
+    await expect(page.getByRole("link", { name: "Account" }).first()).toBeVisible();
+    // Must not look logged out in header or hero
     await expect(page.getByRole("link", { name: "Log in" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Create free account" })).toHaveCount(0);
 
     const meAfterHome = await (await context.request.get("/api/auth/me")).json();
     expect(meAfterHome.user?.email).toBe(email);
