@@ -4,6 +4,7 @@ import { createProvider, resolveProviderConfig } from "./index";
 import {
   isOllamaCloudBaseUrl,
   isOllamaLocalBaseUrl,
+  ollamaNativeChatUrl,
   OLLAMA_CLOUD_BASE_URL,
   OLLAMA_LOCAL_BASE_URL,
 } from "../ollama-endpoints";
@@ -30,6 +31,8 @@ describe("ollama endpoint helpers", () => {
     assert.equal(isOllamaCloudBaseUrl(OLLAMA_CLOUD_BASE_URL), true);
     assert.equal(isOllamaCloudBaseUrl("https://ollama.com/v1/"), true);
     assert.equal(isOllamaCloudBaseUrl(OLLAMA_LOCAL_BASE_URL), false);
+    assert.equal(ollamaNativeChatUrl(OLLAMA_CLOUD_BASE_URL), "https://ollama.com/api/chat");
+    assert.equal(ollamaNativeChatUrl(OLLAMA_LOCAL_BASE_URL), "http://127.0.0.1:11434/api/chat");
   });
 });
 
@@ -100,5 +103,19 @@ describe("ollama provider config", () => {
         ),
       /Ollama Cloud requires an API key/,
     );
+  });
+
+  it("uses native /api/chat for Ollama Cloud, not OpenAI /v1/chat/completions", () => {
+    const provider = createProvider(
+      {
+        provider: "ollama",
+        apiKey: "ollama-cloud-test-key-12345",
+        baseUrl: OLLAMA_CLOUD_BASE_URL,
+        model: "gpt-oss:120b",
+      },
+      "engineer",
+      "Build a page",
+    );
+    assert.equal(provider.constructor.name, "OllamaNativeChatProvider");
   });
 });
