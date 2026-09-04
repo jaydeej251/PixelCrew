@@ -14,6 +14,7 @@ import {
 import { AppHeader } from "@/components/layout/app-header";
 import { SettingsDrawer } from "@/components/layout/settings-drawer";
 import { GoalComposer } from "@/components/layout/goal-composer";
+import { RunReadinessChecklist } from "@/components/layout/run-readiness-checklist";
 import { DashboardSkeleton } from "@/components/layout/dashboard-skeleton";
 import { ActivityFeed } from "@/components/office/activity-feed";
 import { Alert } from "@/components/ui/alert";
@@ -81,6 +82,9 @@ export function Dashboard() {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [credentialsRevision, setCredentialsRevision] = useState(0);
+  const [runReady, setRunReady] = useState(true);
+  const [runReadyReason, setRunReadyReason] = useState<string | null>(null);
   const [newChatDialogOpen, setNewChatDialogOpen] = useState(false);
   const [mobilePane, setMobilePane] = useState<"chats" | "work" | "files">("work");
   const [events, setEvents] = useState<RunEventMessage[]>([]);
@@ -472,6 +476,11 @@ export function Dashboard() {
 
   const startRun = async () => {
     if (!data) return;
+    if (!runReady) {
+      setRunError(runReadyReason ?? "Finish the checklist before starting.");
+      setSettingsOpen(true);
+      return;
+    }
     floorBusyRef.current = true;
     force3D();
     setRunning(true);
@@ -929,14 +938,33 @@ export function Dashboard() {
                 <p className="mb-2 text-center text-sm font-medium text-zinc-100 drop-shadow">
                   Your office is live — tell the team what to build
                 </p>
+                <RunReadinessChecklist
+                  workspaceId={data.workspace.id}
+                  provider={runProvider}
+                  model={runModel}
+                  onProviderChange={setRunProvider}
+                  onModelChange={setRunModel}
+                  onOpenSettings={() => setSettingsOpen(true)}
+                  credentialsRevision={credentialsRevision}
+                  onReadinessChange={(canStart, reason) => {
+                    setRunReady(canStart);
+                    setRunReadyReason(reason);
+                  }}
+                />
                 <GoalComposer
                   value={ceoGoal}
                   onChange={setCeoGoal}
                   onSubmit={() => void startRun()}
+                  disabled={!runReady}
                   submitting={running}
                   showExamples
                   compact
                 />
+                {!runReady && runReadyReason && (
+                  <p className="mt-2 text-center text-[11px] text-amber-400/90">
+                    {runReadyReason}
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -986,6 +1014,14 @@ export function Dashboard() {
         runModel={runModel}
         onProviderChange={setRunProvider}
         onModelChange={setRunModel}
+        onCredentialsChange={() => setCredentialsRevision((n) => n + 1)}
+        onProviderTestResult={(ok) => {
+          setCredentialsRevision((n) => n + 1);
+          if (ok) {
+            setRunReady(true);
+            setRunReadyReason(null);
+          }
+        }}
         onRefresh={async () => {
           await load();
         }}
