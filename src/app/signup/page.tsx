@@ -46,12 +46,25 @@ export default function SignupPage() {
       title="Create your account"
       subtitle="Tell the team what to build. They write the files."
       footer={
-        <p className="text-center text-sm text-zinc-500">
-          Already have an account?{" "}
-          <Link href="/login" className="text-indigo-400 hover:text-indigo-300">
-            Log in
-          </Link>
-        </p>
+        <div className="space-y-2 text-center text-sm text-zinc-500">
+          <p>
+            Already have an account?{" "}
+            <Link href="/login" className="text-indigo-400 hover:text-indigo-300">
+              Log in
+            </Link>
+          </p>
+          <p className="text-xs text-zinc-600">
+            By signing up you agree to the{" "}
+            <Link href="/terms" className="text-zinc-400 hover:text-zinc-200">
+              Terms
+            </Link>{" "}
+            and{" "}
+            <Link href="/privacy" className="text-zinc-400 hover:text-zinc-200">
+              Privacy
+            </Link>{" "}
+            notices (beta).
+          </p>
+        </div>
       }
     >
       <form onSubmit={submit} className="space-y-4">

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, LogOut, Settings } from "lucide-react";
+import { ChevronDown, LogOut, Settings, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PRODUCT_NAME } from "@/lib/constants";
 import { SHOW_DEV_TOOLS } from "@/lib/dev-tools";
@@ -23,6 +23,8 @@ type AppHeaderProps = {
   onOpenChats?: () => void;
   onOpenFiles?: () => void;
   filesCount?: number;
+  /** Free beta run usage, e.g. 2 of 5 this month. */
+  runUsage?: { used: number; limit: number; canRun: boolean } | null;
 };
 
 function statusChip(outcome: AppHeaderProps["runOutcome"], running: boolean) {
@@ -56,6 +58,7 @@ export function AppHeader({
   onOpenChats,
   onOpenFiles,
   filesCount = 0,
+  runUsage = null,
 }: AppHeaderProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -88,17 +91,34 @@ export function AppHeader({
               Chats
             </button>
           )}
-          <Link href="/app" className="flex items-center gap-2 shrink-0">
+          <Link href="/app" className="flex shrink-0 items-center gap-2">
             <span className="flex size-7 items-center justify-center rounded-md bg-indigo-500/20 text-xs font-semibold text-indigo-300">
               P
             </span>
             <span className="hidden font-medium text-zinc-100 sm:inline">{PRODUCT_NAME}</span>
+            <span className="hidden rounded bg-amber-500/15 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-amber-200 sm:inline">
+              Beta
+            </span>
           </Link>
           <span className="hidden h-4 w-px bg-zinc-800 sm:block" />
           <p className="hidden truncate text-sm text-zinc-500 sm:block">{workspaceName}</p>
         </div>
 
         <div className="flex items-center gap-1.5">
+          {runUsage && (
+            <span
+              className={cn(
+                "hidden rounded-md px-2 py-1 text-[11px] font-medium tabular-nums sm:inline",
+                runUsage.canRun
+                  ? "bg-zinc-900 text-zinc-400"
+                  : "bg-amber-500/15 text-amber-200",
+              )}
+              title="New runs this calendar month (resumes do not count)"
+            >
+              {runUsage.used}/{runUsage.limit} runs
+            </span>
+          )}
+
           {chip && (
             <span
               className={cn(
@@ -107,7 +127,7 @@ export function AppHeader({
               )}
             >
               {(running || runOutcome === "running") && (
-                <span className="size-1.5 rounded-full bg-indigo-400 animate-pulse" />
+                <span className="size-1.5 animate-pulse rounded-full bg-indigo-400" />
               )}
               {chip.label}
             </span>
@@ -163,18 +183,51 @@ export function AppHeader({
               onClick={() => setMenuOpen((o) => !o)}
               className="flex items-center gap-1.5 rounded-full border border-zinc-800 bg-zinc-900 p-0.5 pr-2 text-sm text-zinc-200 hover:border-zinc-700"
               aria-label="Account menu"
+              aria-expanded={menuOpen}
             >
               <span className="flex size-7 items-center justify-center rounded-full bg-zinc-800 text-xs font-medium text-zinc-300">
                 {initials}
               </span>
-              <ChevronDown size={14} className="hidden text-zinc-500 sm:block" />
+              <span className="hidden max-w-[7rem] truncate text-xs text-zinc-400 md:inline">
+                {displayName}
+              </span>
+              <ChevronDown size={14} className="text-zinc-500" />
             </button>
             {menuOpen && (
-              <div className="absolute right-0 top-full z-50 mt-1 w-56 rounded-xl border border-zinc-800 bg-zinc-950 py-1">
+              <div className="absolute right-0 top-full z-50 mt-1 w-56 rounded-xl border border-zinc-800 bg-zinc-950 py-1 shadow-xl">
                 <p className="truncate px-3 py-2 text-xs text-zinc-500">{userEmail ?? displayName}</p>
+                {runUsage && (
+                  <p
+                    className={cn(
+                      "px-3 pb-2 text-[11px] tabular-nums sm:hidden",
+                      runUsage.canRun ? "text-zinc-500" : "text-amber-300",
+                    )}
+                  >
+                    {runUsage.used}/{runUsage.limit} runs this month
+                  </p>
+                )}
+                <Link
+                  href="/account"
+                  className="flex w-full items-center gap-2 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  <UserRound size={14} />
+                  Account
+                </Link>
                 <button
                   type="button"
                   className="flex w-full items-center gap-2 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onOpenSettings();
+                  }}
+                >
+                  <Settings size={14} />
+                  Settings
+                </button>
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-300 hover:bg-zinc-800"
                   onClick={() => {
                     setMenuOpen(false);
                     onLogout();

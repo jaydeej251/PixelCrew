@@ -4,9 +4,24 @@ import bcrypt from "bcryptjs";
 import type { MembershipRole } from "@prisma/client";
 import { prisma } from "./db";
 import { agentAccessWhere, runAccessWhere, workspaceAccessWhere } from "./access";
+import { FREE_RUNS_PER_MONTH } from "./constants";
 
 export const SESSION_COOKIE = "pc_session";
 const SESSION_DAYS = 30;
+
+const PLAN_RUN_LIMITS: Record<string, number> = {
+  free: FREE_RUNS_PER_MONTH,
+  pro: 100,
+  enterprise: 10_000,
+};
+
+export type PlanUsage = {
+  canRun: boolean;
+  reason?: string;
+  used: number;
+  limit: number;
+  plan: string;
+};
 
 export type SessionUser = {
   id: string;
@@ -151,29 +166,41 @@ export function requireOrganizationRole(
   }
 }
 
-export async function checkPlanLimits(organizationId: string): Promise<{
-  canRun: boolean;
-  reason?: string;
-}> {
+export async function getPlanUsage(organizationId: string): Promise<PlanUsage> {
   const org = await prisma.organization.findUnique({ where: { id: organizationId } });
-  if (!org) return { canRun: false, reason: "Organization not found" };
+  if (!org) {
+    return { canRun: false, reason: "Organization not found", used: 0, limit: 0, plan: "free" };
+  }
 
   const monthStart = new Date();
   monthStart.setDate(1);
   monthStart.setHours(0, 0, 0, 0);
 
   // Counts new Run rows only (new chats/goals). Resuming a stopped run does not create a row.
-  const runCount = await prisma.run.count({
+  const used = await prisma.run.count({
     where: {
       workspace: { organizationId },
       createdAt: { gte: monthStart },
     },
   });
 
-  const limits: Record<string, number> = { free: 5, pro: 100, enterprise: 10000 };
-  const limit = limits[org.plan] ?? 5;
-  if (runCount >= limit) {
-    return { canRun: false, reason: `Plan limit reached (${limit} runs/month)` };
+  const limit = PLAN_RUN_LIMITS[org.plan] ?? FREE_RUNS_PER_MONTH;
+  if (used >= limit) {
+    return {
+      canRun: false,
+      reason: `Free beta limit reached (${limit} runs/month). Resume existing chats anytime.`,
+      used,
+      limit,
+      plan: org.plan,
+    };
   }
-  return { canRun: true };
+  return { canRun: true, used, limit, plan: org.plan };
+}
+
+export async function checkPlanLimits(organizationId: string): Promise<{
+  canRun: boolean;
+  reason?: string;
+}> {
+  const usage = await getPlanUsage(organizationId);
+  return { canRun: usage.canRun, reason: usage.reason };
 }
