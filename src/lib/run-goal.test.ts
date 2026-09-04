@@ -11,8 +11,8 @@ describe("normalizeNewRunGoal", () => {
 
   it("trims and preserves the goal submitted for this run", () => {
     assert.equal(
-      normalizeNewRunGoal("  Build MoodLedger, not a portfolio.  "),
-      "Build MoodLedger, not a portfolio.",
+      normalizeNewRunGoal("  Build VibeLog, not a portfolio.  "),
+      "Build VibeLog, not a portfolio.",
     );
   });
 });
