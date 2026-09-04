@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { OfficeAgent } from "../../lib/office";
-import { atDesk, atPlanningSeat, ensureLife, simulateOfficeLife, type LifeState } from "./office-life";
+import {
+  activityLabel,
+  atDesk,
+  atFrontDoor,
+  atPlanningSeat,
+  ensureLife,
+  simulateOfficeLife,
+  workBadgeLabel,
+  type LifeState,
+} from "./office-life";
 
 function agent(id: string, deskX = 2, deskY = 2): OfficeAgent {
   return {
@@ -17,6 +26,35 @@ function agent(id: string, deskX = 2, deskY = 2): OfficeAgent {
 }
 
 describe("simulateOfficeLife", () => {
+  it("spawns walking agents at the front door, then walks to the desk", () => {
+    const casey = agent("a1");
+    const map = new Map<string, LifeState>();
+    ensureLife(map, casey, 0, "walking");
+    const life = map.get("a1")!;
+    const door = atFrontDoor();
+    const desk = atDesk(casey);
+
+    assert.ok(Math.hypot(life.x - door.x, life.z - door.z) < 0.05);
+    assert.equal(life.activity, "walk");
+
+    for (let i = 0; i < 120; i++) {
+      simulateOfficeLife(map, [casey], { a1: "walking" }, i * 0.05, 0.05, false);
+    }
+
+    assert.ok(Math.hypot(life.x - desk.x, life.z - desk.z) < 0.12);
+    assert.equal(life.activity, "wait");
+  });
+
+  it("still seats idle agents at their desk on first spawn", () => {
+    const casey = agent("a1");
+    const map = new Map<string, LifeState>();
+    ensureLife(map, casey, 0, "idle");
+    const life = map.get("a1")!;
+    const desk = atDesk(casey);
+    assert.ok(Math.hypot(life.x - desk.x, life.z - desk.z) < 0.05);
+    assert.equal(life.activity, "stand");
+  });
+
   it("walks to the desk only after a task is claimed, then waits", () => {
     const casey = agent("a1");
     const map = new Map<string, LifeState>();
@@ -101,6 +139,23 @@ describe("simulateOfficeLife", () => {
     assert.ok(Math.hypot(life.x - desk.x, life.z - desk.z) > 1);
   });
 
+  it("walks a newly hired planner from the door into the planning meeting", () => {
+    const riley = planner("e1");
+    const map = new Map<string, LifeState>();
+    ensureLife(map, riley, 0, "walking");
+    const life = map.get("e1")!;
+    const door = atFrontDoor();
+    assert.ok(Math.hypot(life.x - door.x, life.z - door.z) < 0.05);
+
+    for (let i = 0; i < 120; i++) {
+      simulateOfficeLife(map, [riley], { e1: "walking" }, i * 0.05, 0.05, true);
+    }
+
+    const seat = atPlanningSeat(riley, 0);
+    assert.ok(Math.hypot(life.x - seat.x, life.z - seat.z) < 0.12);
+    assert.equal(life.activity, "meet");
+  });
+
   it("never seats an executive at a coding desk even when working", () => {
     const riley = planner("e1");
     const map = new Map<string, LifeState>();
@@ -116,6 +171,15 @@ describe("simulateOfficeLife", () => {
 
     assert.equal(life.activity, "meet");
     assert.notEqual(life.activity, "work");
+  });
+});
+
+describe("activity labels", () => {
+  it("marks QA work as reviewing", () => {
+    assert.equal(activityLabel("Sam", "work", "qa_engineer"), "Sam · reviewing");
+    assert.equal(activityLabel("Casey", "work", "frontend_engineer"), "Casey · coding");
+    assert.equal(workBadgeLabel("qa_engineer"), "QA");
+    assert.equal(workBadgeLabel("frontend_engineer"), "CODING");
   });
 });
 

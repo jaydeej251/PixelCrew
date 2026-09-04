@@ -1,6 +1,7 @@
 import type { AgentStatus } from "@prisma/client";
 import type { OfficeAgent } from "@/lib/office";
 import {
+  FRONT_DOOR,
   gridToWorld,
   hallWaypoint,
   PLANNING_SEATS,
@@ -49,6 +50,30 @@ export function atDesk(agent: OfficeAgent): { x: number; z: number } {
   const home = agent.desk ?? { x: 4, y: 4 };
   const [wx, , wz] = gridToWorld(home.x, home.y);
   return { x: wx + 0.04, z: wz + 0.48 };
+}
+
+export function atFrontDoor(): { x: number; z: number } {
+  const [wx, , wz] = gridToWorld(FRONT_DOOR.x, FRONT_DOOR.y);
+  return { x: wx, z: wz + 0.35 };
+}
+
+export function isQaEngineer(position: string) {
+  return position === "qa_engineer";
+}
+
+export function activityLabel(first: string, act: LifeActivity, position?: string) {
+  if (act === "work" && position && isQaEngineer(position)) return `${first} · reviewing`;
+  if (act === "work") return `${first} · coding`;
+  if (act === "meet") return `${first} · planning`;
+  if (act === "wait") return `${first} · at desk`;
+  if (act === "talk") return `${first} · chatting`;
+  if (act === "walk") return `${first} · walking`;
+  if (act === "stuck") return `${first} · stuck`;
+  return first;
+}
+
+export function workBadgeLabel(position?: string) {
+  return position && isQaEngineer(position) ? "QA" : "CODING";
 }
 
 export function isMeetingRole(position: string) {
@@ -128,18 +153,25 @@ function goToDesk(life: LifeState, agent: OfficeAgent, dt: number, speed: number
   return goTo(life, p, { x: p.x, z: p.z - 1 }, dt, speed, then);
 }
 
-export function ensureLife(map: Map<string, LifeState>, agent: OfficeAgent, now: number) {
+export function ensureLife(
+  map: Map<string, LifeState>,
+  agent: OfficeAgent,
+  now: number,
+  status?: AgentStatus,
+) {
   if (map.has(agent.id)) return;
-  const p = atDesk(agent);
+  const desk = atDesk(agent);
+  const arriving = status === "walking" || status === "handoff";
+  const start = arriving ? atFrontDoor() : desk;
   map.set(agent.id, {
-    x: p.x,
-    z: p.z,
-    tx: p.x,
-    tz: p.z,
+    x: start.x,
+    z: start.z,
+    tx: desk.x,
+    tz: desk.z,
     until: now + 0.3 + (hash(agent.id) % 8) * 0.15,
-    activity: "stand",
-    faceX: p.x,
-    faceZ: p.z - 1,
+    activity: arriving ? "walk" : "stand",
+    faceX: desk.x,
+    faceZ: desk.z - 1,
     workHoldUntil: 0,
   });
 }
@@ -169,8 +201,8 @@ export function simulateOfficeLife(
   });
 
   for (const agent of agents) {
-    ensureLife(map, agent, now);
     const st = statuses[agent.id] ?? agent.status;
+    ensureLife(map, agent, now, st);
     const life = map.get(agent.id)!;
     if (st === "working") {
       life.workHoldUntil = Math.max(life.workHoldUntil, now + 6);
@@ -239,7 +271,7 @@ export function simulateOfficeLife(
 
         if (wantChat) {
           const partner = others[salt % others.length];
-          ensureLife(map, partner, now);
+          ensureLife(map, partner, now, statuses[partner.id] ?? partner.status);
           const other = map.get(partner.id)!;
           const mx = (life.x + other.x) / 2;
           const mz = (life.z + other.z) / 2;

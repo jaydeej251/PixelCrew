@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { motion } from "framer-motion";
 import { CharacterSprite } from "./character-sprite";
 import { depth, TILE_H, TILE_W, toIso } from "./iso";
@@ -12,6 +12,7 @@ import {
   planningSeatGrid,
 } from "./office-life";
 import {
+  FRONT_DOOR,
   GRID_MAX,
   GRID_MIN,
   ROOM_RECTS,
@@ -31,6 +32,20 @@ export function OfficeFloor({
   blueprint,
   editor,
 }: OfficeViewProps) {
+  const seenAgentsRef = useRef(new Set<string>());
+  const doorArrivals = useMemo(() => {
+    const ids = new Set<string>();
+    for (const agent of agents) {
+      if (seenAgentsRef.current.has(agent.id)) continue;
+      const status = agentStatuses[agent.id] ?? agent.status;
+      if (status === "walking" || status === "handoff") ids.add(agent.id);
+    }
+    return ids;
+  }, [agents, agentStatuses]);
+
+  useEffect(() => {
+    for (const agent of agents) seenAgentsRef.current.add(agent.id);
+  }, [agents]);
   const tiles = useMemo(() => {
     const list: Array<{ key: string; x: number; y: number; room: string }> = [];
     for (let y = GRID_MIN; y <= GRID_MAX; y++) {
@@ -233,15 +248,20 @@ export function OfficeFloor({
               : agentGridPos(agent, status, desks, agents, events);
           const iso = toIso(at.x, at.y);
           const seated = meet || status === "working";
+          const left = iso.left + (seated ? 28 : 18);
+          const top = iso.top + (seated ? -36 : -52);
+          const arriveFromDoor = doorArrivals.has(agent.id);
+          const doorIso = toIso(FRONT_DOOR.x, FRONT_DOOR.y);
           return (
             <motion.div
               key={agent.id}
               className="iso-actor"
-              initial={false}
-              animate={{
-                left: iso.left + (seated ? 28 : 18),
-                top: iso.top + (seated ? -36 : -52),
-              }}
+              initial={
+                arriveFromDoor
+                  ? { left: doorIso.left + 18, top: doorIso.top - 52 }
+                  : false
+              }
+              animate={{ left, top }}
               transition={{
                 duration: status === "handoff" || status === "walking" ? 1.8 : 0.45,
                 ease: "easeInOut",
@@ -252,6 +272,7 @@ export function OfficeFloor({
                 name={agent.name}
                 color={agent.avatarColor}
                 status={status}
+                position={agent.position}
                 selected={selectedAgentId === agent.id}
                 onClick={() => onSelectAgent?.(agent.id)}
               />

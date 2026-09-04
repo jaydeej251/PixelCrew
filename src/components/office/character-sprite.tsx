@@ -4,11 +4,13 @@ import type { AgentStatus } from "@prisma/client";
 import { statusToAnimation } from "@/lib/office";
 import { shade } from "./iso";
 import { cn } from "@/lib/utils";
+import { isQaEngineer } from "./office-life";
 
 type CharacterSpriteProps = {
   name: string;
   color: string;
   status: AgentStatus;
+  position?: string;
   selected?: boolean;
   onClick?: () => void;
 };
@@ -21,10 +23,19 @@ function poseOf(status: AgentStatus) {
   return "idle";
 }
 
+function poseLabel(pose: string, position?: string) {
+  if (pose === "type" && position && isQaEngineer(position)) return " · reviewing";
+  if (pose === "type") return " · coding";
+  if (pose === "walk") return " · walking";
+  if (pose === "stuck") return " · stuck";
+  return "";
+}
+
 export function CharacterSprite({
   name,
   color,
   status,
+  position,
   selected,
   onClick,
 }: CharacterSpriteProps) {
@@ -64,7 +75,7 @@ export function CharacterSprite({
       {pose === "walk" && <span className="office-doc" aria-hidden />}
       <span className="office-nametag">
         {first}
-        {pose === "type" ? " · coding" : pose === "walk" ? " · walking" : pose === "stuck" ? " · stuck" : ""}
+        {poseLabel(pose, position)}
       </span>
     </button>
   );
