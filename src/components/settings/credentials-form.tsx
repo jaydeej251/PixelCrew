@@ -81,7 +81,9 @@ export function CredentialsForm({
       </PanelHeader>
       <PanelContent>
         <p className="mb-3 text-xs text-zinc-500">
-          Optional. Add a key if you want a real model instead of Mock.
+          Add a key for a real model. Ollama Cloud needs the full{" "}
+          <code className="text-zinc-400">id.secret</code> — incomplete keys are rejected.
+          Skip only if you want Mock.
         </p>
         {saved.length > 0 && (
           <ul className="mb-3 space-y-1 text-xs text-zinc-400">
@@ -169,6 +171,18 @@ export function CredentialsForm({
               !apiKey.trim()
             ) {
               setError("API key is required for Ollama Cloud");
+              setSaving(false);
+              return;
+            }
+
+            if (
+              provider === "ollama" &&
+              isOllamaCloudBaseUrl(baseUrl) &&
+              looksLikeIncompleteOllamaApiKey(apiKey)
+            ) {
+              setError(
+                "That key looks incomplete. Paste the full id.secret from ollama.com/settings/keys before saving.",
+              );
               setSaving(false);
               return;
             }

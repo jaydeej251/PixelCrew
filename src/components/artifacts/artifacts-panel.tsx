@@ -5,7 +5,7 @@ import { Download, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Markdown, plainTextFromMarkdown } from "@/components/ui/markdown";
 import { ThoughtProcessView } from "@/components/artifacts/thought-process-view";
-import { isPackagerFallbackHtml, isProjectPath } from "@/lib/project-files";
+import { isPackagerFallbackHtml, hasPreviewableApp, isProjectPath } from "@/lib/project-files";
 import { PreviewModal } from "@/components/artifacts/preview-modal";
 import type { ThoughtTask } from "@/lib/thought-process";
 import type { RunEventMessage } from "@/lib/events";
@@ -69,7 +69,7 @@ export function ArtifactsPanel({
     return { files, drafts };
   }, [artifacts]);
 
-  const previewReady = files.length > 0 || runFinished;
+  const previewReady = hasPreviewableApp(artifacts, ceoGoal);
   const hasThoughts = Boolean(ceoGoal.trim()) || tasks.length > 0 || events.length > 0;
 
   return (
@@ -97,6 +97,9 @@ export function ArtifactsPanel({
                 <Eye size={14} />
                 Preview
               </Button>
+            )}
+            {!previewReady && runFinished && (
+              <span className="px-1 text-[11px] text-zinc-500">No previewable HTML yet</span>
             )}
             <a href={`/api/runs/${runId}/export`} download>
               <Button variant="ghost" className="!h-8 !px-2">
