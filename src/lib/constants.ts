@@ -1,5 +1,12 @@
 export const PRODUCT_NAME = process.env.PRODUCT_NAME ?? "PixelCrew";
 
+/** Public support inbox — override with NEXT_PUBLIC_SUPPORT_EMAIL. */
+export const SUPPORT_EMAIL =
+  process.env.NEXT_PUBLIC_SUPPORT_EMAIL ?? "support@pixelcrew.app";
+
+/** Free-tier new runs per calendar month (matches checkPlanLimits). */
+export const FREE_RUNS_PER_MONTH = 5;
+
 export const DEFAULT_CONCURRENCY_CAP = 2;
 
 export const POSITIONS = {
