@@ -1,10 +1,11 @@
 import { cookies } from "next/headers";
 import { createHash, randomBytes } from "crypto";
 import bcrypt from "bcryptjs";
-import type { MembershipRole } from "@prisma/client";
+import type { MembershipRole, PlatformRole } from "@prisma/client";
 import { prisma } from "./db";
 import { agentAccessWhere, runAccessWhere, workspaceAccessWhere } from "./access";
 import { FREE_RUNS_PER_MONTH } from "./constants";
+import { persistPlatformRoleUpgrade, PLATFORM_OPS_ROLES } from "./platform-admin";
 
 export const SESSION_COOKIE = "pc_session";
 const SESSION_DAYS = 30;
@@ -30,6 +31,7 @@ export type SessionUser = {
   organizationId: string;
   workspaceId: string;
   role: MembershipRole;
+  platformRole: PlatformRole;
 };
 
 function hashToken(token: string): string {
@@ -94,6 +96,12 @@ export async function getSessionFromToken(token: string): Promise<SessionUser | 
   const workspace = membership?.organization.workspaces[0];
   if (!membership || !workspace) return null;
 
+  const platformRole = await persistPlatformRoleUpgrade(
+    session.user.id,
+    session.user.email,
+    session.user.platformRole,
+  );
+
   return {
     id: session.user.id,
     email: session.user.email,
@@ -101,6 +109,7 @@ export async function getSessionFromToken(token: string): Promise<SessionUser | 
     organizationId: membership.organizationId,
     workspaceId: workspace.id,
     role: membership.role,
+    platformRole,
   };
 }
 
@@ -163,6 +172,16 @@ export function requireOrganizationRole(
 ): void {
   if (!allowedRoles.includes(session.role)) {
     throw new AuthError("Forbidden");
+  }
+}
+
+/** Throws Not found (404) so non-admins cannot discover the admin surface. */
+export function requirePlatformRole(
+  session: SessionUser,
+  allowed: readonly PlatformRole[] = PLATFORM_OPS_ROLES,
+): void {
+  if (!allowed.includes(session.platformRole)) {
+    throw new AuthError("Not found");
   }
 }
 

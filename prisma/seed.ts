@@ -2,9 +2,17 @@ import { seedDatabase } from "../src/lib/seed";
 
 async function main() {
   const result = await seedDatabase();
-  console.log("Seeded:", result.workspace?.name);
+  console.log(result.message);
+  for (const account of result.accounts) {
+    console.log(`- ${account.kind}: ${account.user.email} (${account.org.plan})`);
+  }
 }
 
 main()
-  .catch(console.error)
-  .finally(() => process.exit(0));
+  .catch((err) => {
+    console.error(err instanceof Error ? err.message : err);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    process.exit(process.exitCode ?? 0);
+  });
