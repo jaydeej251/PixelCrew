@@ -1,18 +1,12 @@
-import Link from "next/link";
 import { PRODUCT_NAME, SUPPORT_EMAIL } from "@/lib/constants";
 import { SiteFooter } from "@/components/layout/site-footer";
+import { SiteHeader } from "@/components/layout/site-header";
 
 export default function TermsPage() {
   return (
     <div className="flex min-h-screen flex-col bg-zinc-950 text-zinc-100">
-      <header className="border-b border-zinc-800 px-6 py-4">
-        <div className="mx-auto max-w-3xl">
-          <Link href="/" className="font-semibold">
-            {PRODUCT_NAME}
-          </Link>
-        </div>
-      </header>
-      <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-12 prose-invert">
+      <SiteHeader narrow />
+      <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-12">
         <h1 className="text-2xl font-bold">Terms of use (beta)</h1>
         <p className="mt-2 text-sm text-zinc-500">Last updated: 4 September 2026 · Free beta</p>
         <div className="mt-8 space-y-4 text-sm leading-relaxed text-zinc-400">

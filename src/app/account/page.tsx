@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { PRODUCT_NAME, SUPPORT_EMAIL } from "@/lib/constants";
+import { SUPPORT_EMAIL } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { SiteFooter } from "@/components/layout/site-footer";
+import { SiteHeader } from "@/components/layout/site-header";
 
 export default function AccountPage() {
   const router = useRouter();
@@ -18,12 +19,8 @@ export default function AccountPage() {
   useEffect(() => {
     void (async () => {
       const res = await fetch("/api/auth/me");
-      if (res.status === 401) {
-        router.replace("/login?from=/account");
-        return;
-      }
-      const json = await res.json();
-      if (!json.user) {
+      const json = await res.json().catch(() => null);
+      if (!json?.user) {
         router.replace("/login?from=/account");
         return;
       }
@@ -41,7 +38,7 @@ export default function AccountPage() {
 
   const deleteAccount = async () => {
     if (confirmDelete !== "DELETE") {
-      setError('Type DELETE to confirm.');
+      setError("Type DELETE to confirm.");
       return;
     }
     setBusy(true);
@@ -59,16 +56,7 @@ export default function AccountPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-zinc-950 text-zinc-100">
-      <header className="border-b border-zinc-800 px-6 py-4">
-        <div className="mx-auto flex max-w-3xl items-center justify-between">
-          <Link href="/" className="font-semibold">
-            {PRODUCT_NAME}
-          </Link>
-          <Link href="/app">
-            <Button variant="ghost">Back to office</Button>
-          </Link>
-        </div>
-      </header>
+      <SiteHeader narrow />
       <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-12">
         <h1 className="text-2xl font-bold">Account</h1>
         <p className="mt-2 text-sm text-zinc-500">
@@ -82,15 +70,22 @@ export default function AccountPage() {
             <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
               <p className="text-xs text-zinc-500">Signed in as</p>
               <p className="mt-1 text-sm text-zinc-200">{email}</p>
-              <Button
-                type="button"
-                variant="secondary"
-                className="mt-4"
-                disabled={busy}
-                onClick={() => void logout()}
-              >
-                Log out
-              </Button>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Link href="/app">
+                  <Button type="button" variant="secondary">
+                    Open office
+                  </Button>
+                </Link>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="text-red-300"
+                  disabled={busy}
+                  onClick={() => void logout()}
+                >
+                  Log out
+                </Button>
+              </div>
             </div>
 
             <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
@@ -99,8 +94,12 @@ export default function AccountPage() {
                 Broken run? Email{" "}
                 <a className="text-indigo-400 hover:text-indigo-300" href={`mailto:${SUPPORT_EMAIL}`}>
                   {SUPPORT_EMAIL}
-                </a>
-                .
+                </a>{" "}
+                or open{" "}
+                <Link href="/support" className="text-indigo-400 hover:text-indigo-300">
+                  Support
+                </Link>{" "}
+                (that page does not log you out).
               </p>
             </div>
 

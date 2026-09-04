@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { PRODUCT_NAME, FREE_RUNS_PER_MONTH } from "@/lib/constants";
-import { Button } from "@/components/ui/button";
 import { Panel, PanelContent, PanelHeader, PanelTitle } from "@/components/ui/panel";
 import { SiteFooter } from "@/components/layout/site-footer";
+import { SiteHeader } from "@/components/layout/site-header";
 
 const PLANS = [
   {
@@ -36,19 +36,7 @@ const PLANS = [
 export default function PricingPage() {
   return (
     <div className="flex min-h-screen flex-col bg-zinc-950 text-zinc-100">
-      <header className="border-b border-zinc-800 px-6 py-4">
-        <div className="mx-auto flex max-w-5xl items-center justify-between">
-          <Link href="/" className="flex items-center gap-2 font-semibold">
-            {PRODUCT_NAME}
-            <span className="rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-200">
-              Beta
-            </span>
-          </Link>
-          <Link href="/signup">
-            <Button variant="secondary">Create free account</Button>
-          </Link>
-        </div>
-      </header>
+      <SiteHeader />
       <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-16">
         <h1 className="text-center text-3xl font-bold">Pricing</h1>
         <p className="mt-2 text-center text-zinc-400">
@@ -82,6 +70,11 @@ export default function PricingPage() {
             </Panel>
           ))}
         </div>
+        <p className="mt-8 text-center text-sm text-zinc-600">
+          <Link href="/" className="hover:text-zinc-300">
+            ← Back to {PRODUCT_NAME}
+          </Link>
+        </p>
       </main>
       <SiteFooter />
     </div>

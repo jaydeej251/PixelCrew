@@ -1,32 +1,13 @@
 import Link from "next/link";
-import { PRODUCT_NAME, FREE_RUNS_PER_MONTH, SUPPORT_EMAIL } from "@/lib/constants";
+import { FREE_RUNS_PER_MONTH, SUPPORT_EMAIL } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { SiteFooter } from "@/components/layout/site-footer";
+import { SiteHeader } from "@/components/layout/site-header";
 
 export default function Home() {
   return (
     <div className="auth-grid flex min-h-screen flex-col text-zinc-100">
-      <header className="border-b border-zinc-800/80 px-6 py-4">
-        <div className="mx-auto flex max-w-5xl items-center justify-between">
-          <span className="flex items-center gap-2 font-semibold tracking-tight">
-            <span className="flex size-8 items-center justify-center rounded-lg bg-indigo-500/20 text-sm text-indigo-300">
-              P
-            </span>
-            {PRODUCT_NAME}
-            <span className="rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-200">
-              Beta
-            </span>
-          </span>
-          <div className="flex gap-2">
-            <Link href="/login">
-              <Button variant="ghost">Log in</Button>
-            </Link>
-            <Link href="/signup">
-              <Button>Get started</Button>
-            </Link>
-          </div>
-        </div>
-      </header>
+      <SiteHeader />
       <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-6 py-16 text-center sm:py-20">
         <p className="text-xs font-medium uppercase tracking-wide text-amber-200/90">
           Free beta · {FREE_RUNS_PER_MONTH} runs / month · bring your own keys
@@ -51,12 +32,12 @@ export default function Home() {
           </ul>
         </div>
         <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
-          <Link href="/signup">
-            <Button className="min-w-[160px] px-6 py-3">Create free account</Button>
+          <Link href="/app">
+            <Button className="min-w-[160px] px-6 py-3">Open office</Button>
           </Link>
-          <Link href="/login">
+          <Link href="/signup">
             <Button variant="secondary" className="min-w-[160px] px-6 py-3">
-              Log in
+              Create free account
             </Button>
           </Link>
         </div>
