@@ -1,21 +1,11 @@
-import Link from "next/link";
 import { PRODUCT_NAME, SUPPORT_EMAIL } from "@/lib/constants";
-import { Button } from "@/components/ui/button";
 import { SiteFooter } from "@/components/layout/site-footer";
+import { SiteHeader } from "@/components/layout/site-header";
 
 export default function SupportPage() {
   return (
     <div className="flex min-h-screen flex-col bg-zinc-950 text-zinc-100">
-      <header className="border-b border-zinc-800 px-6 py-4">
-        <div className="mx-auto flex max-w-3xl items-center justify-between">
-          <Link href="/" className="font-semibold">
-            {PRODUCT_NAME}
-          </Link>
-          <Link href="/account">
-            <Button variant="ghost">Account</Button>
-          </Link>
-        </div>
-      </header>
+      <SiteHeader narrow />
       <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-12">
         <h1 className="text-2xl font-bold">Support</h1>
         <p className="mt-2 text-zinc-400">
@@ -35,9 +25,11 @@ export default function SupportPage() {
           </p>
         </div>
         <p className="mt-6 text-sm text-zinc-500">
-          <Link href="/account" className="text-zinc-400 hover:text-zinc-200">
-            Manage account / delete data
-          </Link>
+          Prefer in-app controls? Open{" "}
+          <a href="/account" className="text-zinc-400 hover:text-zinc-200">
+            Account
+          </a>{" "}
+          to log out or delete data — visiting Support never signs you out.
         </p>
       </main>
       <SiteFooter />
