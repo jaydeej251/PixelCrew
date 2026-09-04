@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { getOllamaEndpointMode } from "@/lib/ollama-models";
@@ -36,55 +36,68 @@ export function RunReadinessChecklist({
   credentialsRevision = 0,
   onReadinessChange,
 }: RunReadinessChecklistProps) {
-  const [statuses, setStatuses] = useState<ProviderReadyStatus[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [statuses, setStatuses] = useState<ProviderReadyStatus[] | null>(null);
   const [testing, setTesting] = useState(false);
   const [testMessage, setTestMessage] = useState<string | null>(null);
   /** null = use sessionStorage; boolean = result of an in-session Test click. */
   const [liveTestResult, setLiveTestResult] = useState<boolean | null>(null);
 
   const providerRef = useRef(provider);
-  providerRef.current = provider;
+  const onProviderChangeRef = useRef(onProviderChange);
+  const onModelChangeRef = useRef(onModelChange);
+  const onReadinessChangeRef = useRef(onReadinessChange);
 
-  const reload = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/providers/status?workspaceId=${workspaceId}`);
-      const data = await res.json();
-      const next = (data.providers ?? []) as ProviderReadyStatus[];
-      setStatuses(next);
-      return next;
-    } catch {
-      setStatuses([]);
-      return [] as ProviderReadyStatus[];
-    } finally {
-      setLoading(false);
-    }
-  }, [workspaceId]);
-
-  // Auto-pick a ready real provider only while still on Mock (first load / new credentials).
-  // Do not depend on `provider` — otherwise choosing Mock in Settings immediately reverts.
+  // Keep latest callbacks/provider for async fetches without render-time ref writes.
   useEffect(() => {
-    void reload().then((next) => {
-      if (providerRef.current !== "mock") return;
-      const pick = preferReadyProvider(next, "mock");
-      if (!pick) return;
-      onProviderChange(pick.provider);
-      onModelChange(pick.model);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- credentialsRevision drives re-pick; avoid fighting manual Mock
-  }, [reload, credentialsRevision]);
+    providerRef.current = provider;
+    onProviderChangeRef.current = onProviderChange;
+    onModelChangeRef.current = onModelChange;
+    onReadinessChangeRef.current = onReadinessChange;
+  }, [provider, onProviderChange, onModelChange, onReadinessChange]);
 
-  const status = statuses.find((s) => s.provider === provider);
+  // Load provider status. setState only in the fetch callback (not sync in the effect body).
+  useEffect(() => {
+    let cancelled = false;
+
+    fetch(`/api/providers/status?workspaceId=${encodeURIComponent(workspaceId)}`)
+      .then((res) => res.json())
+      .then((data: { providers?: ProviderReadyStatus[] }) => {
+        if (cancelled) return;
+        const next = data.providers ?? [];
+        setStatuses(next);
+        // Auto-pick a ready real provider only while still on Mock (first load / new keys).
+        // providerRef is updated in a separate effect — do not depend on `provider` here
+        // or choosing Mock in Settings immediately reverts.
+        if (providerRef.current !== "mock") return;
+        const pick = preferReadyProvider(next, "mock");
+        if (!pick) return;
+        onProviderChangeRef.current(pick.provider);
+        onModelChangeRef.current(pick.model);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setStatuses([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId, credentialsRevision]);
+
+  const status = (statuses ?? []).find((s) => s.provider === provider);
   const ollamaMode =
     provider === "ollama" ? getOllamaEndpointMode(status?.activeBaseUrl) : null;
   const needsTest = providerRequiresLiveKeyTest(provider, ollamaMode);
   const credentialId = status?.activeCredentialId ?? null;
 
-  useEffect(() => {
+  // Reset live test UI when the test scope changes (adjust state during render — React-supported).
+  const testIdentity = `${workspaceId}|${provider}|${credentialId ?? ""}|${needsTest}|${credentialsRevision}`;
+  const [activeTestIdentity, setActiveTestIdentity] = useState(testIdentity);
+  if (activeTestIdentity !== testIdentity) {
+    setActiveTestIdentity(testIdentity);
     setLiveTestResult(null);
     setTestMessage(null);
-  }, [workspaceId, provider, credentialId, needsTest, credentialsRevision]);
+  }
 
   const sessionTestOk = needsTest
     ? readProviderTestOk(workspaceId, provider, credentialId)
@@ -102,22 +115,16 @@ export function RunReadinessChecklist({
     [provider, model, status, testOk],
   );
 
-  const lastReadyRef = useRef<{ canStart: boolean; reason: string | null } | null>(null);
+  const lastReadyKeyRef = useRef<string>("");
   useEffect(() => {
-    const prev = lastReadyRef.current;
-    if (
-      prev &&
-      prev.canStart === readiness.canStart &&
-      prev.reason === readiness.blockingReason
-    ) {
-      return;
-    }
-    lastReadyRef.current = {
-      canStart: readiness.canStart,
-      reason: readiness.blockingReason,
-    };
-    onReadinessChange?.(readiness.canStart, readiness.blockingReason);
-  }, [readiness.canStart, readiness.blockingReason, onReadinessChange]);
+    const key = `${readiness.canStart}:${readiness.blockingReason ?? ""}`;
+    if (lastReadyKeyRef.current === key) return;
+    lastReadyKeyRef.current = key;
+    // Defer parent update so this effect does not sync-set parent state.
+    queueMicrotask(() => {
+      onReadinessChangeRef.current?.(readiness.canStart, readiness.blockingReason);
+    });
+  }, [readiness.canStart, readiness.blockingReason]);
 
   const runTest = async () => {
     if (provider !== "openrouter" && provider !== "ollama") return;
@@ -147,6 +154,8 @@ export function RunReadinessChecklist({
     }
   };
 
+  const loading = statuses === null;
+
   return (
     <div className="mb-3 rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-3 text-left shadow-lg ring-1 ring-white/5 backdrop-blur-md">
       <div className="mb-2 flex items-center justify-between gap-2">
@@ -163,7 +172,7 @@ export function RunReadinessChecklist({
         </button>
       </div>
 
-      {loading && statuses.length === 0 ? (
+      {loading ? (
         <p className="text-xs text-zinc-500">Checking providers…</p>
       ) : (
         <ul className="space-y-1.5">
