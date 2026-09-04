@@ -19,6 +19,8 @@ type SettingsDrawerProps = {
   onModelChange: (v: string) => void;
   onRefresh: () => Promise<void>;
   onAgentRemoved?: (id: string) => void;
+  onCredentialsChange?: () => void;
+  onProviderTestResult?: (ok: boolean) => void;
 };
 
 export function SettingsDrawer({
@@ -32,8 +34,15 @@ export function SettingsDrawer({
   onModelChange,
   onRefresh,
   onAgentRemoved,
+  onCredentialsChange,
+  onProviderTestResult,
 }: SettingsDrawerProps) {
   const [credentialsRevision, setCredentialsRevision] = useState(0);
+
+  const bumpCredentials = () => {
+    setCredentialsRevision((n) => n + 1);
+    onCredentialsChange?.();
+  };
 
   return (
     <Drawer open={open} onClose={onClose} title="Settings">
@@ -73,7 +82,7 @@ export function SettingsDrawer({
         />
         <CredentialsForm
           workspaceId={workspaceId}
-          onCredentialsChange={() => setCredentialsRevision((n) => n + 1)}
+          onCredentialsChange={bumpCredentials}
           onSave={async (cred) => {
             const response = await fetch("/api/credentials", {
               method: "POST",
@@ -95,6 +104,7 @@ export function SettingsDrawer({
           onProviderChange={onProviderChange}
           onModelChange={onModelChange}
           credentialsRevision={credentialsRevision}
+          onProviderTestResult={onProviderTestResult}
         />
       </div>
     </Drawer>
