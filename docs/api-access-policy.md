@@ -12,6 +12,8 @@ provider signatures are their trust boundary.
 | --- | --- | --- | --- |
 | `/api/auth/login` | POST | Public | Credential verification; rate limit required before public launch |
 | `/api/auth/signup` | POST | Public | Creates a new organization; rate limit required before public launch |
+| `/api/auth/oauth/:provider` | GET | Public | Starts Google/GitHub OAuth; sets signed state cookie; rate limited |
+| `/api/auth/callback/:provider` | GET | Public | OAuth callback; verifies state, links/creates user, sets `pc_session` |
 | `/api/auth/logout` | POST | Session-aware | Deletes the presented session when present |
 | `/api/auth/me` | GET | Session-aware | Returns only the current session identity |
 | `/api/waitlist` | POST | Public | Email-only intake; rate limit required before public launch |
