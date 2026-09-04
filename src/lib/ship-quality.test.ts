@@ -214,4 +214,43 @@ describe("evalShippedProject", () => {
     );
     assert.equal(report.passed, true, formatShipReport(report));
   });
+
+  it("fails a renamed landing page that violates explicit product bans", () => {
+    const report = evalShippedProject(
+      [
+        {
+          path: "index.html",
+          content: `<!doctype html><html><head><title>Effective Velocity</title></head>
+            <body><h1>Effective Velocity</h1>
+            <nav><a href="#overview">Overview</a><a href="#contact">Contact</a></nav>
+            <section id="overview"><h2>Features</h2>
+              <p>Energy tracking, velocity analysis, and goal setting help productivity.</p>
+            </section>
+            <section id="contact"><h2>Contact Us</h2>
+              <form id="contactForm"><input name="email"><textarea name="message"></textarea><button>Send</button></form>
+              <p id="confirmation">Your message was received.</p>
+            </section>
+            <footer><a href="https://linkedin.com/example" target="_blank" rel="noopener noreferrer">LinkedIn</a></footer>
+            </body></html>`,
+        },
+        {
+          path: "app.js",
+          content: `document.getElementById("contactForm").addEventListener("submit", (event) => {
+            event.preventDefault();
+            const messages = JSON.parse(localStorage.getItem("messages") || "[]");
+            messages.push({ email: "demo@example.com" });
+            localStorage.setItem("messages", JSON.stringify(messages));
+          });`,
+        },
+      ],
+      {
+        ceoGoal:
+          "Build **VibeLog**, a mood tracking SPA. Do not build a portfolio, marketing landing page, Contact / Privacy footer.",
+      },
+    );
+
+    assert.equal(report.passed, false);
+    assert.ok(report.issues.some((issue) => /VibeLog/i.test(issue.message)));
+    assert.ok(report.issues.some((issue) => /explicit CEO bans/i.test(issue.message)));
+  });
 });

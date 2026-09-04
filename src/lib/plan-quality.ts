@@ -1,3 +1,8 @@
+import {
+  missingProductHints,
+  violatedForbiddenTerms,
+} from "./goal-fidelity";
+
 export type PlanIssue = {
   severity: "fail" | "warn";
   message: string;
@@ -37,10 +42,14 @@ export function formatPlanReport(report: PlanReport): string {
   return `Automated plan check: ${report.passed ? "WARN" : "FAIL"}\n${lines.join("\n")}`;
 }
 
-/** Catch the inflated-agency / mis-assigned-build patterns before the CEO publishes. */
-export function evalPlanQuality(plan: string): PlanReport {
+/** Catch scope drift, inflated-agency, and mis-assigned-build patterns before publish. */
+export function evalPlanQuality(
+  plan: string,
+  opts: { ceoGoal?: string } = {},
+): PlanReport {
   const issues: PlanIssue[] = [];
   const text = plan.trim();
+  const ceoGoal = opts.ceoGoal?.trim() ?? "";
   if (text.length < 80) {
     return {
       passed: false,
@@ -51,12 +60,44 @@ export function evalPlanQuality(plan: string): PlanReport {
   if (isSimpleStaticPlan(text)) {
     const days = new Set(dayMarkers(text).map((d) => d.toLowerCase().replace(/\s+/g, " ")));
     const weekGantt =
-      /\b(7|seven)[ -]?days?\b/i.test(text) || /\bweek[- ]by[- ]week\b/i.test(text);
+      /\b(?:7|seven)[ -]?days?\s+(?:timeline|plan|schedule|sprint)\b/i.test(text) ||
+      /\bweek[- ]by[- ]week\b/i.test(text);
     if (days.size >= 5 || weekGantt) {
       issues.push({
         severity: "fail",
         message:
           "Timeline is sized like an agency sprint. A static HTML/CSS/JS page is hours / one session, not a 5–7 day Gantt with a day per section.",
+      });
+    }
+  }
+
+  if (ceoGoal) {
+    const missingHints = missingProductHints(text, ceoGoal);
+    if (missingHints.length > 0) {
+      issues.push({
+        severity: "fail",
+        message: `Combined plan dropped the CEO product (${missingHints.slice(0, 3).join(", ")}). Preserve the named product and its requested experience.`,
+      });
+    }
+
+    const forbidden = violatedForbiddenTerms(text, ceoGoal);
+    if (forbidden.length > 0) {
+      issues.push({
+        severity: "fail",
+        message: `Combined plan violates explicit CEO bans (${forbidden.join(", ")}). Remove those invented sections or patterns.`,
+      });
+    }
+
+    const plansPortfolio = text.split("\n").some(
+      (line) =>
+        /\bportfolio\b/i.test(line) &&
+        !/(?:do\s+not|don't|never|no|without|avoid)\b[^.]{0,80}\bportfolio\b/i.test(line),
+    );
+    if (!/\bportfolio\b/i.test(ceoGoal) && plansPortfolio) {
+      issues.push({
+        severity: "fail",
+        message:
+          "Combined plan changed a non-portfolio CEO goal into a portfolio. Plan the requested product instead of applying a generic site template.",
       });
     }
   }

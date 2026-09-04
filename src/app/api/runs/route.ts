@@ -5,6 +5,7 @@ import { ProviderType } from "@prisma/client";
 import { z } from "zod";
 import { runOrchestrator } from "@/lib/orchestrator";
 import { configureAgentsForRun, workspaceHasProvider } from "@/lib/run-setup";
+import { normalizeNewRunGoal } from "@/lib/run-goal";
 import {
   AuthError,
   assertWorkspaceAccess,
@@ -17,7 +18,7 @@ import { consumeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 const createRunSchema = z
   .object({
     workspaceId: z.string().min(1),
-    ceoGoal: z.string().trim().min(1).max(20_000).optional(),
+    ceoGoal: z.string().trim().min(1).max(20_000),
     provider: z.nativeEnum(ProviderType).default("mock"),
     model: z.string().trim().min(1).max(200).optional(),
   })
@@ -43,9 +44,19 @@ export async function POST(req: Request) {
 
     const parsed = createRunSchema.safeParse(await req.json().catch(() => null));
     if (!parsed.success) {
-      return NextResponse.json({ error: "Invalid run request" }, { status: 400 });
+      return NextResponse.json(
+        { error: "A CEO goal is required for every new run." },
+        { status: 400 },
+      );
     }
-    const { workspaceId, ceoGoal, provider, model } = parsed.data;
+    const { workspaceId, provider, model } = parsed.data;
+    const goal = normalizeNewRunGoal(parsed.data.ceoGoal);
+    if (!goal) {
+      return NextResponse.json(
+        { error: "A CEO goal is required for every new run." },
+        { status: 400 },
+      );
+    }
 
     await assertWorkspaceAccess(workspaceId, session);
 
@@ -70,7 +81,6 @@ export async function POST(req: Request) {
       }
     }
 
-    const goal = ceoGoal ?? workspace.ceoGoal ?? "Build something";
     const llm = await configureAgentsForRun(workspaceId, providerType, model);
 
     await prisma.workspace.update({
