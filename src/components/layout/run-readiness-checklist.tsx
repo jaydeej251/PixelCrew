@@ -40,7 +40,11 @@ export function RunReadinessChecklist({
   const [loading, setLoading] = useState(true);
   const [testing, setTesting] = useState(false);
   const [testMessage, setTestMessage] = useState<string | null>(null);
-  const [testOk, setTestOk] = useState(false);
+  /** null = use sessionStorage; boolean = result of an in-session Test click. */
+  const [liveTestResult, setLiveTestResult] = useState<boolean | null>(null);
+
+  const providerRef = useRef(provider);
+  providerRef.current = provider;
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -58,16 +62,18 @@ export function RunReadinessChecklist({
     }
   }, [workspaceId]);
 
+  // Auto-pick a ready real provider only while still on Mock (first load / new credentials).
+  // Do not depend on `provider` — otherwise choosing Mock in Settings immediately reverts.
   useEffect(() => {
     void reload().then((next) => {
-      const pick = preferReadyProvider(next, provider);
+      if (providerRef.current !== "mock") return;
+      const pick = preferReadyProvider(next, "mock");
       if (!pick) return;
       onProviderChange(pick.provider);
       onModelChange(pick.model);
     });
-    // credentialsRevision reloads status; provider is read so we only auto-pick while still on mock
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- avoid looping on onProviderChange identity
-  }, [reload, credentialsRevision, provider]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- credentialsRevision drives re-pick; avoid fighting manual Mock
+  }, [reload, credentialsRevision]);
 
   const status = statuses.find((s) => s.provider === provider);
   const ollamaMode =
@@ -76,14 +82,14 @@ export function RunReadinessChecklist({
   const credentialId = status?.activeCredentialId ?? null;
 
   useEffect(() => {
-    if (!needsTest) {
-      setTestOk(true);
-      setTestMessage(null);
-      return;
-    }
-    setTestOk(readProviderTestOk(workspaceId, provider, credentialId));
+    setLiveTestResult(null);
     setTestMessage(null);
   }, [workspaceId, provider, credentialId, needsTest, credentialsRevision]);
+
+  const sessionTestOk = needsTest
+    ? readProviderTestOk(workspaceId, provider, credentialId)
+    : true;
+  const testOk = needsTest ? (liveTestResult ?? sessionTestOk) : true;
 
   const readiness = useMemo(
     () =>
@@ -91,9 +97,9 @@ export function RunReadinessChecklist({
         provider,
         model,
         status,
-        testOk: needsTest ? testOk : true,
+        testOk,
       }),
-    [provider, model, status, testOk, needsTest],
+    [provider, model, status, testOk],
   );
 
   const lastReadyRef = useRef<{ canStart: boolean; reason: string | null } | null>(null);
@@ -126,7 +132,7 @@ export function RunReadinessChecklist({
       const json = await res.json();
       const ok = Boolean(json.ok);
       writeProviderTestOk(workspaceId, provider, credentialId, ok);
-      setTestOk(ok);
+      setLiveTestResult(ok);
       setTestMessage(
         ok
           ? `✓ ${json.message ?? "Key works"}`
@@ -134,7 +140,7 @@ export function RunReadinessChecklist({
       );
     } catch {
       writeProviderTestOk(workspaceId, provider, credentialId, false);
-      setTestOk(false);
+      setLiveTestResult(false);
       setTestMessage("✗ Could not reach the test endpoint");
     } finally {
       setTesting(false);
