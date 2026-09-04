@@ -14,6 +14,7 @@ import {
   ollamaModelLooksMismatched,
   type OllamaEndpointMode,
 } from "@/lib/ollama-models";
+import { writeProviderTestOk } from "@/lib/run-readiness";
 
 type ProviderStatus = {
   provider: string;
@@ -35,6 +36,8 @@ type RunSettingsProps = {
   onModelChange: (model: string) => void;
   /** Bump when credentials change so endpoint/status stay in sync. */
   credentialsRevision?: number;
+  /** Fired after a successful / failed live key probe (for Start gating). */
+  onProviderTestResult?: (ok: boolean) => void;
 };
 
 export function RunSettings({
@@ -44,6 +47,7 @@ export function RunSettings({
   onProviderChange,
   onModelChange,
   credentialsRevision = 0,
+  onProviderTestResult,
 }: RunSettingsProps) {
   const [statuses, setStatuses] = useState<ProviderStatus[]>([]);
 
@@ -209,10 +213,20 @@ export function RunSettings({
               </p>
             )}
             {provider === "openrouter" && current.ready && (
-              <TestKeyButton workspaceId={workspaceId} provider="openrouter" />
+              <TestKeyButton
+                workspaceId={workspaceId}
+                provider="openrouter"
+                credentialId={current.activeCredentialId}
+                onResult={onProviderTestResult}
+              />
             )}
             {provider === "ollama" && current.ready && ollamaMode === "cloud" && (
-              <TestKeyButton workspaceId={workspaceId} provider="ollama" />
+              <TestKeyButton
+                workspaceId={workspaceId}
+                provider="ollama"
+                credentialId={current.activeCredentialId}
+                onResult={onProviderTestResult}
+              />
             )}
           </div>
         )}
@@ -280,9 +294,13 @@ function OllamaEndpointCard({
 function TestKeyButton({
   workspaceId,
   provider,
+  credentialId,
+  onResult,
 }: {
   workspaceId: string;
   provider: "openrouter" | "ollama";
+  credentialId?: string | null;
+  onResult?: (ok: boolean) => void;
 }) {
   const [result, setResult] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -308,7 +326,10 @@ function TestKeyButton({
             json.probes && typeof json.probes === "object"
               ? ` [models=${json.probes.models?.status ?? "?"} tags=${json.probes.tags?.status ?? "?"} api/chat=${json.probes.nativeChat?.status ?? "?"} v1/chat=${json.probes.openaiChat?.status ?? "?"}]`
               : "";
-          setResult(json.ok ? `✓ ${detail} (${json.source})` : `✗ ${detail}${probeBits}`);
+          const ok = Boolean(json.ok);
+          writeProviderTestOk(workspaceId, provider, credentialId, ok);
+          onResult?.(ok);
+          setResult(ok ? `✓ ${detail} (${json.source})` : `✗ ${detail}${probeBits}`);
           setLoading(false);
         }}
       >

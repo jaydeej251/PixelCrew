@@ -11,6 +11,7 @@ import {
   requireSession,
 } from "@/lib/auth";
 import { isOllamaCloudBaseUrl } from "@/lib/ollama-endpoints";
+import { looksLikeIncompleteOllamaApiKey } from "@/lib/ollama-models";
 import { setDefaultProviderCredential } from "@/lib/provider-credentials";
 
 const credentialSchema = z
@@ -55,6 +56,20 @@ export async function POST(req: Request) {
     if (provider === "ollama" && isOllamaCloudBaseUrl(baseUrl) && !trimmedKey) {
       return NextResponse.json(
         { error: "API key is required for Ollama Cloud (ollama.com)" },
+        { status: 400 },
+      );
+    }
+    if (
+      provider === "ollama" &&
+      isOllamaCloudBaseUrl(baseUrl) &&
+      trimmedKey &&
+      looksLikeIncompleteOllamaApiKey(trimmedKey)
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "That Ollama Cloud key looks incomplete. Paste the full id.secret value from ollama.com/settings/keys — a truncated key can list models but chat returns Unauthorized.",
+        },
         { status: 400 },
       );
     }
