@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getSession, getPlanUsage } from "@/lib/auth";
+import { isPlatformOps } from "@/lib/platform-admin";
 import { syncOfficeDesks } from "@/lib/office-desks";
 import { listOfficeLayouts, getActiveOfficeLayout } from "@/lib/office-layouts";
 
@@ -8,6 +9,9 @@ export async function GET() {
   const session = await getSession();
   if (!session) {
     return NextResponse.json({ workspace: null, agents: [], desks: [], departments: [] });
+  }
+  if (isPlatformOps(session.platformRole) || !session.workspaceId || !session.organizationId) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
   const workspace = await prisma.workspace.findFirst({

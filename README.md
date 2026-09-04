@@ -20,7 +20,7 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) for marketing, [http://localhost:3000/app](http://localhost:3000/app) for the office, and [http://localhost:3000/admin](http://localhost:3000/admin) if your user has platform ops (seed admin or `PLATFORM_ADMIN_EMAILS`).
 
-Seed never embeds passwords in git. Put `SEED_FREE_*`, `SEED_PRO_*`, and/or `SEED_ADMIN_*` only in `.env.local`. Production seed is blocked unless `ALLOW_DB_SEED=true` (avoid in normal deploys). Grant prod ops with `PLATFORM_ADMIN_EMAILS` after signup/OAuth, then set org plans from `/admin`.
+Seed never embeds passwords in git. Put `SEED_FREE_*`, `SEED_PRO_*`, and/or `SEED_ADMIN_*` only in `.env.local`. Production seed is blocked unless `ALLOW_DB_SEED=true` (avoid in normal deploys). Grant prod ops with `PLATFORM_ADMIN_EMAILS` after signup/OAuth, then set org plans from `/admin`. Platform ops land on `/admin` and cannot use the office floor or product run APIs.
 
 ## API keys
 

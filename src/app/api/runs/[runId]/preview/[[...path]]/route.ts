@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { normalizePath } from "@/lib/project-files";
-import { AuthError, assertRunAccess, requireSession } from "@/lib/auth";
+import { AuthError, assertRunAccess, requireProductSession } from "@/lib/auth";
 import { createPreviewToken } from "@/lib/preview-token";
 import { consumeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { resolvePreviewOrigins } from "@/lib/preview-origin";
@@ -17,7 +17,7 @@ export async function GET(
   { params }: { params: Promise<{ runId: string; path?: string[] }> },
 ) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     const { runId, path: segments } = await params;
     await assertRunAccess(runId, session);
     const limit = await consumeRateLimit({

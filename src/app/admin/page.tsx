@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { isPlatformOps } from "@/lib/platform-admin";
 import { AdminConsole } from "@/components/admin/admin-console";
+import { AdminSignOutButton } from "@/components/admin/admin-sign-out";
 
 export default async function AdminPage() {
   const session = await getSession();
@@ -19,13 +20,18 @@ export default async function AdminPage() {
           </div>
           <div className="flex items-center gap-3 text-sm">
             <span className="text-zinc-500">{session.email}</span>
-            <Link href="/app" className="text-zinc-300 hover:text-white">
-              Back to app
+            <Link href="/account" className="text-zinc-300 hover:text-white">
+              Account
             </Link>
+            <AdminSignOutButton />
           </div>
         </div>
       </header>
       <main className="mx-auto max-w-6xl px-6 py-8">
+        <p className="mb-6 text-sm text-zinc-400">
+          Ops console for the whole product — tenants, plans, stuck runs, and sessions. This is not
+          the office floor; operators do not run CEO prompts here.
+        </p>
         <AdminConsole />
       </main>
     </div>

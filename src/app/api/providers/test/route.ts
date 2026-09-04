@@ -13,13 +13,13 @@ import {
   AuthError,
   assertWorkspaceAccess,
   authErrorStatus,
-  requireSession,
+  requireProductSession,
 } from "@/lib/auth";
 import { consumeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 export async function POST(req: Request) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     const { workspaceId, provider } = await req.json();
     if (
       typeof workspaceId !== "string" ||

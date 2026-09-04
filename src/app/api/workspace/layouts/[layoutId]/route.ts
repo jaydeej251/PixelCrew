@@ -4,7 +4,7 @@ import {
   AuthError,
   assertWorkspaceAccess,
   authErrorStatus,
-  requireSession,
+  requireProductSession,
 } from "@/lib/auth";
 import {
   activateOfficeLayout,
@@ -36,7 +36,7 @@ export async function PATCH(
   { params }: { params: Promise<{ layoutId: string }> },
 ) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     await assertWorkspaceAccess(session.workspaceId, session);
     const { layoutId } = await params;
     const scopedLayout = await prisma.officeLayout.findFirst({
@@ -80,7 +80,7 @@ export async function DELETE(
   { params }: { params: Promise<{ layoutId: string }> },
 ) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     await assertWorkspaceAccess(session.workspaceId, session);
     const { layoutId } = await params;
     const scopedLayout = await prisma.officeLayout.findFirst({

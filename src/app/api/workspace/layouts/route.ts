@@ -4,7 +4,7 @@ import {
   AuthError,
   assertWorkspaceAccess,
   authErrorStatus,
-  requireSession,
+  requireProductSession,
 } from "@/lib/auth";
 import {
   createOfficeLayout,
@@ -33,7 +33,7 @@ function errorResponse(error: unknown) {
 
 export async function GET() {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     await assertWorkspaceAccess(session.workspaceId, session);
     return NextResponse.json({ layouts: await listOfficeLayouts(session.workspaceId) });
   } catch (error) {
@@ -43,7 +43,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     await assertWorkspaceAccess(session.workspaceId, session);
     const parsed = createLayoutSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
