@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { CharacterSprite } from "./character-sprite";
 import { depth, TILE_H, TILE_W, toIso } from "./iso";
@@ -32,20 +32,30 @@ export function OfficeFloor({
   blueprint,
   editor,
 }: OfficeViewProps) {
-  const seenAgentsRef = useRef(new Set<string>());
-  const doorArrivals = useMemo(() => {
-    const ids = new Set<string>();
-    for (const agent of agents) {
-      if (seenAgentsRef.current.has(agent.id)) continue;
-      const status = agentStatuses[agent.id] ?? agent.status;
-      if (status === "walking" || status === "handoff") ids.add(agent.id);
-    }
-    return ids;
-  }, [agents, agentStatuses]);
+  // First-seen walking/handoff agents enter from the front door. Adjust state
+  // during render (React retries with the new state before painting children)
+  // so we neither read refs in render nor setState inside an effect.
+  const [seenAgentIds, setSeenAgentIds] = useState(() => new Set<string>());
+  const [doorArrivals, setDoorArrivals] = useState(() => new Set<string>());
+  const agentsSignature = agents.map((agent) => agent.id).join("\0");
+  const [appliedAgentsSignature, setAppliedAgentsSignature] = useState<
+    string | null
+  >(null);
 
-  useEffect(() => {
-    for (const agent of agents) seenAgentsRef.current.add(agent.id);
-  }, [agents]);
+  if (agentsSignature !== appliedAgentsSignature) {
+    const arrivals = new Set<string>();
+    for (const agent of agents) {
+      if (seenAgentIds.has(agent.id)) continue;
+      const status = agentStatuses[agent.id] ?? agent.status;
+      if (status === "walking" || status === "handoff") arrivals.add(agent.id);
+    }
+    const nextSeen = new Set(seenAgentIds);
+    for (const agent of agents) nextSeen.add(agent.id);
+    setDoorArrivals(arrivals);
+    setSeenAgentIds(nextSeen);
+    setAppliedAgentsSignature(agentsSignature);
+  }
+
   const tiles = useMemo(() => {
     const list: Array<{ key: string; x: number; y: number; room: string }> = [];
     for (let y = GRID_MIN; y <= GRID_MAX; y++) {
