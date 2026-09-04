@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { FREE_RUNS_PER_MONTH, SUPPORT_EMAIL } from "@/lib/constants";
-import { Button } from "@/components/ui/button";
 import { SiteFooter } from "@/components/layout/site-footer";
 import { SiteHeader } from "@/components/layout/site-header";
+import { HomeHeroActions } from "@/components/layout/home-hero-actions";
 
 export default function Home() {
   return (
@@ -31,16 +31,7 @@ export default function Home() {
             <li>Claiming agents ran real shell tools in a sandbox</li>
           </ul>
         </div>
-        <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
-          <Link href="/app">
-            <Button className="min-w-[160px] px-6 py-3">Open office</Button>
-          </Link>
-          <Link href="/signup">
-            <Button variant="secondary" className="min-w-[160px] px-6 py-3">
-              Create free account
-            </Button>
-          </Link>
-        </div>
+        <HomeHeroActions />
         <p className="mt-8 text-sm text-zinc-500">
           <Link href="/pricing" className="text-zinc-400 hover:text-zinc-200">
             View pricing
