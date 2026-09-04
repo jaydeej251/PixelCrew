@@ -15,7 +15,8 @@
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
-    "docker:up": "docker compose up -d"
+    "docker:up": "docker compose up -d",
+    "deploy:host": "bash scripts/deploy.sh"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
