@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { CharacterSprite } from "./character-sprite";
 import { depth, TILE_H, TILE_W, toIso } from "./iso";
@@ -12,6 +12,7 @@ import {
   planningSeatGrid,
 } from "./office-life";
 import {
+  FRONT_DOOR,
   GRID_MAX,
   GRID_MIN,
   ROOM_RECTS,
@@ -31,6 +32,30 @@ export function OfficeFloor({
   blueprint,
   editor,
 }: OfficeViewProps) {
+  // First-seen walking/handoff agents enter from the front door. Adjust state
+  // during render (React retries with the new state before painting children)
+  // so we neither read refs in render nor setState inside an effect.
+  const [seenAgentIds, setSeenAgentIds] = useState(() => new Set<string>());
+  const [doorArrivals, setDoorArrivals] = useState(() => new Set<string>());
+  const agentsSignature = agents.map((agent) => agent.id).join("\0");
+  const [appliedAgentsSignature, setAppliedAgentsSignature] = useState<
+    string | null
+  >(null);
+
+  if (agentsSignature !== appliedAgentsSignature) {
+    const arrivals = new Set<string>();
+    for (const agent of agents) {
+      if (seenAgentIds.has(agent.id)) continue;
+      const status = agentStatuses[agent.id] ?? agent.status;
+      if (status === "walking" || status === "handoff") arrivals.add(agent.id);
+    }
+    const nextSeen = new Set(seenAgentIds);
+    for (const agent of agents) nextSeen.add(agent.id);
+    setDoorArrivals(arrivals);
+    setSeenAgentIds(nextSeen);
+    setAppliedAgentsSignature(agentsSignature);
+  }
+
   const tiles = useMemo(() => {
     const list: Array<{ key: string; x: number; y: number; room: string }> = [];
     for (let y = GRID_MIN; y <= GRID_MAX; y++) {
@@ -233,15 +258,20 @@ export function OfficeFloor({
               : agentGridPos(agent, status, desks, agents, events);
           const iso = toIso(at.x, at.y);
           const seated = meet || status === "working";
+          const left = iso.left + (seated ? 28 : 18);
+          const top = iso.top + (seated ? -36 : -52);
+          const arriveFromDoor = doorArrivals.has(agent.id);
+          const doorIso = toIso(FRONT_DOOR.x, FRONT_DOOR.y);
           return (
             <motion.div
               key={agent.id}
               className="iso-actor"
-              initial={false}
-              animate={{
-                left: iso.left + (seated ? 28 : 18),
-                top: iso.top + (seated ? -36 : -52),
-              }}
+              initial={
+                arriveFromDoor
+                  ? { left: doorIso.left + 18, top: doorIso.top - 52 }
+                  : false
+              }
+              animate={{ left, top }}
               transition={{
                 duration: status === "handoff" || status === "walking" ? 1.8 : 0.45,
                 ease: "easeInOut",
@@ -252,6 +282,7 @@ export function OfficeFloor({
                 name={agent.name}
                 color={agent.avatarColor}
                 status={status}
+                position={agent.position}
                 selected={selectedAgentId === agent.id}
                 onClick={() => onSelectAgent?.(agent.id)}
               />

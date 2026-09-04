@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { OfficeViewport } from "@/components/office/office-viewport";
 import { InspectorDrawer } from "@/components/office/inspector-drawer";
 import { ArtifactsPanel } from "@/components/artifacts/artifacts-panel";
+import { RunDeliverableActions } from "@/components/artifacts/run-deliverable-actions";
 import {
   ConversationList,
   getStoredActiveRunId,
@@ -394,17 +395,23 @@ export function Dashboard() {
       if (event.id) seenEventIdsRef.current.add(event.id);
       setEvents((prev) => [...prev, event]);
       if (event.payload?.message?.startsWith("Hired ")) {
+        const hireId = event.agentId ?? event.payload?.agentId;
+        if (typeof hireId === "string") {
+          setAgentStatuses((s) => ({ ...s, [hireId]: "walking" }));
+        }
         void load();
       }
       const agentId = event.agentId ?? event.payload?.agentId;
       if (agentId) {
-        if (event.type === "TASK_CLAIMED") {
+        const hired = Boolean(event.payload?.message?.startsWith("Hired "));
+        if (event.type === "TASK_CLAIMED" || hired) {
           setAgentStatuses((s) => ({ ...s, [agentId]: "walking" }));
         }
         if (
-          event.type === "TASK_STARTED" ||
-          event.type === "AGENT_THINKING" ||
-          event.type === "EXECUTION_STARTED"
+          !hired &&
+          (event.type === "TASK_STARTED" ||
+            event.type === "AGENT_THINKING" ||
+            event.type === "EXECUTION_STARTED")
         ) {
           setAgentStatuses((s) => ({ ...s, [agentId]: "working" }));
         }
@@ -586,10 +593,11 @@ export function Dashboard() {
       setEvents((prev) => [...prev, event]);
       const aid = mappedId ?? e.payload?.agentId;
       if (aid) {
-        if (e.type === "TASK_CLAIMED") {
+        const hired = Boolean(e.payload?.message?.startsWith("Hired "));
+        if (e.type === "TASK_CLAIMED" || hired) {
           setAgentStatuses((s) => ({ ...s, [aid]: "walking" }));
         }
-        if (["TASK_STARTED", "AGENT_THINKING"].includes(e.type)) {
+        if (!hired && ["TASK_STARTED", "AGENT_THINKING"].includes(e.type)) {
           setAgentStatuses((s) => ({ ...s, [aid]: "working" }));
         }
         if (e.type === "AGENT_HANDOFF") setAgentStatuses((s) => ({ ...s, [aid]: "handoff" }));
@@ -677,21 +685,48 @@ export function Dashboard() {
   const inPlanning =
     awaitingPlan || (running && !artifacts.some((a) => a.title === PLAN_PUBLISHED_TITLE));
   const codingAgents = data.agents.filter((a) => agentStatuses[a.id] === "working");
+  const qaWorking = codingAgents.filter((a) => a.position === "qa_engineer");
+  const buildersWorking = codingAgents.filter((a) => a.position !== "qa_engineer");
   const headingToDesk = data.agents.filter(
     (a) => agentStatuses[a.id] === "walking" || agentStatuses[a.id] === "handoff",
   );
-  const names = codingAgents.map((a) => a.name.split(" ")[0]);
-  const shiftBanner = inPlanning
-    ? "The team is in the planning room"
-    : codingAgents.length === 1
-    ? `${names[0]} is coding`
-    : codingAgents.length > 1
-      ? `${names.slice(0, 2).join(" & ")}${names.length > 2 ? " + crew" : ""} coding`
-      : headingToDesk.length === 1
-        ? `${headingToDesk[0]!.name.split(" ")[0]} is heading to their desk`
-        : headingToDesk.length > 1
-          ? "People are heading to their desks"
-          : null;
+  const hiredAgentIds = new Set(
+    events
+      .filter((e) => e.payload?.message?.startsWith("Hired "))
+      .map((e) => e.agentId ?? e.payload?.agentId)
+      .filter((id): id is string => typeof id === "string"),
+  );
+  const builderNames = buildersWorking.map((a) => a.name.split(" ")[0]);
+  const qaNames = qaWorking.map((a) => a.name.split(" ")[0]);
+  let shiftBanner: string | null = null;
+  if (inPlanning) {
+    shiftBanner = awaitingPlan
+      ? "Planning meeting — review and publish when ready"
+      : "Planning meeting";
+  } else if (qaWorking.length > 0 && buildersWorking.length === 0) {
+    shiftBanner =
+      qaWorking.length === 1
+        ? `${qaNames[0]} is reviewing quality`
+        : "QA is reviewing quality";
+  } else if (buildersWorking.length === 1 && qaWorking.length === 0) {
+    shiftBanner = `${builderNames[0]} is coding`;
+  } else if (buildersWorking.length > 1 && qaWorking.length === 0) {
+    shiftBanner = `${builderNames.slice(0, 2).join(" & ")}${
+      builderNames.length > 2 ? " + crew" : ""
+    } coding`;
+  } else if (buildersWorking.length > 0 && qaWorking.length > 0) {
+    shiftBanner = `${builderNames[0] ?? "Crew"} coding · QA reviewing`;
+  } else if (headingToDesk.length === 1) {
+    const walker = headingToDesk[0]!;
+    const first = walker.name.split(" ")[0];
+    shiftBanner = hiredAgentIds.has(walker.id)
+      ? `${first} just walked in`
+      : `${first} is heading to their desk`;
+  } else if (headingToDesk.length > 1) {
+    shiftBanner = headingToDesk.some((a) => hiredAgentIds.has(a.id))
+      ? "New hires are walking in"
+      : "People are heading to their desks";
+  }
 
   const chatsAside = (
     <ConversationList
@@ -814,7 +849,17 @@ export function Dashboard() {
                 )}
                 {runOutcome === "completed" && runId && (
                   <Alert variant="success">
-                    Done. Open Files → Thought process to compare your prompt with what each teammate wrote, or Preview your app.
+                    <p>Your app is ready.</p>
+                    <RunDeliverableActions
+                      runId={runId}
+                      artifacts={artifacts}
+                      ceoGoal={ceoGoal}
+                      runFinished
+                      variant="hud"
+                    />
+                    <p className="mt-2 text-[11px] text-zinc-400">
+                      Thought process stays in Files if you want the play-by-play.
+                    </p>
                   </Alert>
                 )}
                 <ActivityFeed events={events} />
