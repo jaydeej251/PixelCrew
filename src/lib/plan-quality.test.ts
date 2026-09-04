@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { evalPlanQuality, formatPlanReport } from "./plan-quality";
+import { synthesizerSystemPrompt } from "./prompts";
 
 const GOOD_PLAN = `# Goal
 A personal portfolio for Maya Cruz, junior MERN developer.
@@ -60,5 +61,72 @@ describe("evalPlanQuality", () => {
     assert.ok(report.issues.some((i) => /product/i.test(i.message)));
     assert.ok(report.issues.some((i) => /localStorage/i.test(i.message)));
     assert.ok(report.issues.some((i) => /inline js/i.test(i.message)));
+  });
+
+  it("fails when a named product goal is merged into a portfolio plan", () => {
+    const goal = `Build **VibeLog**, a mood tracking SPA with Check-in, History,
+Insights, a burnout risk gauge, and localStorage. Do not build a portfolio,
+marketing landing page, Contact / Privacy footer.`;
+    const drifted = `# Goal
+Build a complete static website portfolio for the CEO.
+
+# Stack
+Static HTML + CSS + JS and localStorage.
+
+# UX
+Hero, Projects, About, Contact form, and social footer.
+
+# Features
+Project cards and a working contact form.
+
+# Out of scope
+No backend.
+
+# Task list
+- Product Manager: define audience and copy.
+- UI/UX Designer: define tokens and layouts.
+- Senior Developer: define file shape.
+- Engineer: build index.html, styles.css, and app.js.`;
+
+    const report = evalPlanQuality(drifted, { ceoGoal: goal });
+    assert.equal(report.passed, false);
+    assert.ok(report.issues.some((issue) => /dropped the CEO product/i.test(issue.message)));
+    assert.ok(report.issues.some((issue) => /portfolio/i.test(issue.message)));
+    assert.ok(report.issues.some((issue) => /explicit CEO bans/i.test(issue.message)));
+  });
+
+  it("allows a matching plan to preserve the CEO's negative requirements", () => {
+    const goal =
+      "Build **VibeLog**, a mood tracking SPA. Do not build a portfolio or add a Contact / Privacy footer.";
+    const plan = `# Goal
+Build VibeLog as a mood tracking SPA.
+
+# Stack
+Static HTML + CSS + JS with localStorage.
+
+# UX
+Check-in, History, and Insights tabs with a live risk gauge.
+
+# Features
+Mood and energy sliders, history filtering, export, and a seven-day chart.
+
+# Out of scope
+Do not build a portfolio or add a Contact / Privacy footer.
+
+# Task list
+- Product Manager: define success criteria.
+- UI/UX Designer: define tokens and responsive states.
+- Senior Developer: define file and persistence shape.
+- Engineer: build and test the static files.`;
+
+    const report = evalPlanQuality(plan, { ceoGoal: goal });
+    assert.equal(report.passed, true, formatPlanReport(report));
+  });
+
+  it("keeps the synthesizer generic instead of forcing portfolio output", () => {
+    const prompt = synthesizerSystemPrompt("Avery");
+    assert.doesNotMatch(prompt, /still ship a complete, specific portfolio/i);
+    assert.match(prompt, /CEO goal is the source of truth/i);
+    assert.match(prompt, /Never turn an app into a portfolio/i);
   });
 });

@@ -52,10 +52,10 @@ Keep the planning council (Product / Senior Dev / UI/UX) for the brief; do not a
 
 export const STATIC_SHIP_BAR = `v1 engineering bar:
 - Bind events with addEventListener in the JS file. No inline onclick/onsubmit, no href="javascript:void(0)".
-- In-page CTAs use a real section id (Hero “Email Me” → href="#contact"). Prefer html { scroll-behavior: smooth }.
-- Multi-entry data (contact messages, lists): JSON.parse(localStorage.getItem(key) || "[]"), push a new object, setItem the array. Never overwrite one static key like contactMessage.
-- After submit: preventDefault, reset the form, show a dedicated confirmation element. Do not hide the form. Do not use alert() as the only feedback.
-- External footer/social links: target="_blank" rel="noopener noreferrer".
+- In-page navigation uses real section ids. Never invent marketing sections, contact forms, legal links, or social footers unless the CEO goal asks for them.
+- Multi-entry data: JSON.parse(localStorage.getItem(key) || "[]"), push a new object, setItem the array. Never overwrite a collection with one object.
+- After any submit: preventDefault and show dedicated in-page feedback. Do not hide the form. Do not use alert() as the only feedback.
+- External links, when requested: target="_blank" rel="noopener noreferrer".
 - Never ship a PixelCrew / ColorVision / NeuralArt marketing portfolio unless the CEO goal literally asks for that. Title and h1 must match the CEO product name.`;
 
 export function councilSystemPrompt(name: string, positionLabel: string, position: string): string {
@@ -64,7 +64,7 @@ export function councilSystemPrompt(name: string, positionLabel: string, positio
       ? "Your lens is product: who it's for, features, success metrics, and a task list sized to real effort. You partner with Senior Dev (stack) and UI/UX (flows). Include a recommended stack at a high level so the CEO is not blocked. Do not assign yourself HTML/CSS implementation."
       : position === "tech_architect"
         ? "Your lens is senior engineering: recommended stack, architecture, file shape, and risks. Partner with Product and UI/UX. For v1, pick a static HTML/CSS/JS app (localStorage) unless the CEO explicitly asked to deploy a real server. Mentioning MERN/React as a skill is NOT a request to scaffold create-react-app + Mongo + Heroku. Persist collections as a JSON array (parse, push, save). No inline JS."
-        : "Your lens is UI/UX: key screens, empty states, and a happy-path flow. Partner with Product and Senior Dev. Do not skip the product because you are 'only design'. Specify real copy, not lorem / John Doe / Project One. In-page CTAs use href=\"#section\"; keep the contact form visible and show confirmation in-page.";
+        : "Your lens is UI/UX: key screens, empty states, visual tokens, responsive composition, and a happy-path flow. Partner with Product and Senior Dev. Do not skip the product because you are 'only design'. Specify real copy, not lorem / John Doe / Project One. Do not add generic landing-page sections that the CEO did not request.";
 
   return `You are ${name}, ${positionLabel}, on the planning council.
 ${CULTURE}
@@ -77,7 +77,8 @@ export function synthesizerSystemPrompt(name: string): string {
 ${CULTURE}
 Include: Goal, recommended stack, UX outline, features, out of scope, and a task list.
 v1 stack MUST be a static site (HTML + CSS + JS, localStorage) that PixelCrew can preview in the browser. Do not plan React + Mongo + Heroku + Nodemailer + reCAPTCHA unless the CEO explicitly asked for production backend hosting.
-The CEO mentioning they studied MERN is background — still ship a complete, specific portfolio (real-sounding name, 2–3 named projects, working contact form), not a week-by-week agency timeline.
+The CEO goal is the source of truth. Preserve its product name, requested screens, controls, formulas, copy, visual constraints, and explicit bans. Council brainstorms are advice, not permission to change the product.
+Never turn an app into a portfolio or marketing landing page. Only plan a portfolio, contact form, project gallery, legal links, or social footer when the CEO explicitly requests it.
 ${PLAN_EXECUTION_BAR}
 ${STATIC_SHIP_BAR}
 Write the plan using your recommended defaults so it is already shippable.
@@ -122,8 +123,9 @@ Rules:
 - If you are backend-only: data.js (localStorage helpers). Do not overwrite index.html. Do not emit a fake Express/Mongo server.
 - If you are the only engineer: emit the whole app.
 - Ship a DEMO of the CEO goal — not a wireframe and not a PixelCrew company portfolio. The product name/title in HTML must come from the goal (e.g. PulseBoard). Never brand the app as PixelCrew unless the CEO asked for that. Invent specific copy, real section labels, and working controls. Never use John Doe, Project One, Lorem, or “Description of the project…”.
+- Treat the CEO goal as acceptance criteria. Implement every named screen, control, calculation, state, and visual constraint; do not substitute a generic landing-page template.
 - Never reference images, PDFs, or CSS/JS files you did not emit. Use CSS initials or inline SVG for avatars/project art. Buttons must do something (href, in-page jump, or localStorage).
-- Contact form: preventDefault, save to localStorage, show an on-page confirmation. No alert-only stubs.
+- If the goal requests a form: preventDefault, persist as requested, and show on-page confirmation. Do not invent a contact form for an unrelated app.
 ${STATIC_SHIP_BAR}`;
 }
 
@@ -158,7 +160,7 @@ Verdict: PASS
 
 Then a punch list. Each item: severity (blocker/major/nit), where (path or selector), what is wrong, what “done” looks like.
 
-Automatic FAIL if you see: missing/broken image src, placeholder copy (John Doe, Project One, lorem), dead # links or javascript:void(0) on primary CTAs, inline onclick handlers, localStorage that overwrites a single key instead of appending to an array, a submit handler that hides the form, missing target=_blank rel=noopener noreferrer on external social links, missing sections from the CEO goal, hardcoded secrets, or a contact form that cannot succeed in preview.
+Automatic FAIL if you see: a different product name or product type than the CEO goal; missing requested screens, controls, calculations, states, or visual constraints; invented portfolio/marketing/contact/footer sections; missing/broken image src; placeholder copy (John Doe, Project One, lorem); dead # links or javascript:void(0) on primary CTAs; inline onclick handlers; localStorage that overwrites a requested collection instead of appending to an array; a submit handler that hides the form; missing target=_blank rel=noopener noreferrer on external links; hardcoded secrets; or a requested form that cannot succeed in preview.
 Do not rewrite the product. If evidence is missing, FAIL and say what you could not verify.`;
 }
 
