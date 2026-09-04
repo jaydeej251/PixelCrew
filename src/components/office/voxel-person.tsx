@@ -8,7 +8,12 @@ import type { AgentStatus } from "@prisma/client";
 import type { OfficeAgent } from "@/lib/office";
 import { statusToAnimation } from "@/lib/office";
 import { shade } from "./iso";
-import type { LifeActivity, LifeState } from "./office-life";
+import {
+  activityLabel,
+  workBadgeLabel,
+  type LifeActivity,
+  type LifeState,
+} from "./office-life";
 import { OFFICE_HTML_Z } from "./office-layout";
 
 /** One Minecraft pixel. Character is 8×32×8 like Steve. */
@@ -39,16 +44,6 @@ function Box({
       <meshStandardMaterial color={color} roughness={0.82} metalness={0} />
     </mesh>
   );
-}
-
-function labelFor(first: string, act: LifeActivity) {
-  if (act === "work") return `${first} · coding`;
-  if (act === "meet") return `${first} · planning`;
-  if (act === "wait") return `${first} · at desk`;
-  if (act === "talk") return `${first} · chatting`;
-  if (act === "walk") return `${first} · walking`;
-  if (act === "stuck") return `${first} · stuck`;
-  return first;
 }
 
 type LimbRefs = {
@@ -273,7 +268,7 @@ export function VoxelPerson({
             zIndexRange={OFFICE_HTML_Z}
             style={{ pointerEvents: "none" }}
           >
-            <span className="office-coding-badge">CODING</span>
+            <span className="office-coding-badge">{workBadgeLabel(agent.position)}</span>
           </Html>
         </>
       )}
@@ -285,7 +280,7 @@ export function VoxelPerson({
         style={{ pointerEvents: "none" }}
       >
         <span className={liveAct === "work" ? "office-nametag is-coding" : "office-nametag"}>
-          {labelFor(first, liveAct)}
+          {activityLabel(first, liveAct, agent.position)}
         </span>
       </Html>
     </group>
