@@ -3,6 +3,7 @@ import { afterEach, describe, it } from "node:test";
 import {
   parsePlatformAdminEmails,
   postAuthPath,
+  postSignupPath,
   resolvePlatformRole,
 } from "./platform-admin";
 
@@ -48,5 +49,13 @@ describe("postAuthPath", () => {
     assert.equal(postAuthPath("ops"), "/admin");
     assert.equal(postAuthPath("owner"), "/admin");
     assert.equal(postAuthPath("none"), "/app");
+  });
+});
+
+describe("postSignupPath", () => {
+  it("sends ops to admin and new tenants to onboarding", () => {
+    assert.equal(postSignupPath("ops"), "/admin");
+    assert.equal(postSignupPath("owner"), "/admin");
+    assert.equal(postSignupPath("none"), "/onboarding");
   });
 });

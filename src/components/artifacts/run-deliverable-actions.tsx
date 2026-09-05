@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, Download, ExternalLink, Link2 } from "lucide-react";
+import Link from "next/link";
+import { ChevronDown, Download, ExternalLink, Link2, MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { copyRunPreviewLink, openRunPreview } from "@/lib/run-preview";
 import { hasPreviewableApp, type ArtifactLike } from "@/lib/project-files";
@@ -15,6 +16,8 @@ type RunDeliverableActionsProps = {
   /** Compact row for office HUD; default matches Files panel chrome. */
   variant?: "hud" | "panel";
   className?: string;
+  onRequestChanges?: () => void;
+  onRestart?: () => void;
 };
 
 function DownloadMenu({
@@ -91,6 +94,135 @@ function DownloadMenu({
   );
 }
 
+function HudMoreMenu({
+  runId,
+  onRequestChanges,
+  onRestart,
+  onCopyLink,
+  copyState,
+  showPreviewActions = true,
+}: {
+  runId: string;
+  onRequestChanges?: () => void;
+  onRestart?: () => void;
+  onCopyLink: () => void;
+  copyState: "idle" | "copied" | "error";
+  /** When false, hide copy/download (no previewable app yet). */
+  showPreviewActions?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const hasItems =
+    showPreviewActions || Boolean(onRequestChanges) || Boolean(onRestart);
+
+  if (!hasItems) return null;
+
+  return (
+    <div className="relative">
+      <Button
+        type="button"
+        variant="ghost"
+        className="w-full !h-8 !justify-between !px-2 text-zinc-300"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+      >
+        <span className="inline-flex items-center gap-2">
+          <MoreHorizontal size={14} />
+          More
+        </span>
+        <ChevronDown size={14} className={cn("transition-transform", open && "rotate-180")} />
+      </Button>
+      {open && (
+        <>
+          <button
+            type="button"
+            className="fixed inset-0 z-10 cursor-default"
+            aria-label="Close more menu"
+            onClick={() => setOpen(false)}
+          />
+          <div
+            className="absolute right-0 z-20 mt-1 w-full min-w-[220px] overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-lg"
+            role="menu"
+          >
+            {showPreviewActions && (
+              <>
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-100 hover:bg-zinc-800"
+                  role="menuitem"
+                  onClick={() => {
+                    setOpen(false);
+                    onCopyLink();
+                  }}
+                >
+                  <Link2 size={14} />
+                  {copyState === "copied"
+                    ? "Link copied"
+                    : copyState === "error"
+                      ? "Could not copy link"
+                      : "Copy link"}
+                </button>
+                <a
+                  href={`/api/runs/${runId}/export?format=single`}
+                  download
+                  className="block px-3 py-2 text-left text-sm text-zinc-100 hover:bg-zinc-800"
+                  role="menuitem"
+                  onClick={() => setOpen(false)}
+                >
+                  Save app (HTML)
+                </a>
+                <a
+                  href={`/api/runs/${runId}/export`}
+                  download
+                  className="block px-3 py-2 text-left text-sm text-zinc-100 hover:bg-zinc-800"
+                  role="menuitem"
+                  onClick={() => setOpen(false)}
+                >
+                  Download source (ZIP)
+                </a>
+              </>
+            )}
+            {onRequestChanges && (
+              <button
+                type="button"
+                className="block w-full px-3 py-2 text-left text-sm text-zinc-100 hover:bg-zinc-800"
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false);
+                  onRequestChanges();
+                }}
+              >
+                Request changes
+              </button>
+            )}
+            {onRestart && (
+              <button
+                type="button"
+                className="block w-full px-3 py-2 text-left text-sm text-zinc-100 hover:bg-zinc-800"
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false);
+                  onRestart();
+                }}
+              >
+                Restart with a new brief
+              </button>
+            )}
+            <Link
+              href="/faq"
+              className="block px-3 py-2 text-left text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+              role="menuitem"
+              onClick={() => setOpen(false)}
+            >
+              FAQ — static vs production
+            </Link>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function RunDeliverableActions({
   runId,
   artifacts,
@@ -98,6 +230,8 @@ export function RunDeliverableActions({
   runFinished = false,
   variant = "panel",
   className,
+  onRequestChanges,
+  onRestart,
 }: RunDeliverableActionsProps) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
   const previewReady = hasPreviewableApp(artifacts, ceoGoal);
@@ -127,27 +261,36 @@ export function RunDeliverableActions({
               <ExternalLink size={14} />
               Open your app
             </Button>
-            <p className="text-[11px] text-zinc-400">
-              Opens in a new tab — use it like any website.
+            <p className="text-[11px] text-zinc-500">
+              Static preview + ZIP in beta.{" "}
+              <Link href="/faq" className="text-zinc-400 underline-offset-2 hover:underline">
+                FAQ
+              </Link>
             </p>
-            <Button
-              type="button"
-              variant="ghost"
-              className="w-full !h-8 !justify-start !px-2 text-zinc-300"
-              onClick={() => void handleCopyLink()}
-            >
-              <Link2 size={14} />
-              {copyState === "copied"
-                ? "Link copied"
-                : copyState === "error"
-                  ? "Could not copy link"
-                  : "Copy link"}
-            </Button>
-            <DownloadMenu runId={runId} />
+            <HudMoreMenu
+              runId={runId}
+              onRequestChanges={onRequestChanges}
+              onRestart={onRestart}
+              onCopyLink={() => void handleCopyLink()}
+              copyState={copyState}
+              showPreviewActions
+            />
           </>
         ) : (
           runFinished && (
-            <span className="text-[11px] text-zinc-400">No previewable HTML yet</span>
+            <div className="space-y-2">
+              <span className="text-[11px] text-zinc-400">No previewable HTML yet</span>
+              {(onRequestChanges || onRestart) && (
+                <HudMoreMenu
+                  runId={runId}
+                  onRequestChanges={onRequestChanges}
+                  onRestart={onRestart}
+                  onCopyLink={() => void handleCopyLink()}
+                  copyState={copyState}
+                  showPreviewActions={false}
+                />
+              )}
+            </div>
           )
         )}
       </div>
@@ -155,23 +298,33 @@ export function RunDeliverableActions({
   }
 
   return (
-    <div className={className ?? "flex flex-wrap items-center gap-1"}>
-      {previewReady ? (
-        <Button
-          type="button"
-          variant="primary"
-          className="!h-8 !px-3"
-          onClick={() => openRunPreview(runId)}
-        >
-          <ExternalLink size={14} />
-          Open your app
-        </Button>
-      ) : (
-        runFinished && (
-          <span className="px-1 text-[11px] text-zinc-500">No previewable HTML yet</span>
-        )
+    <div className={className ?? "flex flex-col gap-1"}>
+      <div className="flex flex-wrap items-center gap-1">
+        {previewReady ? (
+          <Button
+            type="button"
+            variant="primary"
+            className="!h-8 !px-3"
+            onClick={() => openRunPreview(runId)}
+          >
+            <ExternalLink size={14} />
+            Open your app
+          </Button>
+        ) : (
+          runFinished && (
+            <span className="px-1 text-[11px] text-zinc-500">No previewable HTML yet</span>
+          )
+        )}
+        <DownloadMenu runId={runId} compact />
+      </div>
+      {runFinished && (
+        <p className="px-1 text-[11px] text-zinc-500">
+          Beta: static preview + ZIP —{" "}
+          <Link href="/faq" className="underline-offset-2 hover:underline">
+            FAQ
+          </Link>
+        </p>
       )}
-      <DownloadMenu runId={runId} compact />
     </div>
   );
 }

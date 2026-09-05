@@ -32,7 +32,7 @@ export type OAuthUserRepository = {
     name: string | null;
     provider: OAuthProvider;
     providerAccountId: string;
-  }): Promise<{ userId: string }>;
+  }): Promise<{ userId: string; created: boolean }>;
 };
 
 export class OAuthError extends Error {
@@ -302,7 +302,7 @@ export async function fetchOAuthIdentity(
 export async function resolveOAuthUser(
   identity: OAuthIdentity,
   repo: OAuthUserRepository,
-): Promise<{ userId: string }> {
+): Promise<{ userId: string; created: boolean }> {
   const email = identity.email.trim().toLowerCase();
   if (!email) {
     throw new OAuthError(
@@ -321,20 +321,21 @@ export async function resolveOAuthUser(
     identity.provider,
     identity.providerAccountId,
   );
-  if (linked) return linked;
+  if (linked) return { userId: linked.userId, created: false };
 
   const existing = await repo.findUserByEmail(email);
   if (existing) {
     await repo.linkAccount(existing.id, identity.provider, identity.providerAccountId);
-    return { userId: existing.id };
+    return { userId: existing.id, created: false };
   }
 
-  return repo.createUser({
+  const created = await repo.createUser({
     email,
     name: identity.name,
     provider: identity.provider,
     providerAccountId: identity.providerAccountId,
   });
+  return { userId: created.userId, created: created.created };
 }
 
 async function uniqueOrgSlug(base: string): Promise<string> {
@@ -422,7 +423,7 @@ export const prismaOAuthUserRepository: OAuthUserRepository = {
         provider,
         providerAccountId,
       );
-      return { userId: existing.id };
+      return { userId: existing.id, created: false };
     }
 
     try {
@@ -436,7 +437,7 @@ export const prismaOAuthUserRepository: OAuthUserRepository = {
       await prisma.user.delete({ where: { id: userId } }).catch(() => undefined);
       throw err;
     }
-    return { userId };
+    return { userId, created: true };
   },
 };
 

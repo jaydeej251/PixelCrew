@@ -105,6 +105,10 @@ export default function Home() {
         </section>
 
         <p className="mt-8 text-center text-sm text-zinc-500">
+          <Link href="/faq" className="text-zinc-400 hover:text-zinc-200">
+            FAQ
+          </Link>
+          {" · "}
           <Link href="/pricing" className="text-zinc-400 hover:text-zinc-200">
             View pricing
           </Link>

@@ -10,19 +10,18 @@ const variants: Record<Variant, string> = {
   danger: "bg-red-600 hover:bg-red-500 text-white",
 };
 
+const base =
+  "inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50";
+
+/** Shared styles for Button and Link CTAs (avoid nesting Link > Button). */
+export function buttonClassName(variant: Variant = "primary", className?: string) {
+  return cn(base, variants[variant], className);
+}
+
 export function Button({
   className,
   variant = "primary",
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant }) {
-  return (
-    <button
-      className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50",
-        variants[variant],
-        className,
-      )}
-      {...props}
-    />
-  );
+  return <button className={buttonClassName(variant, className)} {...props} />;
 }
