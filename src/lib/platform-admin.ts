@@ -52,9 +52,17 @@ export function isPlatformOps(role: PlatformRole): boolean {
   return PLATFORM_OPS_ROLES.includes(role);
 }
 
-/** Where to send the user after login/signup/OAuth. */
+/** Where to send the user after login / returning OAuth. */
 export function postAuthPath(platformRole: PlatformRole): "/admin" | "/app" {
   return isPlatformOps(platformRole) ? "/admin" : "/app";
+}
+
+/**
+ * Where to send a brand-new product user (email signup or first OAuth).
+ * Ops still land on /admin; tenants get the first-run guide once.
+ */
+export function postSignupPath(platformRole: PlatformRole): "/admin" | "/onboarding" {
+  return isPlatformOps(platformRole) ? "/admin" : "/onboarding";
 }
 
 export async function writeAdminAuditLog(input: {

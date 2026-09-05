@@ -16,6 +16,10 @@ import { AppHeader } from "@/components/layout/app-header";
 import { SettingsDrawer } from "@/components/layout/settings-drawer";
 import { GoalComposer } from "@/components/layout/goal-composer";
 import { RunReadinessChecklist } from "@/components/layout/run-readiness-checklist";
+import {
+  WelcomePanel,
+  WELCOME_TIPS_DISMISS_KEY,
+} from "@/components/layout/welcome-panel";
 import { DashboardSkeleton } from "@/components/layout/dashboard-skeleton";
 import { ActivityFeed } from "@/components/office/activity-feed";
 import { Alert } from "@/components/ui/alert";
@@ -41,6 +45,16 @@ import {
   type OfficeLayoutSummary,
   type TileEdge,
 } from "@/lib/office-blueprint";
+
+type ComposerMode = "fresh" | "follow-up" | "redesign";
+
+/** Strip nested follow-up suffixes so Request changes stays on the original brief. */
+function baseGoalFromRunGoal(goal: string): string {
+  const marker = "\n\nChanges I want:\n";
+  const idx = goal.indexOf(marker);
+  if (idx === -1) return goal.trim();
+  return goal.slice(0, idx).trim();
+}
 
 type WorkspaceData = {
   workspace: { id: string; name: string; ceoGoal: string | null };
@@ -94,6 +108,18 @@ export function Dashboard() {
   const [runReady, setRunReady] = useState(true);
   const [runReadyReason, setRunReadyReason] = useState<string | null>(null);
   const [newChatDialogOpen, setNewChatDialogOpen] = useState(false);
+  const [showWelcomeTips, setShowWelcomeTips] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem(WELCOME_TIPS_DISMISS_KEY) !== "1";
+    } catch {
+      return true;
+    }
+  });
+  const [conversationsReady, setConversationsReady] = useState(false);
+  const [composerMode, setComposerMode] = useState<ComposerMode>("fresh");
+  const [priorGoalContext, setPriorGoalContext] = useState("");
+  const planPanelRef = useRef<HTMLDivElement>(null);
   const [mobilePane, setMobilePane] = useState<"chats" | "work" | "files">("work");
   const [events, setEvents] = useState<RunEventMessage[]>([]);
   const [agentStatuses, setAgentStatuses] = useState<Record<string, AgentStatus>>({});
@@ -135,6 +161,11 @@ export function Dashboard() {
   const subscribeToRunRef = useRef<(id: string) => void>(() => undefined);
   const floorBusyRef = useRef(false);
   const hydratedLlmRef = useRef(false);
+
+  // Exit arrange mode when plan review opens (adjust during render — not in an effect).
+  if (awaitingPlan && editingOffice) {
+    setEditingOffice(false);
+  }
 
   const loadConversations = useCallback(async () => {
     const res = await fetch("/api/runs");
@@ -282,6 +313,8 @@ export function Dashboard() {
     setRunId(null);
     setStoredActiveRunId(null);
     setCeoGoal("");
+    setComposerMode("fresh");
+    setPriorGoalContext("");
     setArtifacts([]);
     setTasks([]);
     setRunStats({ totalTokens: 0, estCostUsd: 0 });
@@ -296,10 +329,36 @@ export function Dashboard() {
     setMobilePane("work");
   }, []);
 
+  /** New chat with a prefilled goal (uses a monthly run when Start is pressed). */
+  const startBlankWithGoal = useCallback(
+    (nextGoal: string, mode: ComposerMode, prior = "") => {
+      if (running) {
+        setNewChatDialogOpen(true);
+        return;
+      }
+      blankConversation();
+      setComposerMode(mode);
+      setPriorGoalContext(prior);
+      setCeoGoal(nextGoal);
+    },
+    [blankConversation, running],
+  );
+
+  const startFollowUpChat = useCallback(() => {
+    const prior = baseGoalFromRunGoal(ceoGoal);
+    // Keep the change field empty so the user types what to change; prior shows above.
+    startBlankWithGoal("", "follow-up", prior);
+  }, [ceoGoal, startBlankWithGoal]);
+
+  const startRedesignChat = useCallback(() => {
+    startBlankWithGoal(baseGoalFromRunGoal(ceoGoal), "redesign", "");
+  }, [ceoGoal, startBlankWithGoal]);
+
   useEffect(() => {
     void (async () => {
       await load();
       const runs = await loadConversations();
+      setConversationsReady(true);
       const stored = getStoredActiveRunId();
       if (stored && runs.some((r) => r.id === stored)) {
         await selectRun(stored);
@@ -308,6 +367,16 @@ export function Dashboard() {
       }
     })();
   }, [load, loadConversations, selectRun, blankConversation]);
+
+  useEffect(() => {
+    if (!awaitingPlan || !runId) return;
+    const panel = planPanelRef.current;
+    if (!panel) return;
+    const focusable = panel.querySelector<HTMLElement>(
+      'button:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+    );
+    focusable?.focus();
+  }, [awaitingPlan, runId]);
 
   useEffect(() => {
     const saved = window.localStorage.getItem(OFFICE_VIEW_KEY);
@@ -319,6 +388,12 @@ export function Dashboard() {
   useEffect(() => {
     floorBusyRef.current = running || simulating || awaitingPlan;
   }, [running, simulating, awaitingPlan]);
+
+  useEffect(() => {
+    if (awaitingPlan) {
+      editingOfficeRef.current = false;
+    }
+  }, [awaitingPlan]);
 
   useEffect(() => {
     return () => {
@@ -502,6 +577,18 @@ export function Dashboard() {
       setSettingsOpen(true);
       return;
     }
+    const goalForRun =
+      composerMode === "follow-up" && priorGoalContext.trim()
+        ? `${priorGoalContext.trim()}\n\nChanges I want:\n${ceoGoal.trim()}`
+        : ceoGoal.trim();
+    if (!goalForRun) {
+      setRunError(
+        composerMode === "follow-up"
+          ? "Describe the changes you want, then Start."
+          : "Enter what you want to build, then Start.",
+      );
+      return;
+    }
     floorBusyRef.current = true;
     force3D();
     setRunning(true);
@@ -516,7 +603,7 @@ export function Dashboard() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         workspaceId: data.workspace.id,
-        ceoGoal,
+        ceoGoal: goalForRun,
         provider: runProvider,
         model: runModel,
       }),
@@ -531,6 +618,9 @@ export function Dashboard() {
       void load();
       return;
     }
+    setCeoGoal(goalForRun);
+    setComposerMode("fresh");
+    setPriorGoalContext("");
     setRunId(json.runId);
     setStoredActiveRunId(json.runId);
     setMobilePane("work");
@@ -541,8 +631,8 @@ export function Dashboard() {
       setConversations((prev) => [
         {
           id: json.runId,
-          title: ceoGoal.slice(0, 60),
-          ceoGoal,
+          title: goalForRun.slice(0, 60),
+          ceoGoal: goalForRun,
           status: "pending",
           createdAt: new Date().toISOString(),
         },
@@ -821,11 +911,38 @@ export function Dashboard() {
           />
 
           <div className="office-hud">
+            {awaitingPlan && runId ? (
+              <div className="pointer-events-auto relative z-10 flex h-full w-full flex-col items-center justify-center">
+                <div
+                  className="pointer-events-none absolute inset-0 bg-zinc-950/55 backdrop-blur-[2px]"
+                  aria-hidden
+                />
+                <div
+                  ref={planPanelRef}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="plan-review-title"
+                  className="relative z-10 flex h-full max-h-[calc(100dvh-5.5rem)] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-zinc-700/80 bg-zinc-950/95 p-4 shadow-xl sm:max-h-[min(85vh,720px)] sm:h-auto"
+                >
+                  <PlanReview
+                    runId={runId}
+                    onPublished={() => {
+                      setAwaitingPlan(false);
+                      setRunning(true);
+                      setRunOutcome("running");
+                      subscribeToRun(runId);
+                    }}
+                    onRestart={startRedesignChat}
+                  />
+                </div>
+              </div>
+            ) : (
+              <>
             <div>
             {shiftBanner && <p className="office-work-banner">{shiftBanner}</p>}
             <div className="flex items-start justify-between gap-3">
               <div className="pointer-events-auto max-w-sm space-y-2">
-                {runId && ceoGoal && (
+                {runId && ceoGoal && runOutcome !== "completed" && runOutcome !== "failed" && (
                   <div className="rounded-xl border border-zinc-800/80 bg-zinc-950/80 px-3 py-2 backdrop-blur-md">
                     <p className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
                       You asked
@@ -836,33 +953,45 @@ export function Dashboard() {
                 {runError && <Alert variant="error">{runError}</Alert>}
                 {runOutcome === "failed" && runId && !running && (
                   <Alert variant="error">
-                    <p>The team stopped. Resume continues this chat with your current model — it does not start a new prompt.</p>
-                    <Button
-                      type="button"
-                      variant="primary"
-                      className="mt-2 !h-8 !px-3"
-                      onClick={() => void resumeRun()}
-                    >
-                      Resume
-                    </Button>
+                    <p>The team stopped.</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="primary"
+                        className="!h-8 !px-3"
+                        onClick={() => void resumeRun()}
+                      >
+                        Resume
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="!h-8 !px-3"
+                        onClick={startRedesignChat}
+                      >
+                        Restart
+                      </Button>
+                    </div>
+                    <p className="mt-2 text-[11px] text-zinc-500">
+                      Resume continues this chat. Restart opens a new brief.
+                    </p>
                   </Alert>
                 )}
                 {runOutcome === "completed" && runId && (
                   <Alert variant="success">
-                    <p>Your app is ready — open it in a new tab.</p>
+                    <p className="font-medium">Your app is ready</p>
                     <RunDeliverableActions
                       runId={runId}
                       artifacts={artifacts}
                       ceoGoal={ceoGoal}
                       runFinished
                       variant="hud"
+                      onRequestChanges={startFollowUpChat}
+                      onRestart={startRedesignChat}
                     />
-                    <p className="mt-2 text-[11px] text-zinc-400">
-                      Thought process stays in Files if you want the play-by-play.
-                    </p>
                   </Alert>
                 )}
-                <ActivityFeed events={events} />
+                {runOutcome !== "completed" && <ActivityFeed events={events} />}
               </div>
 
               <div className="pointer-events-auto flex flex-col items-end gap-3">
@@ -986,67 +1115,117 @@ export function Dashboard() {
                       .finally(() => setOfficeBusy(false));
                   }}
                 />
-                {awaitingPlan && runId && (
-                <div className="max-h-[75vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-950/90 p-4 shadow-xl backdrop-blur-md">
-                  <PlanReview
-                    runId={runId}
-                    onPublished={() => {
-                      setAwaitingPlan(false);
-                      setRunning(true);
-                      setRunOutcome("running");
-                      subscribeToRun(runId);
-                    }}
-                  />
-                </div>
-              )}
               </div>
             </div>
             </div>
 
             {!runId && (
-              <div className="pointer-events-auto mx-auto w-full max-w-2xl">
-                <p className="mb-2 text-center text-sm font-medium text-zinc-100 drop-shadow">
-                  Your office is live — tell the team what to build
-                </p>
-                <RunReadinessChecklist
-                  workspaceId={data.workspace.id}
-                  provider={runProvider}
-                  model={runModel}
-                  onProviderChange={setRunProvider}
-                  onModelChange={setRunModel}
-                  onOpenSettings={() => setSettingsOpen(true)}
-                  credentialsRevision={credentialsRevision}
-                  onReadinessChange={(canStart, reason) => {
-                    setRunReady(canStart);
-                    setRunReadyReason(reason);
-                  }}
-                />
-                <GoalComposer
-                  value={ceoGoal}
-                  onChange={setCeoGoal}
-                  onSubmit={() => void startRun()}
-                  disabled={!runReady || Boolean(data.usage && !data.usage.canRun)}
-                  submitting={running}
-                  showExamples
-                  compact
-                />
-                {data.usage && !data.usage.canRun && (
-                  <p className="mt-2 text-center text-[11px] text-amber-400/90">
-                    {data.usage.reason ??
-                      `${data.usage.used}/${data.usage.limit} runs used this month. Resume an existing chat anytime.`}
+              <div className="pointer-events-auto mx-auto flex w-full max-w-2xl max-h-[calc(100dvh-7rem)] flex-col justify-end gap-2">
+                <div className="min-h-0 space-y-2 overflow-y-auto">
+                  <p className="text-center text-sm font-medium text-zinc-100 drop-shadow">
+                    {composerMode === "follow-up"
+                      ? "Request changes — describe what to update"
+                      : composerMode === "redesign"
+                        ? "Restart — rewrite your brief"
+                        : "Your office is live — tell the team what to build"}
                   </p>
-                )}
-                {data.usage?.canRun && (
-                  <p className="mt-2 text-center text-[11px] text-zinc-600">
-                    Free beta · {data.usage.used}/{data.usage.limit} new runs this month
-                  </p>
-                )}
-                {!runReady && runReadyReason && (
-                  <p className="mt-2 text-center text-[11px] text-amber-400/90">
-                    {runReadyReason}
-                  </p>
-                )}
+
+                  {composerMode === "follow-up" && priorGoalContext.trim() && (
+                    <div className="rounded-xl border border-zinc-800/80 bg-zinc-950/90 px-3 py-2 backdrop-blur-md">
+                      <p className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+                        Previous app
+                      </p>
+                      <p className="mt-0.5 line-clamp-3 text-sm text-zinc-300">
+                        {priorGoalContext}
+                      </p>
+                      <p className="mt-1 text-[11px] text-zinc-500">
+                        Starts a new chat and uses a monthly run when you Start.
+                      </p>
+                    </div>
+                  )}
+
+                  {composerMode === "fresh" &&
+                    conversationsReady &&
+                    showWelcomeTips &&
+                    conversations.length === 0 && (
+                      <WelcomePanel
+                        onPickExample={setCeoGoal}
+                        onDismiss={() => {
+                          try {
+                            window.localStorage.setItem(WELCOME_TIPS_DISMISS_KEY, "1");
+                          } catch {
+                            /* ignore quota / private mode */
+                          }
+                          setShowWelcomeTips(false);
+                        }}
+                      />
+                    )}
+
+                  <RunReadinessChecklist
+                      workspaceId={data.workspace.id}
+                      provider={runProvider}
+                      model={runModel}
+                      onProviderChange={setRunProvider}
+                      onModelChange={setRunModel}
+                      onOpenSettings={() => setSettingsOpen(true)}
+                      credentialsRevision={credentialsRevision}
+                      compact
+                      onReadinessChange={(canStart, reason) => {
+                        setRunReady(canStart);
+                        setRunReadyReason(reason);
+                      }}
+                    />
+                </div>
+
+                <div className="shrink-0">
+                  <GoalComposer
+                    value={ceoGoal}
+                    onChange={setCeoGoal}
+                    onSubmit={() => void startRun()}
+                    disabled={!runReady || Boolean(data.usage && !data.usage.canRun)}
+                    submitting={running}
+                    showExamples={
+                      composerMode === "fresh" &&
+                      conversationsReady &&
+                      !(showWelcomeTips && conversations.length === 0)
+                    }
+                    compact={composerMode === "fresh"}
+                    autoFocus={composerMode !== "fresh"}
+                    placeholder={
+                      composerMode === "follow-up"
+                        ? "What should change? e.g. darker theme, add export…"
+                        : composerMode === "redesign"
+                          ? "Rewrite what you want to build…"
+                          : "What should we build?"
+                    }
+                    submitLabel={
+                      composerMode === "follow-up"
+                        ? "Start changes"
+                        : composerMode === "redesign"
+                          ? "Start redesign"
+                          : "Start"
+                    }
+                  />
+                  {data.usage && !data.usage.canRun && (
+                    <p className="mt-2 text-center text-[11px] text-amber-400/90">
+                      {data.usage.reason ??
+                        `${data.usage.used}/${data.usage.limit} runs used this month. Resume an existing chat anytime.`}
+                    </p>
+                  )}
+                  {data.usage?.canRun && (
+                    <p className="mt-2 text-center text-[11px] text-zinc-600">
+                      Free beta · {data.usage.used}/{data.usage.limit} new runs this month
+                    </p>
+                  )}
+                  {!runReady && runReadyReason && (
+                    <p className="mt-2 text-center text-[11px] text-amber-400/90">
+                      {runReadyReason}
+                    </p>
+                  )}
+                </div>
               </div>
+            )}
+              </>
             )}
           </div>
         </section>

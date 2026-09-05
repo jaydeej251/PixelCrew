@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, LogOut, Settings, UserRound } from "lucide-react";
+import { BookOpen, ChevronDown, CircleHelp, LogOut, Settings, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { BrandMark } from "@/components/layout/brand-mark";
 import { SHOW_DEV_TOOLS } from "@/lib/dev-tools";
@@ -115,21 +115,23 @@ export function AppHeader({
           {runUsage && (
             <span
               className={cn(
-                "hidden rounded-md px-2 py-1 text-[11px] font-medium tabular-nums sm:inline",
+                "rounded-md px-2 py-1 text-[11px] font-medium tabular-nums",
                 runUsage.canRun
-                  ? "bg-zinc-900 text-zinc-400"
+                  ? "hidden bg-zinc-900 text-zinc-400 sm:inline"
                   : "bg-amber-500/15 text-amber-200",
               )}
               title="New runs this calendar month (resumes do not count)"
             >
-              {runUsage.used}/{runUsage.limit} runs
+              {runUsage.canRun
+                ? `${runUsage.used}/${runUsage.limit} runs`
+                : `${runUsage.used}/${runUsage.limit}`}
             </span>
           )}
 
           {chip && (
             <span
               className={cn(
-                "hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium sm:inline-flex",
+                "inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-medium sm:px-2.5",
                 chip.className,
               )}
             >
@@ -220,6 +222,22 @@ export function AppHeader({
                 >
                   <UserRound size={14} />
                   Account
+                </Link>
+                <Link
+                  href="/onboarding"
+                  className="flex w-full items-center gap-2 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  <CircleHelp size={14} />
+                  How it works
+                </Link>
+                <Link
+                  href="/faq"
+                  className="flex w-full items-center gap-2 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
+                  onClick={() => setMenuOpen(false)}
+                >
+                  <BookOpen size={14} />
+                  FAQ
                 </Link>
                 <button
                   type="button"

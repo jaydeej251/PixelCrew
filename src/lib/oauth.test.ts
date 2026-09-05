@@ -75,7 +75,7 @@ function memoryRepo(seed?: {
         providerAccountId: input.providerAccountId,
       });
       created.push(input);
-      return { userId };
+      return { userId, created: true };
     },
   };
 }
@@ -88,6 +88,7 @@ describe("resolveOAuthUser", () => {
 
     const result = await resolveOAuthUser(identity(), repo);
     assert.equal(result.userId, "u_existing");
+    assert.equal(result.created, false);
     assert.equal(repo.created.length, 0);
   });
 
@@ -98,6 +99,7 @@ describe("resolveOAuthUser", () => {
 
     const result = await resolveOAuthUser(identity(), repo);
     assert.equal(result.userId, "u_password");
+    assert.equal(result.created, false);
     assert.equal(repo.accounts.length, 1);
     assert.equal(repo.accounts[0]?.providerAccountId, "google-sub-1");
     assert.equal(repo.created.length, 0);
@@ -107,6 +109,7 @@ describe("resolveOAuthUser", () => {
     const repo = memoryRepo();
     const result = await resolveOAuthUser(identity({ provider: "github", providerAccountId: "42" }), repo);
     assert.equal(result.userId, "user_1");
+    assert.equal(result.created, true);
     assert.equal(repo.created.length, 1);
     assert.equal(repo.created[0]?.email, "ceo@example.com");
     assert.equal(repo.created[0]?.provider, "github");

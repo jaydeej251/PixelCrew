@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { PRODUCT_NAME, SUPPORT_EMAIL } from "@/lib/constants";
 import { SiteFooter } from "@/components/layout/site-footer";
 import { SiteHeader } from "@/components/layout/site-header";
@@ -25,10 +26,18 @@ export default function SupportPage() {
           </p>
         </div>
         <p className="mt-6 text-sm text-zinc-500">
-          Prefer in-app controls? Open{" "}
-          <a href="/account" className="text-zinc-400 hover:text-zinc-200">
+          Common questions:{" "}
+          <Link href="/faq" className="text-zinc-400 hover:text-zinc-200">
+            FAQ
+          </Link>
+          {" · "}
+          <Link href="/onboarding" className="text-zinc-400 hover:text-zinc-200">
+            How it works
+          </Link>
+          . Prefer in-app controls? Open{" "}
+          <Link href="/account" className="text-zinc-400 hover:text-zinc-200">
             Account
-          </a>{" "}
+          </Link>{" "}
           to log out or delete data — visiting Support never signs you out.
         </p>
       </main>
