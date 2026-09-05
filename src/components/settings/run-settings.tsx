@@ -15,6 +15,7 @@ import {
   type OllamaEndpointMode,
 } from "@/lib/ollama-models";
 import { writeProviderTestOk } from "@/lib/run-readiness";
+import { useAllowLocalOllama } from "@/lib/use-allow-local-ollama";
 
 type ProviderStatus = {
   provider: string;
@@ -50,6 +51,7 @@ export function RunSettings({
   onProviderTestResult,
 }: RunSettingsProps) {
   const [statuses, setStatuses] = useState<ProviderStatus[]>([]);
+  const allowLocalOllama = useAllowLocalOllama();
 
   const reload = useCallback(() => {
     fetch(`/api/providers/status?workspaceId=${workspaceId}`)
@@ -65,9 +67,16 @@ export function RunSettings({
   const current = statuses.find((s) => s.provider === provider);
   const ollamaMode =
     provider === "ollama" ? getOllamaEndpointMode(current?.activeBaseUrl) : null;
-  const cloudSuggestions = getOllamaSuggestedModels(ollamaMode === "cloud" ? "cloud" : null);
+  const effectiveOllamaMode =
+    ollamaMode === "local" && !allowLocalOllama ? "cloud" : ollamaMode;
+  const showBlockedLocal = provider === "ollama" && ollamaMode === "local" && !allowLocalOllama;
+  const cloudSuggestions = getOllamaSuggestedModels(
+    effectiveOllamaMode === "cloud" || showBlockedLocal ? "cloud" : null,
+  );
   const mismatched =
-    provider === "ollama" && ollamaModelLooksMismatched(model, ollamaMode);
+    provider === "ollama" &&
+    !showBlockedLocal &&
+    ollamaModelLooksMismatched(model, ollamaMode);
 
   return (
     <Panel>
@@ -79,10 +88,9 @@ export function RunSettings({
       </PanelHeader>
       <PanelContent className="space-y-3">
         <p className="text-xs text-zinc-500">
-          Pick who builds with you, then which AI brain they use. For Ollama, choose{" "}
-          <span className="text-zinc-400">Use cloud</span> or{" "}
-          <span className="text-zinc-400">Use local</span> under Your API keys — most people
-          should use cloud.
+          Pick who builds with you, then which AI brain they use. On the live site, Ollama
+          means <span className="text-zinc-400">Ollama Cloud</span> (paste your key under Your
+          API keys).
         </p>
 
         <div className="space-y-1.5">
@@ -100,7 +108,9 @@ export function RunSettings({
               if (!next) return;
               if (nextId === "ollama") {
                 const mode = getOllamaEndpointMode(next.activeBaseUrl);
-                onModelChange(getOllamaDefaultModelForMode(mode));
+                const nextMode =
+                  mode === "local" && !allowLocalOllama ? "cloud" : mode;
+                onModelChange(getOllamaDefaultModelForMode(nextMode));
               } else {
                 onModelChange(next.defaultModel);
               }
@@ -117,10 +127,19 @@ export function RunSettings({
 
         {provider === "ollama" && current?.ready && (
           <OllamaEndpointCard
-            mode={ollamaMode}
-            baseUrl={current.activeBaseUrl}
+            mode={showBlockedLocal ? "cloud" : ollamaMode}
+            baseUrl={showBlockedLocal ? null : current.activeBaseUrl}
             label={current.activeCredentialLabel}
+            blockedLocal={showBlockedLocal}
           />
+        )}
+
+        {showBlockedLocal && (
+          <p className="text-[11px] leading-snug text-amber-400/90">
+            Local Ollama isn’t available on the live website. Under Your API keys, save an
+            Ollama Cloud key and click Use on it. Connecting your computer’s models is planned
+            for soft launch (Local Connect).
+          </p>
         )}
 
         {provider !== "mock" && (
@@ -129,12 +148,12 @@ export function RunSettings({
               <Label htmlFor="run-model" className="text-xs text-zinc-400">
                 Model
               </Label>
-              {ollamaMode === "cloud" && (
+              {(effectiveOllamaMode === "cloud" || showBlockedLocal) && (
                 <span className="text-[10px] uppercase tracking-wide text-zinc-500">
                   Cloud catalog
                 </span>
               )}
-              {ollamaMode === "local" && (
+              {ollamaMode === "local" && allowLocalOllama && (
                 <span className="text-[10px] uppercase tracking-wide text-zinc-500">
                   On this computer
                 </span>
@@ -142,11 +161,14 @@ export function RunSettings({
             </div>
             <Input
               id="run-model"
-              placeholder={modelPlaceholder(provider, ollamaMode)}
+              placeholder={modelPlaceholder(
+                provider,
+                showBlockedLocal ? "cloud" : ollamaMode,
+              )}
               value={model}
               onChange={(e) => onModelChange(e.target.value)}
             />
-            {ollamaMode === "local" ? (
+            {ollamaMode === "local" && allowLocalOllama ? (
               <LocalOllamaModelChips
                 key={`${workspaceId}-${credentialsRevision}`}
                 workspaceId={workspaceId}
@@ -172,7 +194,7 @@ export function RunSettings({
                         : "That name is usually for Ollama Cloud. On this computer, pick a model you’ve already downloaded in the Ollama app."}
                   </p>
                 )}
-                {!mismatched && ollamaMode === "cloud" && (
+                {!mismatched && (effectiveOllamaMode === "cloud" || showBlockedLocal) && (
                   <p className="text-[11px] leading-snug text-zinc-500">
                     Uses your Ollama Cloud key. Tap a chip above, or type a model name from
                     ollama.com.
@@ -203,7 +225,7 @@ export function RunSettings({
                 </span>
               )}
             </p>
-            {provider === "ollama" && current.ready && (
+            {provider === "ollama" && current.ready && !showBlockedLocal && (
               <p className="text-[11px] leading-snug text-zinc-500">
                 Saved both local and cloud? Click{" "}
                 <span className="text-zinc-300">Use</span> on the one you want under Your API
@@ -218,7 +240,9 @@ export function RunSettings({
                 onResult={onProviderTestResult}
               />
             )}
-            {provider === "ollama" && current.ready && ollamaMode === "cloud" && (
+            {provider === "ollama" &&
+              current.ready &&
+              (ollamaMode === "cloud" || showBlockedLocal) && (
               <TestKeyButton
                 workspaceId={workspaceId}
                 provider="ollama"
@@ -431,15 +455,26 @@ function OllamaEndpointCard({
   mode,
   baseUrl,
   label,
+  blockedLocal = false,
 }: {
   mode: OllamaEndpointMode | null;
   baseUrl?: string | null;
   label?: string | null;
+  blockedLocal?: boolean;
 }) {
-  const title =
-    mode === "cloud" ? "Cloud" : mode === "local" ? "This computer" : "Custom";
+  const title = blockedLocal
+    ? "Cloud required"
+    : mode === "cloud"
+      ? "Cloud"
+      : mode === "local"
+        ? "This computer"
+        : "Custom";
   const badgeVariant =
-    mode === "cloud" ? "building" : mode === "local" ? "done" : "default";
+    blockedLocal || mode === "cloud"
+      ? "building"
+      : mode === "local"
+        ? "done"
+        : "default";
 
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 py-2.5">
@@ -450,18 +485,22 @@ function OllamaEndpointCard({
         <Badge variant={badgeVariant}>{title}</Badge>
       </div>
       <p className="mt-1.5 truncate text-sm text-zinc-200">
-        {mode === "local"
-          ? "Ollama app on this computer"
-          : mode === "cloud"
-            ? "Ollama Cloud"
-            : baseUrl || "Custom Ollama address"}
+        {blockedLocal
+          ? "Ollama Cloud (live site)"
+          : mode === "local"
+            ? "Ollama app on this computer"
+            : mode === "cloud"
+              ? "Ollama Cloud"
+              : baseUrl || "Custom Ollama address"}
       </p>
       <p className="mt-1 text-[11px] leading-snug text-zinc-500">
-        {mode === "cloud"
-          ? "Uses your cloud key from ollama.com."
-          : mode === "local"
-            ? "Uses the Ollama app on this computer — no cloud key needed."
-            : "Using the address saved on your active key."}
+        {blockedLocal
+          ? "The live website can’t reach the Ollama app on your computer. Use an Ollama Cloud key."
+          : mode === "cloud"
+            ? "Uses your cloud key from ollama.com."
+            : mode === "local"
+              ? "Uses the Ollama app on this computer — no cloud key needed."
+              : "Using the address saved on your active key."}
         {label ? (
           <>
             {" "}

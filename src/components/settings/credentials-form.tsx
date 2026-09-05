@@ -11,11 +11,12 @@ import {
   OLLAMA_LOCAL_BASE_URL,
 } from "@/lib/ollama-endpoints";
 import { looksLikeIncompleteOllamaApiKey } from "@/lib/ollama-models";
+import { useAllowLocalOllama } from "@/lib/use-allow-local-ollama";
 
 const PROVIDERS = [
   { id: "openrouter", label: "OpenRouter" },
   { id: "google", label: "Google Gemini" },
-  { id: "ollama", label: "Ollama (cloud or local)" },
+  { id: "ollama", label: "Ollama" },
   { id: "openai_compatible", label: "OpenAI-compatible" },
 ] as const;
 
@@ -49,11 +50,12 @@ export function CredentialsForm({
   const [provider, setProvider] = useState("openrouter");
   const [label, setLabel] = useState("");
   const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState(OLLAMA_LOCAL_BASE_URL);
+  const [baseUrl, setBaseUrl] = useState(OLLAMA_CLOUD_BASE_URL);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [saved, setSaved] = useState<SavedCred[]>([]);
+  const allowLocalOllama = useAllowLocalOllama();
 
   const reload = useCallback(() => {
     fetch(`/api/credentials?workspaceId=${workspaceId}`)
@@ -69,7 +71,16 @@ export function CredentialsForm({
     reload();
   }, [reload]);
 
-  const needsBaseUrl = provider === "ollama" || provider === "openai_compatible";
+  const needsBaseUrl =
+    provider === "openai_compatible" || (provider === "ollama" && allowLocalOllama);
+  const ollamaFormBaseUrl =
+    provider === "ollama" && !allowLocalOllama ? OLLAMA_CLOUD_BASE_URL : baseUrl;
+  const hasActiveLocalOllama = saved.some(
+    (c) =>
+      c.provider === "ollama" &&
+      c.isDefault &&
+      isOllamaLocalBaseUrl(c.baseUrl),
+  );
 
   return (
     <Panel>
@@ -81,10 +92,16 @@ export function CredentialsForm({
       </PanelHeader>
       <PanelContent>
         <p className="mb-3 text-xs text-zinc-500">
-          Add a key for a real model. Ollama Cloud needs the full{" "}
-          <code className="text-zinc-400">id.secret</code> — incomplete keys are rejected.
-          Skip only if you want Mock.
+          Add a key for a real model. For Ollama on the live site, use an{" "}
+          <span className="text-zinc-300">Ollama Cloud</span> key (full{" "}
+          <code className="text-zinc-400">id.secret</code>). Skip only if you want Mock.
         </p>
+        {!allowLocalOllama && hasActiveLocalOllama && (
+          <p className="mb-3 text-[11px] leading-snug text-amber-400/90">
+            Your active Ollama key is set to this computer, but the live website can’t use
+            local models. Save or click Use on a cloud key below.
+          </p>
+        )}
         {saved.length > 0 && (
           <ul className="mb-3 space-y-1 text-xs text-zinc-400">
             {saved.map((c) => (
@@ -167,7 +184,7 @@ export function CredentialsForm({
 
             if (
               provider === "ollama" &&
-              isOllamaCloudBaseUrl(baseUrl) &&
+              (!allowLocalOllama || isOllamaCloudBaseUrl(ollamaFormBaseUrl)) &&
               !apiKey.trim()
             ) {
               setError("API key is required for Ollama Cloud");
@@ -177,7 +194,7 @@ export function CredentialsForm({
 
             if (
               provider === "ollama" &&
-              isOllamaCloudBaseUrl(baseUrl) &&
+              (!allowLocalOllama || isOllamaCloudBaseUrl(ollamaFormBaseUrl)) &&
               looksLikeIncompleteOllamaApiKey(apiKey)
             ) {
               setError(
@@ -188,11 +205,19 @@ export function CredentialsForm({
             }
 
             try {
+              const resolvedBaseUrl =
+                provider === "ollama"
+                  ? allowLocalOllama
+                    ? baseUrl.trim() || OLLAMA_CLOUD_BASE_URL
+                    : OLLAMA_CLOUD_BASE_URL
+                  : needsBaseUrl
+                    ? baseUrl.trim() || undefined
+                    : undefined;
               await onSave({
                 provider,
                 label: label || provider,
                 apiKey: apiKey || undefined,
-                baseUrl: needsBaseUrl ? baseUrl.trim() || undefined : undefined,
+                baseUrl: resolvedBaseUrl,
               });
               setApiKey("");
               setMessage("Saved");
@@ -253,7 +278,7 @@ export function CredentialsForm({
             required={provider !== "ollama"}
             autoComplete="off"
           />
-          {provider === "ollama" && (
+          {provider === "ollama" && allowLocalOllama && (
             <div className="flex gap-2">
               <button
                 type="button"
@@ -289,10 +314,19 @@ export function CredentialsForm({
           )}
           {provider === "ollama" && (
             <p className="text-[11px] leading-snug text-zinc-500">
-              <span className="text-zinc-300">Use cloud</span> (recommended): paste your full
-              key from ollama.com/settings/keys.{" "}
-              <span className="text-zinc-300">Use local</span>: leave the key empty and keep
-              the Ollama app open on this computer — no terminal needed.
+              {allowLocalOllama ? (
+                <>
+                  <span className="text-zinc-300">Use cloud</span>: paste your full key from
+                  ollama.com/settings/keys.{" "}
+                  <span className="text-zinc-300">Use local</span>: leave the key empty and
+                  keep the Ollama app open on this computer.
+                </>
+              ) : (
+                <>
+                  Paste your full key from ollama.com/settings/keys. Local Ollama on your
+                  computer isn’t available on the live website yet — use cloud for now.
+                </>
+              )}
             </p>
           )}
           {provider === "ollama" &&

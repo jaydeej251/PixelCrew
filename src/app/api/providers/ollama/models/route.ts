@@ -15,6 +15,10 @@ import {
   requireProductSession,
 } from "@/lib/auth";
 import { consumeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
+import { isLocalPixelCrewRequest } from "@/lib/local-app-host";
+
+const LIVE_LOCAL_OLLAMA_MESSAGE =
+  "Local Ollama isn’t available on the live website — the server can’t see the Ollama app on your computer. Paste an Ollama Cloud key and use Use cloud under Your API keys. Local models return when PixelCrew runs on this computer (or via a future Local Connect helper).";
 
 /**
  * GET /api/providers/ollama/models?workspaceId=…
@@ -37,6 +41,16 @@ export async function GET(req: Request) {
     });
     if (!limit.allowed) return rateLimitResponse(limit);
 
+    if (!isLocalPixelCrewRequest(req)) {
+      return NextResponse.json({
+        ok: false,
+        mode: "remote",
+        baseUrl: null,
+        models: [],
+        message: LIVE_LOCAL_OLLAMA_MESSAGE,
+      });
+    }
+
     const cred = await findProviderCredential(prisma, workspaceId, "ollama");
     const config = resolveProviderConfig(
       "ollama",
@@ -54,7 +68,7 @@ export async function GET(req: Request) {
           models: [],
           message:
             mode === "cloud"
-              ? "You’re on Ollama Cloud right now. Click Use local under Your API keys if you want models from the Ollama app on this computer."
+              ? "You’re on Ollama Cloud right now. Local model chips only appear when Use local is active on this computer."
               : "Local models only work when PixelCrew and the Ollama app are on the same computer.",
         },
         { status: 400 },
