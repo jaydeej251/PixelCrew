@@ -1,4 +1,5 @@
 import { isMismatchedMarketingHtml } from "./ship-quality";
+import { inlineLinkedProjectAssets } from "./preview-inline";
 
 export type ProjectFile = {
   path: string;
@@ -233,9 +234,11 @@ function defaultReadme(ceoGoal: string, hasAgentHtml: boolean, isNode: boolean):
 
 Goal: ${ceoGoal}
 
-This zip is a project folder from a PixelCrew run. It is not a deployed URL.
+This zip is a developer export from a PixelCrew run. It is not a deployed URL.
 
-## Run locally
+Non-developers: use **Save app (HTML)** or **Open your app** in the office — no terminal required.
+
+## Run locally (developers)
 
 Interactive apps (calculator, taskboard, forms) need a local static server — do not rely on double-clicking \`index.html\` (\`file://\` breaks many scripts).
 
@@ -444,4 +447,18 @@ export function scaffoldGaps(opts: {
     }
   }
   return gaps;
+}
+
+/**
+ * Build one self-contained HTML file for non-dev download (double-click / email).
+ * Inlines linked stylesheets and external scripts from the assembled project map.
+ */
+export function assembleSingleFileHtml(
+  files: Map<string, string>,
+  ceoGoal = "",
+): string | null {
+  const indexPath = findPreviewIndex(files, ceoGoal);
+  const source = files.get(indexPath);
+  if (!source) return null;
+  return inlineLinkedProjectAssets(source, indexPath, files);
 }

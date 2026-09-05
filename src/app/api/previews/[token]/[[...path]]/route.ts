@@ -54,7 +54,7 @@ export async function GET(
   let previewBaseUrl: string | undefined;
   if (type.startsWith("text/html")) {
     const basePath = `/api/previews/${token}/`;
-    body = preparePreviewHtml(body, run.id, requested, basePath);
+    body = preparePreviewHtml(body, run.id, requested, basePath, files);
     previewBaseUrl = new URL(basePath, previewOrigin).toString();
   } else {
     body = preparePreviewAsset(body, requested, type);
