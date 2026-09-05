@@ -19,8 +19,8 @@ const STEPS = [
     body: "The office checklist requires a green chat probe so demos don’t die on Unauthorized.",
   },
   {
-    title: "Run → approve plan → Preview + Download",
-    body: "That is Launch A. We do not claim live deploy or GitHub PR yet.",
+    title: "Run → approve plan → Open your app",
+    body: "That is Launch A: watch the team build, then open your app in a new browser tab. Developers can also download source from the Done banner.",
   },
 ] as const;
 

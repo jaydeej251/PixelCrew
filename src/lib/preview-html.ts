@@ -1,4 +1,5 @@
 import { injectBaseHref } from "./project-files";
+import { inlineLinkedProjectAssets } from "./preview-inline";
 import { injectPreviewShim } from "./preview-shim";
 
 /** Convert a project-root absolute path (/styles.css) to a path relative to filePath. */
@@ -46,15 +47,17 @@ export function rewriteCssRootAbsoluteUrls(css: string, cssFilePath: string): st
 
 /**
  * Full HTML preparation for the signed preview host:
- * rewrite paths → inject <base> → inject localStorage shim.
+ * rewrite paths → inline local assets → inject <base> → inject localStorage shim.
  */
 export function preparePreviewHtml(
   html: string,
   runId: string,
   filePath: string,
   baseRoot: string,
+  files: Map<string, string>,
 ): string {
   let out = rewriteRootAbsoluteAssetUrls(html, filePath);
+  out = inlineLinkedProjectAssets(out, filePath, files);
   out = injectBaseHref(out, runId, filePath, baseRoot);
   out = injectPreviewShim(out);
   return out;

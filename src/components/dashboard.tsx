@@ -849,7 +849,7 @@ export function Dashboard() {
                 )}
                 {runOutcome === "completed" && runId && (
                   <Alert variant="success">
-                    <p>Your app is ready.</p>
+                    <p>Your app is ready — open it in a new tab.</p>
                     <RunDeliverableActions
                       runId={runId}
                       artifacts={artifacts}
