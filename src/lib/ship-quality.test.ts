@@ -253,4 +253,39 @@ describe("evalShippedProject", () => {
     assert.ok(report.issues.some((issue) => /VibeLog/i.test(issue.message)));
     assert.ok(report.issues.some((issue) => /explicit CEO bans/i.test(issue.message)));
   });
+
+  it("fails root-absolute asset paths", () => {
+    const report = evalShippedProject(
+      [
+        {
+          path: "index.html",
+          content: `<!doctype html><html><head><link rel="stylesheet" href="/styles.css"></head>
+            <body><h1>Calculator</h1><script src="/app.js"></script></body></html>`,
+        },
+        { path: "styles.css", content: "body { font-family: sans-serif; }" },
+        { path: "app.js", content: "document.body.addEventListener('click', () => {});" },
+      ],
+      { ceoGoal: "simple calculator" },
+    );
+    assert.equal(report.passed, false);
+    assert.ok(report.issues.some((i) => /root-absolute/i.test(i.message)));
+  });
+
+  it("fails external CDN assets and ES modules", () => {
+    const report = evalShippedProject(
+      [
+        {
+          path: "index.html",
+          content: `<!doctype html><html><head>
+            <script src="https://cdn.tailwindcss.com"></script>
+            <script type="module" src="app.js"></script>
+            </head><body><h1>Taskboard with enough visible copy for the ship checker to pass content length rules easily here.</h1></body></html>`,
+        },
+      ],
+      { ceoGoal: "taskboard app" },
+    );
+    assert.equal(report.passed, false);
+    assert.ok(report.issues.some((i) => /CDN/i.test(i.message)));
+    assert.ok(report.issues.some((i) => /type="module"/i.test(i.message)));
+  });
 });

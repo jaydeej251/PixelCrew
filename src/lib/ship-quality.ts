@@ -62,6 +62,20 @@ function localAssetRefs(html: string): string[] {
   return refs;
 }
 
+function rootAbsoluteAssetRefs(html: string): string[] {
+  const refs: string[] = [];
+  const re = /(?:src|href)\s*=\s*["'](\/(?!\/)[^"']+)["']/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(html)) !== null) {
+    const raw = (match[1] ?? "").trim();
+    if (raw) refs.push(raw);
+  }
+  return refs;
+}
+
+const CDN_HOST =
+  /https?:\/\/(?:[^/"']+\.)?(?:unpkg\.com|jsdelivr\.net|cdnjs\.cloudflare\.com|cdn\.tailwindcss\.com|fonts\.googleapis\.com|fonts\.gstatic\.com)\b/i;
+
 function hasRealContent(html: string): boolean {
   const text = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
   return text.length > 80;
@@ -225,6 +239,30 @@ export function evalShippedProject(
       issues.push({
         severity: "fail",
         message: `${page.path} has almost no visible content.`,
+      });
+    }
+
+    for (const ref of rootAbsoluteAssetRefs(content)) {
+      issues.push({
+        severity: "fail",
+        message: `${page.path} uses root-absolute asset path "${ref}". Use relative paths (e.g. styles.css, ./app.js) so preview and zip work.`,
+      });
+    }
+
+    const cdnRefs = [...content.matchAll(/(?:src|href)\s*=\s*["'](https?:\/\/[^"']+)["']/gi)]
+      .map((m) => m[1] ?? "")
+      .filter((url) => CDN_HOST.test(url));
+    for (const url of cdnRefs) {
+      issues.push({
+        severity: "fail",
+        message: `${page.path} loads external CDN asset "${url}". Emit all CSS/JS/fonts inline or as local files — preview CSP blocks CDNs.`,
+      });
+    }
+
+    if (/<script\b[^>]*\btype\s*=\s*["']module["']/i.test(content)) {
+      issues.push({
+        severity: "fail",
+        message: `${page.path} uses type="module". Launch A static apps must use classic <script src="..."> without ES module imports.`,
       });
     }
 
