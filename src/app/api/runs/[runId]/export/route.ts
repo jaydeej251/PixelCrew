@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import JSZip from "jszip";
 import { prisma } from "@/lib/db";
 import { assembleProject } from "@/lib/project-files";
-import { AuthError, assertRunAccess, requireSession } from "@/lib/auth";
+import { AuthError, assertRunAccess, requireProductSession } from "@/lib/auth";
 
 function authErrorResponse(err: unknown) {
   if (err instanceof AuthError) {
@@ -16,7 +16,7 @@ export async function GET(
   { params }: { params: Promise<{ runId: string }> },
 ) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     const { runId } = await params;
     await assertRunAccess(runId, session);
 

@@ -41,7 +41,7 @@ export function LoginForm({
       setError(json.error ?? "Could not sign in. Check your email and password.");
       return;
     }
-    router.push("/app");
+    router.push(typeof json.redirectTo === "string" ? json.redirectTo : "/app");
     router.refresh();
   };
 

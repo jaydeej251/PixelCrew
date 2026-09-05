@@ -8,7 +8,7 @@ import {
   assertWorkspaceAccess,
   authErrorStatus,
   requireOrganizationRole,
-  requireSession,
+  requireProductSession,
 } from "@/lib/auth";
 import { isOllamaCloudBaseUrl } from "@/lib/ollama-endpoints";
 import { looksLikeIncompleteOllamaApiKey } from "@/lib/ollama-models";
@@ -40,7 +40,7 @@ function authErrorResponse(err: unknown) {
 
 export async function POST(req: Request) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     requireOrganizationRole(session, ["owner", "admin"]);
     const parsed = credentialSchema.safeParse(await req.json().catch(() => null));
     if (!parsed.success) {
@@ -105,7 +105,7 @@ export async function POST(req: Request) {
 
 export async function PATCH(req: Request) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     requireOrganizationRole(session, ["owner", "admin"]);
     const parsed = setDefaultSchema.safeParse(await req.json().catch(() => null));
     if (!parsed.success) {
@@ -134,7 +134,7 @@ export async function PATCH(req: Request) {
 
 export async function GET(req: Request) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     const workspaceId = new URL(req.url).searchParams.get("workspaceId");
     if (!workspaceId) return NextResponse.json({ error: "workspaceId required" }, { status: 400 });
     await assertWorkspaceAccess(workspaceId, session);
@@ -160,7 +160,7 @@ export async function GET(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     requireOrganizationRole(session, ["owner", "admin"]);
     const id = new URL(req.url).searchParams.get("id");
     if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });

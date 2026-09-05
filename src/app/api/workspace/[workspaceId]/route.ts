@@ -7,7 +7,7 @@ import { POSITIONS } from "@/lib/constants";
 import { createHiredAgent, isPositionKey } from "@/lib/hire";
 import type { PositionKey } from "@/lib/constants";
 import { TEAM_TEMPLATES } from "@/lib/templates";
-import { AuthError, assertWorkspaceAccess, requireSession } from "@/lib/auth";
+import { AuthError, assertWorkspaceAccess, requireProductSession } from "@/lib/auth";
 
 const workspaceMutationSchema = z.discriminatedUnion("action", [
   z.object({
@@ -42,7 +42,7 @@ export async function POST(
   { params }: { params: Promise<{ workspaceId: string }> },
 ) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     const { workspaceId } = await params;
     await assertWorkspaceAccess(workspaceId, session);
     const parsed = workspaceMutationSchema.safeParse(await req.json().catch(() => null));

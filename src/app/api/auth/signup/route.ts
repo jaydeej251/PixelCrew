@@ -6,6 +6,7 @@ import { createSession, hashPassword, SESSION_COOKIE } from "@/lib/auth";
 import { slugify } from "@/lib/utils";
 import { createWorkspaceForUser } from "@/lib/workspace-bootstrap";
 import { consumeRateLimit, rateLimitResponse, requestClientIp } from "@/lib/rate-limit";
+import { persistPlatformRoleUpgrade, postAuthPath } from "@/lib/platform-admin";
 
 const signupSchema = z.object({
   email: z.email().trim().toLowerCase().max(320),
@@ -52,6 +53,8 @@ export async function POST(req: Request) {
 
   await createWorkspaceForUser(user.id, name ? `${name}'s Company` : "My Company", slug);
 
+  const platformRole = await persistPlatformRoleUpgrade(user.id, user.email, "none");
+
   const token = await createSession(user.id);
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE, token, {
@@ -62,5 +65,9 @@ export async function POST(req: Request) {
     maxAge: 60 * 60 * 24 * 30,
   });
 
-  return NextResponse.json({ ok: true, email: user.email });
+  return NextResponse.json({
+    ok: true,
+    email: user.email,
+    redirectTo: postAuthPath(platformRole),
+  });
 }

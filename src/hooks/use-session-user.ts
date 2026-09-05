@@ -2,7 +2,11 @@
 
 import { useEffect, useState } from "react";
 
-export type SessionUser = { email: string; name: string | null };
+export type SessionUser = {
+  email: string;
+  name: string | null;
+  platformRole?: string | null;
+};
 
 type SessionState =
   | { status: "loading"; user: null }
@@ -34,4 +38,8 @@ export function useSessionUser(): SessionState {
   }, []);
 
   return state;
+}
+
+export function isOpsSessionUser(user: SessionUser | null | undefined): boolean {
+  return user?.platformRole === "ops" || user?.platformRole === "owner";
 }
