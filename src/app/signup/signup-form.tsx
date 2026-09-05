@@ -45,7 +45,7 @@ export function SignupForm({
       setError(json.error ?? "Could not create your account.");
       return;
     }
-    router.push("/app");
+    router.push(typeof json.redirectTo === "string" ? json.redirectTo : "/app");
     router.refresh();
   };
 

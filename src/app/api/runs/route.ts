@@ -11,7 +11,7 @@ import {
   assertWorkspaceAccess,
   checkPlanLimits,
   deriveRunTitle,
-  requireSession,
+  requireProductSession,
 } from "@/lib/auth";
 import { consumeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
@@ -33,7 +33,7 @@ function authErrorResponse(err: unknown) {
 
 export async function POST(req: Request) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     const rateLimit = await consumeRateLimit({
       scope: "run-create-organization",
       identifier: session.organizationId,
@@ -115,7 +115,7 @@ export async function POST(req: Request) {
 
 export async function GET() {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     const runs = await prisma.run.findMany({
       where: {
         archivedAt: null,

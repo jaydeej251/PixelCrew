@@ -5,7 +5,7 @@ import { cancelExecutionsForRun } from "@/lib/execution-runtime";
 import {
   AuthError,
   assertRunAccess,
-  requireSession,
+  requireProductSession,
 } from "@/lib/auth";
 
 const updateRunSchema = z
@@ -28,7 +28,7 @@ export async function GET(
   { params }: { params: Promise<{ runId: string }> },
 ) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     const { runId } = await params;
     await assertRunAccess(runId, session);
 
@@ -52,7 +52,7 @@ export async function PATCH(
   { params }: { params: Promise<{ runId: string }> },
 ) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     const { runId } = await params;
     await assertRunAccess(runId, session);
 
@@ -93,7 +93,7 @@ export async function DELETE(
   { params }: { params: Promise<{ runId: string }> },
 ) {
   try {
-    const session = await requireSession();
+    const session = await requireProductSession();
     const { runId } = await params;
     await assertRunAccess(runId, session);
 

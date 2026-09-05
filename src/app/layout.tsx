@@ -14,6 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"),
   title: PRODUCT_NAME,
   description:
     "Watch your AI company work — hire agents by role, approve the plan, bring your own keys.",
