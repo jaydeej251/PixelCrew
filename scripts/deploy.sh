@@ -52,8 +52,10 @@ fi
 log "Checking out ${TARGET}"
 git checkout --detach "${TARGET}"
 
-log "Installing dependencies (npm ci)"
-npm ci
+log "Installing dependencies (npm ci --include=dev)"
+# Servers often export NODE_ENV=production globally; that skips devDependencies and
+# breaks `next build` (Tailwind PostCSS, TypeScript, @types/*). Build needs devDeps.
+npm ci --include=dev
 
 log "Applying migrations"
 npx prisma migrate deploy
