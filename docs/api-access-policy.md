@@ -33,7 +33,8 @@ provider signatures are their trust boundary.
 | `/api/credentials` | GET | Workspace | Lists non-secret credential metadata for an accessible workspace |
 | `/api/credentials` | POST, DELETE | Workspace admin | Requires owner/admin and `assertWorkspaceAccess` |
 | `/api/providers/status` | GET | Workspace | `assertWorkspaceAccess`; never returns secret values |
-| `/api/providers/test` | POST | Workspace | `assertWorkspaceAccess`; currently accepts OpenRouter only |
+| `/api/providers/test` | POST | Workspace | `assertWorkspaceAccess`; OpenRouter or Ollama Cloud key probe; rate limited |
+| `/api/providers/ollama/models` | GET | Workspace | `assertWorkspaceAccess`; lists local loopback Ollama models via `/api/tags`; rate limited |
 | `/api/simulate` | POST | Session + development | Authenticated and disabled unless development tools are enabled |
 | `/api/agents/:agentId` | GET, PATCH, DELETE | Organization agent | `assertAgentAccess` scopes through `Agent.workspace.organizationId` |
 | `/api/runs` | GET | Session organization | Lists runs through workspace organization scope |
@@ -60,5 +61,6 @@ Limits use atomic PostgreSQL fixed-window buckets and therefore apply across app
 - Signup and waitlist: 5 submissions per IP per hour.
 - Run creation: 20 per organization per hour.
 - Provider test: 10 per organization per 10 minutes.
+- Ollama local model list: 30 per organization per minute.
 - Plan mutation: 60 per user/run per hour.
 - Preview token issue and SSE connection: 60 and 30 per user per minute, respectively.
