@@ -24,6 +24,52 @@ APP_DIR="${APP_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 log() { printf '==> %s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
+require_tailwind_in_dependencies() {
+  node <<'NODE'
+const pkg = require("./package.json");
+const inDeps =
+  pkg.dependencies &&
+  pkg.dependencies["@tailwindcss/postcss"] &&
+  pkg.dependencies.tailwindcss;
+if (!inDeps) {
+  console.error(
+    "package.json is missing @tailwindcss/postcss/tailwindcss in dependencies.",
+  );
+  console.error("Fetch latest main (PR #19+) before deploying.");
+  process.exit(1);
+}
+NODE
+}
+
+require_tailwind_installed() {
+  node <<'NODE'
+try {
+  require.resolve("@tailwindcss/postcss");
+  require.resolve("tailwindcss");
+} catch (err) {
+  console.error("Build deps missing after npm ci:", err.message);
+  process.exit(1);
+}
+NODE
+}
+
+install_dependencies() {
+  # NODE_ENV=production in the shell makes npm skip devDependencies. Build still
+  # needs TypeScript/@types. Tailwind is in dependencies, but we force a full
+  # install so deploy never depends on shell env quirks or npm flag support.
+  log "Installing dependencies (production=false for install only)"
+  log "NODE_ENV=${NODE_ENV-<unset>} npm $(npm -v)"
+
+  if npm ci --help 2>&1 | grep -q -- '--include'; then
+    NPM_CONFIG_PRODUCTION=false npm ci --include=dev
+  else
+    NPM_CONFIG_PRODUCTION=false npm ci
+  fi
+
+  require_tailwind_installed
+  log "Verified @tailwindcss/postcss and tailwindcss in node_modules"
+}
+
 cd "${APP_DIR}"
 
 [[ -f package.json ]] || die "No package.json in ${APP_DIR}"
@@ -45,27 +91,33 @@ git fetch --prune origin
 
 TARGET="${DEPLOY_SHA:-origin/main}"
 if [[ "${TARGET}" != origin/* && "${TARGET}" != refs/* ]]; then
-  # bare SHA or tag — ensure we have it
   git cat-file -e "${TARGET}^{commit}" 2>/dev/null || die "Unknown ref/SHA: ${TARGET}"
 fi
 
-log "Checking out ${TARGET}"
-git checkout --detach "${TARGET}"
+log "Syncing to ${TARGET}"
+# Stay on a branch (not detached) so manual `git pull origin main` matches deploy.sh.
+if git show-ref --verify --quiet refs/heads/main; then
+  git checkout main
+else
+  git checkout -B main "${TARGET}"
+fi
+git reset --hard "${TARGET}"
 
-log "Installing dependencies (npm ci --include=dev)"
-# Servers often export NODE_ENV=production globally; that skips devDependencies and
-# breaks `next build` (Tailwind PostCSS, TypeScript, @types/*). Build needs devDeps.
-npm ci --include=dev
+DEPLOYED_SHA="$(git rev-parse --short HEAD)"
+log "Deployed commit: ${DEPLOYED_SHA} — $(git log -1 --pretty=format:'%s')"
+
+require_tailwind_in_dependencies
+install_dependencies
 
 log "Applying migrations"
 npx prisma migrate deploy
 
-log "Building"
+log "Building (clean .next cache)"
+rm -rf .next
 npm run build
 
 if pm2 describe "${PM2_APP_NAME}" >/dev/null 2>&1; then
   log "Reloading PM2 app '${PM2_APP_NAME}'"
-  # restart (not reload) — Next standalone-ish start is one process; restart is reliable
   pm2 restart "${PM2_APP_NAME}" --update-env
 else
   log "Starting PM2 app '${PM2_APP_NAME}'"
@@ -90,5 +142,5 @@ else
   log "Health check OK"
 fi
 
-log "Deployed $(git rev-parse --short HEAD) — $(git log -1 --pretty=format:'%s')"
+log "Deploy complete at ${DEPLOYED_SHA}"
 pm2 status "${PM2_APP_NAME}"
