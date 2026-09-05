@@ -15,7 +15,7 @@ import { looksLikeIncompleteOllamaApiKey } from "@/lib/ollama-models";
 const PROVIDERS = [
   { id: "openrouter", label: "OpenRouter" },
   { id: "google", label: "Google Gemini" },
-  { id: "ollama", label: "Ollama (local or cloud)" },
+  { id: "ollama", label: "Ollama (cloud or local)" },
   { id: "openai_compatible", label: "OpenAI-compatible" },
 ] as const;
 
@@ -212,7 +212,7 @@ export function CredentialsForm({
               setProvider(next);
               setError("");
               setMessage("");
-              if (next === "ollama") setBaseUrl(OLLAMA_LOCAL_BASE_URL);
+              if (next === "ollama") setBaseUrl(OLLAMA_CLOUD_BASE_URL);
               if (next === "openai_compatible") {
                 setBaseUrl(OPENAI_COMPATIBLE_DEFAULT_BASE_URL);
               }
@@ -289,10 +289,10 @@ export function CredentialsForm({
           )}
           {provider === "ollama" && (
             <p className="text-[11px] leading-snug text-zinc-500">
-              Local: leave the key empty and use {OLLAMA_LOCAL_BASE_URL}. Cloud: paste the
-              full key from ollama.com/settings/keys (usually includes a{" "}
-              <code className="text-zinc-400">.</code> secret suffix). Base URL becomes{" "}
-              {OLLAMA_CLOUD_BASE_URL}.
+              <span className="text-zinc-300">Use cloud</span> (recommended): paste your full
+              key from ollama.com/settings/keys.{" "}
+              <span className="text-zinc-300">Use local</span>: leave the key empty and keep
+              the Ollama app open on this computer — no terminal needed.
             </p>
           )}
           {provider === "ollama" &&
