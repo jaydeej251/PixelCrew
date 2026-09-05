@@ -1,73 +1,167 @@
 # PixelCrew
 
-Watch your AI company work — hire agents by role, run in parallel, bring your own keys.
+**Your AI company, visible.**
+
+Hire agents by role, watch them work on a living office floor, approve the plan, then preview and download what they built. You bring the model keys — PixelCrew is the company, not the meter.
+
+[![Status](https://img.shields.io/badge/status-free%20beta-amber)](#status)
+[![Stack](https://img.shields.io/badge/stack-Next.js%2016%20·%20Prisma%20·%20Postgres-zinc)](#stack)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+<p align="center">
+  <img src="public/marketing/office.png" alt="PixelCrew isometric office floor with agents at their desks" width="720" />
+</p>
+
+## Why it exists
+
+Most AI tools collapse into one chat box. PixelCrew treats the **organization** as the product:
+
+| Pillar | Idea |
+| --- | --- |
+| **Org** | Staff specialists by role — product, design, engineering, QA — instead of one generic assistant. |
+| **Office** | See agents move to desks, plan together, and write files on an isometric floor. |
+| **You** | Approve the plan before they build. Preview the deliverable. Download a zip. Stay in control. |
+
+Charge for the office experience. Inference stays **BYOK** (bring your own keys).
+
+## Status
+
+PixelCrew is in a **free soft-launch beta**.
+
+**Works today**
+
+- Office floor, planning council, plan review
+- Project files, in-browser preview, ZIP / HTML export
+- Auth (email/password + Google / GitHub OAuth)
+- BYOK providers: OpenRouter, Gemini, Ollama (local or cloud)
+- Free tier: **5 new runs / calendar month** (resumes do not consume an extra run)
+
+**Not in this beta**
+
+- Live deploy of the generated app
+- GitHub PR delivery
+- Paid checkout / Stripe billing
+- Claiming agents ran real shell tools in an isolated sandbox
 
 ## Quick start
 
+Requirements: **Node 20+**, **Postgres 16+**, and optionally **Docker**.
+
 ```bash
-# Start Postgres (optional — or use local Postgres)
+# Optional — local Postgres via Docker
 npm run docker:up
 
-# Install & setup DB
+cp .env.example .env.local
+# Edit .env.local — at minimum DATABASE_URL, AUTH_SECRET, ENCRYPTION_KEY
+
 npm install
 npm run db:push
-# Optional local accounts — set SEED_* in .env.local first (see .env.example)
+
+# Optional local accounts — set SEED_* in .env.local first (never commit passwords)
 npm run db:seed
 
-# Run dev server
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) for marketing, [http://localhost:3000/app](http://localhost:3000/app) for the office, and [http://localhost:3000/admin](http://localhost:3000/admin) if your user has platform ops (seed admin or `PLATFORM_ADMIN_EMAILS`).
+| URL | Purpose |
+| --- | --- |
+| [http://localhost:3000](http://localhost:3000) | Marketing |
+| [http://localhost:3000/app](http://localhost:3000/app) | Office |
+| [http://localhost:3000/admin](http://localhost:3000/admin) | Platform ops (allowlisted emails only) |
 
-Seed never embeds passwords in git. Put `SEED_FREE_*`, `SEED_PRO_*`, and/or `SEED_ADMIN_*` only in `.env.local`. Production seed is blocked unless `ALLOW_DB_SEED=true` (avoid in normal deploys). Grant prod ops with `PLATFORM_ADMIN_EMAILS` after signup/OAuth, then set org plans from `/admin`. Platform ops land on `/admin` and cannot use the office floor or product run APIs.
+## Stack
 
-## API keys
+| Layer | Choice |
+| --- | --- |
+| App | Next.js 16 (App Router), React 19, TypeScript |
+| UI | Tailwind CSS 4, Framer Motion, Three.js office floor |
+| Data | PostgreSQL, Prisma |
+| Auth | Session cookie (`pc_session`) + Google / GitHub OAuth |
+| Jobs | Inngest (optional locally) |
+| Models | OpenRouter, Google Gemini, Ollama — credentials encrypted at rest |
 
-Never commit keys. Copy `.env.example` to `.env.local` and add:
+## Configuration
+
+Copy `.env.example` → `.env.local`. Never commit secrets.
+
+**Local essentials**
+
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | Postgres connection string |
+| `AUTH_SECRET` | Session signing (`openssl rand -hex 32`) |
+| `ENCRYPTION_KEY` | Encrypts stored provider keys (`openssl rand -hex 32`) |
+| `NEXT_PUBLIC_APP_URL` | App origin (e.g. `http://localhost:3000`) |
+| `PREVIEW_ORIGIN` | Preview host (production: separate HTTPS origin) |
+
+**Provider keys** — set in `.env.local` for local convenience, or add them in the app UI (preferred; encrypted at rest):
 
 - `OPENROUTER_API_KEY`
 - `GOOGLE_API_KEY`
-- `OLLAMA_BASE_URL` (default local `http://127.0.0.1:11434/v1`)
-- `OLLAMA_API_KEY` (Ollama Cloud from [ollama.com/settings/keys](https://ollama.com/settings/keys); with only this set, PixelCrew uses `https://ollama.com/v1`)
+- `OLLAMA_BASE_URL` (default `http://127.0.0.1:11434/v1`)
+- `OLLAMA_API_KEY` (Ollama Cloud — with only this set, the app uses `https://ollama.com/v1`)
 
-Or add credentials in the app UI (encrypted at rest). For Ollama Cloud, choose **Ollama**, paste the API key, and keep Base URL as `https://ollama.com/v1` (the form switches there automatically when you paste a key).
+**Platform ops** — grant `/admin` with `PLATFORM_ADMIN_EMAILS` (comma-separated). Do not run `db:seed` against production unless you intentionally set `ALLOW_DB_SEED=true`.
 
-## Production security requirements
+See `.env.example` for OAuth client IDs, preview secrets, sandbox flags, and Stripe placeholders.
 
-- Set `ENCRYPTION_KEY` and `PREVIEW_TOKEN_SECRET` to unique secrets of at least 32 characters.
-- Set `NEXT_PUBLIC_APP_URL` to the application HTTPS origin.
-- Set `PREVIEW_ORIGIN` to a different HTTPS host routed to the same deployment, such as
-  `https://preview.example.com`. Do not set the `pc_session` cookie on this host.
-- Set `PLATFORM_ADMIN_EMAILS` to your ops inbox(es) when you need `/admin` in production.
-  Do not run `db:seed` against production.
-- Apply committed migrations with `npx prisma migrate deploy`; production rate limiting depends on
-  the `RateLimitBucket` table.
-- Keep `npm run check` required in CI. It includes lint, unit/security contracts, two-tenant API
-  isolation, browser preview isolation, and a production build.
+## Architecture (short)
 
-## Durable execution records
+```
+Goal → planning council → you approve → agents write files → preview + ZIP
+```
 
-`Execution` is the durable source of truth for task execution state. Each task has one stable
-execution row, which is reset and reused when a run resumes. Every start or resume creates an
-immutable, monotonically numbered `Attempt`; tool calls, checks, and approval decisions retain
-their own idempotency keys and bounded, redacted data.
+- **Runs** are the user-facing unit of work (start, pause, resume, export).
+- **Execution / Attempt** rows are the durable ledger behind each task; the UI stream (`RunEvent`) is a projection, not the source of truth.
+- Route handlers enforce **org / workspace tenancy** themselves. Missing resources return `404` (no cross-tenant ID probing).
+- Preview assets are served from a dedicated origin/token path so the session cookie stays off the preview host in production.
 
-`RunEvent` remains the UI activity stream, not the execution ledger. Runtime milestones are
-projected into it with `sourceKind` and `sourceId`, making replay idempotent while existing events
-with null source fields continue to work. Raw tool input/output is never projected to `RunEvent`,
-and sandbox records store only an opaque `workspaceKey`, never a host filesystem path.
+Deeper access rules: [`docs/api-access-policy.md`](docs/api-access-policy.md).
 
-Orchestrator work creates one durable `Execution` per task and an `Attempt` per claim. Stop and
-resume cancel or reset nonterminal execution rows. Constrained local sandbox tooling exists under
-`src/lib/sandbox/` but is not invoked during runs yet — Gate 2 ships the ledger and inspection API
-first. Inspect evidence via `GET /api/runs/:runId/executions` (org-scoped).
+## Production checklist
 
-## Phases
+Before exposing a deployment:
 
-- **Phase 1:** Office floor, org builder, simulate run
-- **Phase 2:** Real orchestrator, BYOK providers, SSE, export
-- **Phase 3:** Workflows, memory, evals
-- **Phase 4:** Auth (email/password sessions + Google/GitHub OAuth), conversation history sidebar
-- **Phase 5:** Marketing, pricing, waitlist
-- **Phase 6:** Real project files, drop-in zip export, in-office preview (static). E2B/GitHub still later.
+1. Set unique `ENCRYPTION_KEY`, `AUTH_SECRET`, and `PREVIEW_TOKEN_SECRET` (≥ 32 characters each).
+2. Set `NEXT_PUBLIC_APP_URL` to the HTTPS app origin.
+3. Set `PREVIEW_ORIGIN` to a **different** HTTPS host routed to the same deploy. Do not scope the `pc_session` cookie on that host.
+4. Apply migrations with `npx prisma migrate deploy` (rate limiting depends on `RateLimitBucket`).
+5. Keep `npm run check` green in CI — lint, unit/security contracts, two-tenant API isolation, browser preview isolation, and production build.
+
+## Scripts
+
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | Next.js dev server |
+| `npm run build` / `npm start` | Production build & serve |
+| `npm run check` | Full gate (lint + tests + Playwright + build) |
+| `npm test` | Unit / contract tests |
+| `npm run test:browser` | Playwright browser isolation tests |
+| `npm run db:push` | Push Prisma schema (local) |
+| `npm run db:migrate` | Create / apply migrations |
+| `npm run db:seed` | Seed local accounts from `SEED_*` env vars |
+| `npm run docker:up` | Start Postgres via Docker Compose |
+
+## Roadmap
+
+Near-term direction after the soft launch:
+
+- Higher limits and paid plans (Stripe)
+- Stronger sandbox / tool execution story
+- GitHub delivery and hosted deploy of generated apps
+- Workflows, memory, and eval loops
+
+## Contributing
+
+The product is early and moving. If you open a PR:
+
+1. Keep changes scoped and reviewable.
+2. Add or update tests when behavior changes.
+3. Run `npm run check` before asking for review.
+4. Never commit `.env`, `.env.local`, or real API keys.
+
+Bug reports and honest beta feedback are welcome via [support](https://github.com/jaydeej251/PixelCrew/issues) or the in-app support page.
+
+## License
+
+[MIT](LICENSE) © 2026 Dj Junio
