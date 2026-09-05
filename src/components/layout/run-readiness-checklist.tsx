@@ -24,6 +24,8 @@ type RunReadinessChecklistProps = {
   /** Bump when credentials change so status reloads. */
   credentialsRevision?: number;
   onReadinessChange?: (canStart: boolean, reason: string | null) => void;
+  /** Slim ready bar when the user can Start — keeps the composer on screen. */
+  compact?: boolean;
 };
 
 export function RunReadinessChecklist({
@@ -35,6 +37,7 @@ export function RunReadinessChecklist({
   onOpenSettings,
   credentialsRevision = 0,
   onReadinessChange,
+  compact = false,
 }: RunReadinessChecklistProps) {
   const [statuses, setStatuses] = useState<ProviderReadyStatus[] | null>(null);
   const [testing, setTesting] = useState(false);
@@ -156,8 +159,24 @@ export function RunReadinessChecklist({
 
   const loading = statuses === null;
 
+  if (compact && readiness.canStart && !loading) {
+    return (
+      <div className="flex items-center justify-between gap-2 rounded-lg border border-zinc-800/60 bg-zinc-950/70 px-3 py-1.5 text-[11px] text-zinc-500 backdrop-blur-md">
+        <span className="text-emerald-400/90">Ready to start</span>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 text-zinc-400 hover:text-zinc-200"
+          onClick={onOpenSettings}
+        >
+          <Settings2 size={12} />
+          Settings
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="mb-3 rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-3 text-left shadow-lg ring-1 ring-white/5 backdrop-blur-md">
+    <div className="mb-0 rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-3 text-left shadow-lg ring-1 ring-white/5 backdrop-blur-md">
       <div className="mb-2 flex items-center justify-between gap-2">
         <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
           Before you start

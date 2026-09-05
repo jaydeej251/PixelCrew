@@ -15,9 +15,11 @@ type ThreadItem = { role: "user" | "assistant"; content: string; speaker?: strin
 type PlanReviewProps = {
   runId: string;
   onPublished: () => void;
+  /** Leave this plan and start a new chat with the same brief editable. */
+  onRestart?: () => void;
 };
 
-export function PlanReview({ runId, onPublished }: PlanReviewProps) {
+export function PlanReview({ runId, onPublished, onRestart }: PlanReviewProps) {
   const [thread, setThread] = useState<ThreadItem[]>([]);
   const [decisions, setDecisions] = useState<PlanDecision[]>([]);
   const [question, setQuestion] = useState("");
@@ -126,8 +128,10 @@ export function PlanReview({ runId, onPublished }: PlanReviewProps) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="mb-4">
-        <h2 className="text-lg font-semibold tracking-tight text-zinc-50">Review the plan</h2>
+      <div className="mb-4 shrink-0">
+        <h2 id="plan-review-title" className="text-lg font-semibold tracking-tight text-zinc-50">
+          Review the plan
+        </h2>
         <p className="mt-1 text-sm text-zinc-400">
           {hasDecisions
             ? "The team drafted a plan using the recommended answers. Confirm anything that would steer the whole product, then start building."
@@ -196,7 +200,7 @@ export function PlanReview({ runId, onPublished }: PlanReviewProps) {
         )}
       </div>
 
-      <div className="mt-4 space-y-3 border-t border-zinc-800/80 pt-4">
+      <div className="mt-4 shrink-0 space-y-3 border-t border-zinc-800/80 pt-4">
         <textarea
           className="w-full resize-none rounded-xl border border-zinc-800 bg-zinc-900/50 px-3 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-indigo-500/40 focus:outline-none"
           rows={2}
@@ -212,9 +216,22 @@ export function PlanReview({ runId, onPublished }: PlanReviewProps) {
         />
         {error && <p className="text-sm text-red-300">{error}</p>}
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <Button variant="secondary" disabled={busy || !question.trim()} onClick={() => void send()}>
-            Send
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="secondary" disabled={busy || !question.trim()} onClick={() => void send()}>
+              Send
+            </Button>
+            {onRestart && (
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={busy}
+                className="text-zinc-400"
+                onClick={onRestart}
+              >
+                Wrong direction — start over
+              </Button>
+            )}
+          </div>
           <Button
             disabled={busy || !canPublish}
             onClick={async () => {
@@ -238,6 +255,12 @@ export function PlanReview({ runId, onPublished }: PlanReviewProps) {
             Looks good — start building
           </Button>
         </div>
+        {onRestart && (
+          <p className="text-[11px] text-zinc-600">
+            Start over opens a new chat with your brief so you can rewrite it (uses a monthly run
+            when you Start).
+          </p>
+        )}
       </div>
     </div>
   );

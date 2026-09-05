@@ -4,6 +4,7 @@ import { BrandMark } from "@/components/layout/brand-mark";
 
 const LINKS = [
   { href: "/pricing", label: "Pricing" },
+  { href: "/faq", label: "FAQ" },
   { href: "/terms", label: "Terms" },
   { href: "/privacy", label: "Privacy" },
   { href: "/support", label: "Support" },

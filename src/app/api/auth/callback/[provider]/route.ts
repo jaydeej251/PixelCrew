@@ -12,7 +12,7 @@ import {
   verifyOAuthState,
 } from "@/lib/oauth";
 import { consumeRateLimit, requestClientIp } from "@/lib/rate-limit";
-import { persistPlatformRoleUpgrade, postAuthPath } from "@/lib/platform-admin";
+import { persistPlatformRoleUpgrade, postAuthPath, postSignupPath } from "@/lib/platform-admin";
 import { prisma } from "@/lib/db";
 
 type RouteContext = { params: Promise<{ provider: string }> };
@@ -63,7 +63,7 @@ export async function GET(req: Request, context: RouteContext) {
 
   try {
     const identity = await fetchOAuthIdentity(raw, code);
-    const { userId } = await resolveOAuthUser(identity, prismaOAuthUserRepository);
+    const { userId, created } = await resolveOAuthUser(identity, prismaOAuthUserRepository);
     const user = await prisma.user.findUnique({
       where: { id: userId },
       select: { email: true, platformRole: true },
@@ -75,9 +75,8 @@ export async function GET(req: Request, context: RouteContext) {
       user.platformRole,
     );
     const token = await createSession(userId);
-    const response = NextResponse.redirect(
-      new URL(postAuthPath(platformRole), appOrigin()),
-    );
+    const nextPath = created ? postSignupPath(platformRole) : postAuthPath(platformRole);
+    const response = NextResponse.redirect(new URL(nextPath, appOrigin()));
     response.cookies.set(OAUTH_STATE_COOKIE, "", {
       httpOnly: true,
       sameSite: "lax",

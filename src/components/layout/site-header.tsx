@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
+import { buttonClassName } from "@/components/ui/button";
 import { BrandMark } from "@/components/layout/brand-mark";
 import { isOpsSessionUser, useSessionUser } from "@/hooks/use-session-user";
 
@@ -29,24 +29,20 @@ export function SiteHeader({ narrow = false }: SiteHeaderProps) {
             <span className="text-xs text-zinc-600">…</span>
           ) : session.status === "signedIn" ? (
             <>
-              <Link href="/account">
-                <Button variant="ghost" type="button">
-                  My account
-                </Button>
+              <Link href="/account" className={buttonClassName("ghost")}>
+                My account
               </Link>
-              <Link href={ops ? "/admin" : "/app"}>
-                <Button type="button">{ops ? "Open admin" : "Open office"}</Button>
+              <Link href={ops ? "/admin" : "/app"} className={buttonClassName("primary")}>
+                {ops ? "Open admin" : "Open office"}
               </Link>
             </>
           ) : (
             <>
-              <Link href="/login">
-                <Button variant="ghost" type="button">
-                  Log in
-                </Button>
+              <Link href="/login" className={buttonClassName("ghost")}>
+                Log in
               </Link>
-              <Link href="/signup">
-                <Button type="button">Get started</Button>
+              <Link href="/signup" className={buttonClassName("primary")}>
+                Get started
               </Link>
             </>
           )}

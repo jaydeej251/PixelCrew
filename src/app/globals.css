@@ -1,11 +1,21 @@
 @import "tailwindcss";
 
 :root {
+  /* Surfaces */
   --background: #09090b;
   --foreground: #fafafa;
   --surface: #18181b;
   --surface-elevated: #27272a;
   --border: #27272a;
+  /*
+   * Accent roles (do not invent new palettes casually):
+   * --accent-primary  → actions / focus (indigo)
+   * --accent-office   → floor / work banner cue only (cyan)
+   * --accent-warning  → beta / blocked / Your turn (amber)
+   */
+  --accent-primary: #6366f1;
+  --accent-office: #22d3ee;
+  --accent-warning: #fbbf24;
   --ring: rgba(99, 102, 241, 0.5);
 }
 

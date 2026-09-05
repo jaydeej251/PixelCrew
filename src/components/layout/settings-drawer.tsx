@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { LogOut } from "lucide-react";
 import { Drawer } from "@/components/ui/drawer";
-import { Button } from "@/components/ui/button";
+import { Button, buttonClassName } from "@/components/ui/button";
 import { OrgBuilder } from "@/components/org/org-builder";
 import { CredentialsForm } from "@/components/settings/credentials-form";
 import { RunSettings } from "@/components/settings/run-settings";
@@ -53,15 +53,11 @@ export function SettingsDrawer({
     <Drawer open={open} onClose={onClose} title="Settings">
       <div className="space-y-6">
         <div className="flex flex-wrap gap-2 rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
-          <Link href="/account" onClick={onClose}>
-            <Button type="button" variant="secondary" className="!h-8 !text-xs">
-              Account
-            </Button>
+          <Link href="/account" onClick={onClose} className={buttonClassName("secondary", "!h-8 !text-xs")}>
+            Account
           </Link>
-          <Link href="/support" onClick={onClose}>
-            <Button type="button" variant="ghost" className="!h-8 !text-xs">
-              Support
-            </Button>
+          <Link href="/support" onClick={onClose} className={buttonClassName("ghost", "!h-8 !text-xs")}>
+            Support
           </Link>
           {onLogout && (
             <Button
