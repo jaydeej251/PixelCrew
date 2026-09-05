@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import JSZip from "jszip";
 import { prisma } from "@/lib/db";
-import { assembleProject } from "@/lib/project-files";
+import { assembleProject, assembleSingleFileHtml } from "@/lib/project-files";
 import { AuthError, assertRunAccess, requireProductSession } from "@/lib/auth";
 
 function authErrorResponse(err: unknown) {
@@ -12,13 +12,14 @@ function authErrorResponse(err: unknown) {
 }
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ runId: string }> },
 ) {
   try {
     const session = await requireProductSession();
     const { runId } = await params;
     await assertRunAccess(runId, session);
+    const format = new URL(req.url).searchParams.get("format");
 
     const run = await prisma.run.findUnique({
       where: { id: runId },
@@ -27,6 +28,23 @@ export async function GET(
     if (!run) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     const files = assembleProject({ ceoGoal: run.ceoGoal, artifacts: run.artifacts });
+
+    if (format === "single") {
+      const html = assembleSingleFileHtml(files, run.ceoGoal);
+      if (!html) {
+        return NextResponse.json({ error: "No previewable HTML to export" }, { status: 404 });
+      }
+      const slug = run.ceoGoal.trim().slice(0, 40).replace(/[^\w]+/g, "-").replace(/^-|-$/g, "");
+      const filename = slug ? `pixelcrew-${slug}.html` : `pixelcrew-app-${runId.slice(0, 8)}.html`;
+      return new NextResponse(html, {
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "Content-Disposition": `attachment; filename="${filename}"`,
+          "Cache-Control": "private, no-store, max-age=0",
+        },
+      });
+    }
+
     const zip = new JSZip();
     for (const [path, content] of files) {
       zip.file(path, content);

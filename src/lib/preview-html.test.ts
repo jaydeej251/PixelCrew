@@ -39,13 +39,23 @@ describe("rewriteCssRootAbsoluteUrls", () => {
 });
 
 describe("preparePreviewHtml", () => {
-  it("injects base href, shim, and rewrites absolute assets", () => {
-    const html = `<!DOCTYPE html><html><head><title>Calc</title></head>
-      <body><link href="/styles.css" rel="stylesheet"><script src="/app.js"></script></body></html>`;
-    const out = preparePreviewHtml(html, "run1", "index.html", "/api/previews/tok/");
+  it("injects base href, shim, rewrites absolute assets, and inlines linked files", () => {
+    const files = new Map([
+      [
+        "index.html",
+        `<!DOCTYPE html><html><head><title>Calc</title></head>
+      <body><link href="/styles.css" rel="stylesheet"><script src="/app.js"></script></body></html>`,
+      ],
+      ["styles.css", "button { color: red; }"],
+      ["app.js", "document.body.dataset.ready = '1';"],
+    ]);
+    const html = files.get("index.html")!;
+    const out = preparePreviewHtml(html, "run1", "index.html", "/api/previews/tok/", files);
     assert.match(out, /<base href="\/api\/previews\/tok\/">/);
-    assert.match(out, /href="styles\.css"/);
-    assert.match(out, /src="app\.js"/);
+    assert.match(out, /color: red/);
+    assert.doesNotMatch(out, /<link[^>]+stylesheet/i);
+    assert.doesNotMatch(out, /src="app\.js"/);
+    assert.match(out, /dataset\.ready = '1'/);
     assert.match(out, /<script>[\s\S]*localStorage[\s\S]*<\/script>/);
     assert.match(out, /makeStore/);
   });

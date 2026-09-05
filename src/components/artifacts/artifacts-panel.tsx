@@ -1,13 +1,13 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Eye } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Markdown, plainTextFromMarkdown } from "@/components/ui/markdown";
 import { ThoughtProcessView } from "@/components/artifacts/thought-process-view";
 import { RunDeliverableActions } from "@/components/artifacts/run-deliverable-actions";
 import { isPackagerFallbackHtml, hasPreviewableApp, isProjectPath } from "@/lib/project-files";
-import { PreviewModal } from "@/components/artifacts/preview-modal";
+import { openRunPreview } from "@/lib/run-preview";
 import type { ThoughtTask } from "@/lib/thought-process";
 import type { RunEventMessage } from "@/lib/events";
 import { cn } from "@/lib/utils";
@@ -45,7 +45,6 @@ export function ArtifactsPanel({
   agents = [],
 }: ArtifactsPanelProps) {
   const [openId, setOpenId] = useState<string | null>(null);
-  const [preview, setPreview] = useState(false);
   const [tab, setTab] = useState<Tab>(runFinished ? "thoughts" : "files");
   const open = artifacts.find((a) => a.id === openId) ?? null;
 
@@ -198,15 +197,16 @@ export function ArtifactsPanel({
       </div>
 
       {tab === "files" && runFinished && previewReady && runId && (
-        <div className="border-t border-zinc-800/80 p-3">
-          <Button type="button" className="w-full" onClick={() => setPreview(true)}>
-            <Eye size={14} />
-            Preview your app
+        <div className="space-y-2 border-t border-zinc-800/80 p-3">
+          <Button type="button" className="w-full" onClick={() => openRunPreview(runId)}>
+            <ExternalLink size={14} />
+            Open your app
           </Button>
+          <p className="text-center text-[11px] text-zinc-500">
+            Opens in a new tab — no terminal required.
+          </p>
         </div>
       )}
-
-      {preview && runId && <PreviewModal runId={runId} onClose={() => setPreview(false)} />}
     </div>
   );
 }

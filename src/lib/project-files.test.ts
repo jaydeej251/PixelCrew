@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   assembleProject,
+  assembleSingleFileHtml,
   findPreviewIndex,
   injectBaseHref,
   isPackagerFallbackHtml,
@@ -237,6 +238,41 @@ describe("injectBaseHref", () => {
     assert.match(html, /<base href="\/api\/runs\/run1\/preview\/">/);
     const again = injectBaseHref(html, "run1");
     assert.equal(again.match(/<base /g)?.length, 1);
+  });
+});
+
+describe("assembleSingleFileHtml", () => {
+  it("inlines linked css and js into one html file", () => {
+    const files = assembleProject({
+      ceoGoal: "calculator",
+      artifacts: [
+        {
+          type: "code",
+          title: "index",
+          content: `<!DOCTYPE html><html><head><link rel="stylesheet" href="styles.css"></head>
+            <body><button id="x">1</button><script src="app.js"></script></body></html>`,
+          filePath: "index.html",
+        },
+        {
+          type: "code",
+          title: "styles",
+          content: "button { color: red; }",
+          filePath: "styles.css",
+        },
+        {
+          type: "code",
+          title: "app",
+          content: "document.getElementById('x').addEventListener('click', () => {});",
+          filePath: "app.js",
+        },
+      ],
+    });
+    const single = assembleSingleFileHtml(files, "calculator");
+    assert.ok(single);
+    assert.match(single!, /<style data-inlined-from="styles\.css">[\s\S]*color: red/);
+    assert.match(single!, /<script[\s\S]*addEventListener/);
+    assert.doesNotMatch(single!, /href="styles\.css"/);
+    assert.doesNotMatch(single!, /src="app\.js"/);
   });
 });
 
