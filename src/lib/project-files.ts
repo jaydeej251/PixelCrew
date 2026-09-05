@@ -237,11 +237,13 @@ This zip is a project folder from a PixelCrew run. It is not a deployed URL.
 
 ## Run locally
 
+Interactive apps (calculator, taskboard, forms) need a local static server — do not rely on double-clicking \`index.html\` (\`file://\` breaks many scripts).
+
 \`\`\`bash
 npx --yes serve .
 \`\`\`
 
-Or open \`index.html\`. Static apps also preview in the PixelCrew office.
+Then open the URL it prints (usually http://localhost:3000). Static apps also preview in the PixelCrew office.
 ${extra}`;
 }
 

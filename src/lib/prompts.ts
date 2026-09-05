@@ -56,6 +56,8 @@ export const STATIC_SHIP_BAR = `v1 engineering bar:
 - Multi-entry data: JSON.parse(localStorage.getItem(key) || "[]"), push a new object, setItem the array. Never overwrite a collection with one object.
 - After any submit: preventDefault and show dedicated in-page feedback. Do not hide the form. Do not use alert() as the only feedback.
 - External links, when requested: target="_blank" rel="noopener noreferrer".
+- Asset paths are relative only (styles.css, ./app.js). Never href="/..." or src="/...".
+- No CDN scripts/styles/fonts and no type="module" — classic <script src="app.js"> only.
 - Never ship a PixelCrew / ColorVision / NeuralArt marketing portfolio unless the CEO goal literally asks for that. Title and h1 must match the CEO product name.`;
 
 export function councilSystemPrompt(name: string, positionLabel: string, position: string): string {

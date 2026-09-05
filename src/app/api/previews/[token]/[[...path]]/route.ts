@@ -4,9 +4,9 @@ import {
   assembleProject,
   contentTypeFor,
   findPreviewIndex,
-  injectBaseHref,
   normalizePath,
 } from "@/lib/project-files";
+import { preparePreviewAsset, preparePreviewHtml } from "@/lib/preview-html";
 import { previewSecurityHeaders } from "@/lib/preview-security";
 import { verifyPreviewToken } from "@/lib/preview-token";
 import { resolvePreviewOrigins } from "@/lib/preview-origin";
@@ -49,13 +49,15 @@ export async function GET(
     return NextResponse.json({ error: "File not found" }, { status: 404 });
   }
 
-  let body = files.get(requested)!;
   const type = contentTypeFor(requested);
+  let body = files.get(requested)!;
   let previewBaseUrl: string | undefined;
   if (type.startsWith("text/html")) {
     const basePath = `/api/previews/${token}/`;
-    body = injectBaseHref(body, run.id, requested, basePath);
+    body = preparePreviewHtml(body, run.id, requested, basePath);
     previewBaseUrl = new URL(basePath, previewOrigin).toString();
+  } else {
+    body = preparePreviewAsset(body, requested, type);
   }
 
   return new NextResponse(body, {
