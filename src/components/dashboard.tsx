@@ -108,7 +108,14 @@ export function Dashboard() {
   const [runReady, setRunReady] = useState(true);
   const [runReadyReason, setRunReadyReason] = useState<string | null>(null);
   const [newChatDialogOpen, setNewChatDialogOpen] = useState(false);
-  const [showWelcomeTips, setShowWelcomeTips] = useState(false);
+  const [showWelcomeTips, setShowWelcomeTips] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem(WELCOME_TIPS_DISMISS_KEY) !== "1";
+    } catch {
+      return true;
+    }
+  });
   const [conversationsReady, setConversationsReady] = useState(false);
   const [composerMode, setComposerMode] = useState<ComposerMode>("fresh");
   const [priorGoalContext, setPriorGoalContext] = useState("");
@@ -154,6 +161,11 @@ export function Dashboard() {
   const subscribeToRunRef = useRef<(id: string) => void>(() => undefined);
   const floorBusyRef = useRef(false);
   const hydratedLlmRef = useRef(false);
+
+  // Exit arrange mode when plan review opens (adjust during render — not in an effect).
+  if (awaitingPlan && editingOffice) {
+    setEditingOffice(false);
+  }
 
   const loadConversations = useCallback(async () => {
     const res = await fetch("/api/runs");
@@ -343,14 +355,6 @@ export function Dashboard() {
   }, [ceoGoal, startBlankWithGoal]);
 
   useEffect(() => {
-    try {
-      setShowWelcomeTips(window.localStorage.getItem(WELCOME_TIPS_DISMISS_KEY) !== "1");
-    } catch {
-      setShowWelcomeTips(true);
-    }
-  }, []);
-
-  useEffect(() => {
     void (async () => {
       await load();
       const runs = await loadConversations();
@@ -386,11 +390,10 @@ export function Dashboard() {
   }, [running, simulating, awaitingPlan]);
 
   useEffect(() => {
-    if (!awaitingPlan) return;
-    if (!editingOffice) return;
-    editingOfficeRef.current = false;
-    setEditingOffice(false);
-  }, [awaitingPlan, editingOffice]);
+    if (awaitingPlan) {
+      editingOfficeRef.current = false;
+    }
+  }, [awaitingPlan]);
 
   useEffect(() => {
     return () => {
