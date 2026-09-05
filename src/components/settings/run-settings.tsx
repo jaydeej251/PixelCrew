@@ -5,7 +5,7 @@ import { Panel, PanelContent, PanelHeader, PanelTitle } from "@/components/ui/pa
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Cpu } from "lucide-react";
+import { Cpu, RefreshCw } from "lucide-react";
 import {
   getOllamaDefaultModelForMode,
   getOllamaEndpointMode,
@@ -65,7 +65,7 @@ export function RunSettings({
   const current = statuses.find((s) => s.provider === provider);
   const ollamaMode =
     provider === "ollama" ? getOllamaEndpointMode(current?.activeBaseUrl) : null;
-  const suggestions = getOllamaSuggestedModels(ollamaMode);
+  const cloudSuggestions = getOllamaSuggestedModels(ollamaMode === "cloud" ? "cloud" : null);
   const mismatched =
     provider === "ollama" && ollamaModelLooksMismatched(model, ollamaMode);
 
@@ -79,9 +79,10 @@ export function RunSettings({
       </PanelHeader>
       <PanelContent className="space-y-3">
         <p className="text-xs text-zinc-500">
-          Pick a provider, then a model. For Ollama, the active key under{" "}
-          <span className="text-zinc-400">Your API keys</span> chooses cloud or local —
-          the model field stays required either way.
+          Pick who builds with you, then which AI brain they use. For Ollama, choose{" "}
+          <span className="text-zinc-400">Use cloud</span> or{" "}
+          <span className="text-zinc-400">Use local</span> under Your API keys — most people
+          should use cloud.
         </p>
 
         <div className="space-y-1.5">
@@ -128,9 +129,14 @@ export function RunSettings({
               <Label htmlFor="run-model" className="text-xs text-zinc-400">
                 Model
               </Label>
-              {ollamaMode && ollamaMode !== "custom" && (
+              {ollamaMode === "cloud" && (
                 <span className="text-[10px] uppercase tracking-wide text-zinc-500">
-                  {ollamaMode === "cloud" ? "Cloud catalog" : "Local pulls"}
+                  Cloud catalog
+                </span>
+              )}
+              {ollamaMode === "local" && (
+                <span className="text-[10px] uppercase tracking-wide text-zinc-500">
+                  On this computer
                 </span>
               )}
             </div>
@@ -140,47 +146,39 @@ export function RunSettings({
               value={model}
               onChange={(e) => onModelChange(e.target.value)}
             />
-            {suggestions.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 pt-0.5">
-                {suggestions.map((name) => {
-                  const active = model.trim() === name;
-                  return (
-                    <button
-                      key={name}
-                      type="button"
-                      onClick={() => onModelChange(name)}
-                      className={`rounded-md border px-2 py-0.5 text-[11px] transition-colors ${
-                        active
-                          ? "border-indigo-500/60 bg-indigo-500/15 text-indigo-200"
-                          : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200"
-                      }`}
-                    >
-                      {name}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-            {mismatched && (
-              <p className="text-[11px] leading-snug text-amber-400/90">
-                {ollamaMode === "cloud" && ollamaModelHasLocalCloudSuffix(model)
-                  ? "Drop the -cloud suffix here. That name is for local Ollama (localhost). Direct ollama.com uses gpt-oss:20b, not gpt-oss:20b-cloud."
-                  : ollamaMode === "cloud"
-                    ? "That name is a common local pull. On cloud, pick a model from the chips above or ollama.com/search."
-                    : "That name is a common cloud model. Local Ollama needs a model you’ve already pulled."}
-              </p>
-            )}
-            {!mismatched && ollamaMode === "cloud" && (
-              <p className="text-[11px] leading-snug text-zinc-500">
-                Direct ollama.com API — no <code className="text-zinc-400">-cloud</code> suffix
-                (that’s only for local offload). Key authenticates; chips are the model name we send.
-              </p>
-            )}
-            {!mismatched && ollamaMode === "local" && (
-              <p className="text-[11px] leading-snug text-zinc-500">
-                Local needs no API key. Use a model from{" "}
-                <code className="text-zinc-400">ollama list</code>, or click a starter above.
-              </p>
+            {ollamaMode === "local" ? (
+              <LocalOllamaModelChips
+                key={`${workspaceId}-${credentialsRevision}`}
+                workspaceId={workspaceId}
+                model={model}
+                onModelChange={onModelChange}
+                mismatched={mismatched}
+              />
+            ) : (
+              <>
+                {cloudSuggestions.length > 0 && (
+                  <ModelChipRow
+                    names={cloudSuggestions}
+                    model={model}
+                    onModelChange={onModelChange}
+                  />
+                )}
+                {mismatched && (
+                  <p className="text-[11px] leading-snug text-amber-400/90">
+                    {ollamaMode === "cloud" && ollamaModelHasLocalCloudSuffix(model)
+                      ? "Remove the “-cloud” ending from the name when using Ollama Cloud (example: gpt-oss:20b)."
+                      : ollamaMode === "cloud"
+                        ? "That name is usually for the Ollama app on your computer. On cloud, pick one of the options above or search on ollama.com."
+                        : "That name is usually for Ollama Cloud. On this computer, pick a model you’ve already downloaded in the Ollama app."}
+                  </p>
+                )}
+                {!mismatched && ollamaMode === "cloud" && (
+                  <p className="text-[11px] leading-snug text-zinc-500">
+                    Uses your Ollama Cloud key. Tap a chip above, or type a model name from
+                    ollama.com.
+                  </p>
+                )}
+              </>
             )}
           </div>
         )}
@@ -209,7 +207,7 @@ export function RunSettings({
               <p className="text-[11px] leading-snug text-zinc-500">
                 Saved both local and cloud? Click{" "}
                 <span className="text-zinc-300">Use</span> on the one you want under Your API
-                keys — this panel updates the endpoint badge above.
+                keys. Most people should stay on cloud.
               </p>
             )}
             {provider === "openrouter" && current.ready && (
@@ -249,6 +247,186 @@ function modelPlaceholder(
   return "Model name";
 }
 
+function ModelChipRow({
+  names,
+  model,
+  onModelChange,
+}: {
+  names: readonly string[];
+  model: string;
+  onModelChange: (model: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5 pt-0.5">
+      {names.map((name) => {
+        const active = model.trim() === name;
+        return (
+          <button
+            key={name}
+            type="button"
+            onClick={() => onModelChange(name)}
+            className={`rounded-md border px-2 py-0.5 text-[11px] transition-colors ${
+              active
+                ? "border-indigo-500/60 bg-indigo-500/15 text-indigo-200"
+                : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200"
+            }`}
+          >
+            {name}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+type LocalModelsState =
+  | { status: "loading"; models: string[] }
+  | { status: "ready"; models: string[] }
+  | { status: "empty"; models: [] }
+  | { status: "error"; models: string[]; message: string };
+
+function LocalOllamaModelChips({
+  workspaceId,
+  model,
+  onModelChange,
+  mismatched,
+}: {
+  workspaceId: string;
+  model: string;
+  onModelChange: (model: string) => void;
+  mismatched: boolean;
+}) {
+  const starters = getOllamaSuggestedModels("local");
+  const [state, setState] = useState<LocalModelsState>({
+    status: "loading",
+    models: [],
+  });
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    fetch(
+      `/api/providers/ollama/models?workspaceId=${encodeURIComponent(workspaceId)}`,
+      { signal: controller.signal, cache: "no-store" },
+    )
+      .then(async (res) => {
+        const json = (await res.json()) as {
+          ok?: boolean;
+          models?: string[];
+          message?: string;
+          error?: string;
+        };
+        if (controller.signal.aborted) return;
+
+        if (!res.ok || !json.ok) {
+          setState({
+            status: "error",
+            models: [],
+            message:
+              json.message ??
+              json.error ??
+              "We couldn’t load your local models right now.",
+          });
+          return;
+        }
+
+        const models = Array.isArray(json.models) ? json.models : [];
+        if (models.length === 0) {
+          setState({ status: "empty", models: [] });
+          return;
+        }
+        setState({ status: "ready", models });
+      })
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) return;
+        setState({
+          status: "error",
+          models: [],
+          message:
+            err instanceof Error
+              ? err.message
+              : "We couldn’t load your local models right now.",
+        });
+      });
+
+    return () => controller.abort();
+  }, [workspaceId, refreshKey]);
+
+  const showStarters =
+    state.status === "error" || state.status === "loading" || state.status === "empty";
+  const chipNames =
+    state.status === "ready"
+      ? state.models
+      : state.status === "loading" && state.models.length > 0
+        ? state.models
+        : showStarters
+          ? starters
+          : [];
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2 pt-0.5">
+        <span className="text-[11px] text-zinc-500">
+          {state.status === "ready"
+            ? `${state.models.length} model${state.models.length === 1 ? "" : "s"} on this computer`
+            : state.status === "loading"
+              ? "Looking for the Ollama app…"
+              : state.status === "empty"
+                ? "No models downloaded yet"
+                : "Ollama isn’t ready yet"}
+        </span>
+        <button
+          type="button"
+          onClick={() => {
+            setState((prev) => ({
+              status: "loading",
+              models: prev.status === "ready" ? prev.models : [],
+            }));
+            setRefreshKey((n) => n + 1);
+          }}
+          disabled={state.status === "loading"}
+          className="inline-flex items-center gap-1 text-[11px] text-indigo-400 hover:text-indigo-300 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <RefreshCw
+            size={11}
+            className={state.status === "loading" ? "animate-spin" : undefined}
+            aria-hidden
+          />
+          {state.status === "loading" ? "Refreshing…" : "Refresh"}
+        </button>
+      </div>
+
+      {chipNames.length > 0 && (
+        <ModelChipRow names={chipNames} model={model} onModelChange={onModelChange} />
+      )}
+
+      {state.status === "ready" && (
+        <p className="text-[11px] leading-snug text-zinc-500">
+          These are already on your computer — no cloud key needed. After you download a new
+          model in the Ollama app, click Refresh.
+        </p>
+      )}
+      {state.status === "empty" && (
+        <p className="text-[11px] leading-snug text-amber-400/90">
+          Ollama is open, but no models are downloaded yet. In the Ollama app, download one
+          (try <span className="text-zinc-200">qwen2.5-coder</span>), then click Refresh. The
+          chips below are suggestions until something is downloaded.
+        </p>
+      )}
+      {state.status === "error" && (
+        <p className="text-[11px] leading-snug text-amber-400/90">{state.message}</p>
+      )}
+      {mismatched && (state.status === "ready" || state.status === "empty") && (
+        <p className="text-[11px] leading-snug text-amber-400/90">
+          That name is usually for Ollama Cloud. On this computer, pick a model you’ve
+          already downloaded in the Ollama app.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function OllamaEndpointCard({
   mode,
   baseUrl,
@@ -259,7 +437,7 @@ function OllamaEndpointCard({
   label?: string | null;
 }) {
   const title =
-    mode === "cloud" ? "Cloud" : mode === "local" ? "Local" : "Custom endpoint";
+    mode === "cloud" ? "Cloud" : mode === "local" ? "This computer" : "Custom";
   const badgeVariant =
     mode === "cloud" ? "building" : mode === "local" ? "done" : "default";
 
@@ -267,19 +445,23 @@ function OllamaEndpointCard({
     <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 py-2.5">
       <div className="flex items-center justify-between gap-2">
         <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-          Endpoint
+          Where requests go
         </span>
         <Badge variant={badgeVariant}>{title}</Badge>
       </div>
       <p className="mt-1.5 truncate text-sm text-zinc-200">
-        {baseUrl || "Default Ollama endpoint"}
+        {mode === "local"
+          ? "Ollama app on this computer"
+          : mode === "cloud"
+            ? "Ollama Cloud"
+            : baseUrl || "Custom Ollama address"}
       </p>
       <p className="mt-1 text-[11px] leading-snug text-zinc-500">
         {mode === "cloud"
-          ? "Requests go to ollama.com with your API key."
+          ? "Uses your cloud key from ollama.com."
           : mode === "local"
-            ? "Requests go to your machine — no cloud key required."
-            : "Using the base URL on the active credential."}
+            ? "Uses the Ollama app on this computer — no cloud key needed."
+            : "Using the address saved on your active key."}
         {label ? (
           <>
             {" "}
