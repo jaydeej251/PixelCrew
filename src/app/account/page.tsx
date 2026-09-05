@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { SUPPORT_EMAIL } from "@/lib/constants";
-import { Button } from "@/components/ui/button";
+import { Button, buttonClassName } from "@/components/ui/button";
 import { SiteFooter } from "@/components/layout/site-footer";
 import { SiteHeader } from "@/components/layout/site-header";
 
@@ -71,10 +71,8 @@ export default function AccountPage() {
               <p className="text-xs text-zinc-500">Signed in as</p>
               <p className="mt-1 text-sm text-zinc-200">{email}</p>
               <div className="mt-4 flex flex-wrap gap-2">
-                <Link href="/app">
-                  <Button type="button" variant="secondary">
-                    Open office
-                  </Button>
+                <Link href="/app" className={buttonClassName("secondary")}>
+                  Open office
                 </Link>
                 <Button
                   type="button"

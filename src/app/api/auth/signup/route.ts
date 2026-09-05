@@ -6,7 +6,7 @@ import { createSession, hashPassword, SESSION_COOKIE } from "@/lib/auth";
 import { slugify } from "@/lib/utils";
 import { createWorkspaceForUser } from "@/lib/workspace-bootstrap";
 import { consumeRateLimit, rateLimitResponse, requestClientIp } from "@/lib/rate-limit";
-import { persistPlatformRoleUpgrade, postAuthPath } from "@/lib/platform-admin";
+import { persistPlatformRoleUpgrade, postSignupPath } from "@/lib/platform-admin";
 
 const signupSchema = z.object({
   email: z.email().trim().toLowerCase().max(320),
@@ -68,6 +68,6 @@ export async function POST(req: Request) {
   return NextResponse.json({
     ok: true,
     email: user.email,
-    redirectTo: postAuthPath(platformRole),
+    redirectTo: postSignupPath(platformRole),
   });
 }
