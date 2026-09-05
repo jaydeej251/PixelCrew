@@ -97,6 +97,7 @@ describe("assembleProject", () => {
     assert.match(files.get("docs/merge-the-council-plan.md") ?? "", /track spend/);
     assert.match(files.get("package.json") ?? "", /pixelcrew-export/);
     assert.match(files.get("README.md") ?? "", /npx --yes serve/);
+    assert.match(files.get("README.md") ?? "", /file:\/\/\`/);
   });
 
   it("adds a missing-build page when engineers shipped a Node app", () => {
