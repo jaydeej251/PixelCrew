@@ -19,11 +19,85 @@ type PlanReviewProps = {
   onRestart?: () => void;
 };
 
+type PlanPayload = {
+  ok?: boolean;
+  error?: string;
+  thread?: ThreadItem[];
+  plan?: string;
+  decisions?: PlanDecision[];
+};
+
+type StreamEvent =
+  | { type: "delta"; content?: string }
+  | { type: "done"; ok?: boolean; thread?: ThreadItem[]; plan?: string; decisions?: PlanDecision[] }
+  | { type: "error"; error?: string };
+
+async function readPlanAskStream(
+  res: Response,
+  onDelta: (chunk: string) => void,
+): Promise<PlanPayload> {
+  if (!res.body) {
+    return { error: "Could not update the plan. Try again." };
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let final: PlanPayload | null = null;
+
+  const handleEvent = (raw: string) => {
+    const dataLine = raw
+      .split("\n")
+      .map((line) => line.trimEnd())
+      .find((line) => line.startsWith("data:"));
+    if (!dataLine) return;
+    const payload = dataLine.slice(5).trim();
+    if (!payload) return;
+    let event: StreamEvent;
+    try {
+      event = JSON.parse(payload) as StreamEvent;
+    } catch {
+      return;
+    }
+    if (event.type === "delta" && event.content) {
+      onDelta(event.content);
+      return;
+    }
+    if (event.type === "done") {
+      final = {
+        ok: event.ok ?? true,
+        thread: event.thread,
+        plan: event.plan,
+        decisions: event.decisions,
+      };
+      return;
+    }
+    if (event.type === "error") {
+      final = { error: event.error ?? "Could not update the plan. Try again." };
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      if (part.trim()) handleEvent(part);
+    }
+  }
+  if (buffer.trim()) handleEvent(buffer);
+
+  return final ?? { error: "Could not update the plan. Try again." };
+}
+
 export function PlanReview({ runId, onPublished, onRestart }: PlanReviewProps) {
   const [thread, setThread] = useState<ThreadItem[]>([]);
   const [decisions, setDecisions] = useState<PlanDecision[]>([]);
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useState("");
   const [error, setError] = useState("");
   const [canPublish, setCanPublish] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
@@ -80,26 +154,50 @@ export function PlanReview({ runId, onPublished, onRestart }: PlanReviewProps) {
   useEffect(() => {
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [thread, busy, decisions]);
+  }, [thread, busy, draft, decisions]);
 
   const send = async () => {
     if (!question.trim() || busy) return;
     setBusy(true);
+    setDraft("");
     setError("");
     const pending = question;
     setQuestion("");
     setThread((prev) => [...prev, { role: "user", content: pending }]);
-    const res = await fetch(`/api/runs/${runId}/plan`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "ask", message: pending }),
-    });
-    const json = await res.json();
-    if (!res.ok) {
-      setError(json.error ?? "Could not update the plan. Try again.");
+    try {
+      const res = await fetch(`/api/runs/${runId}/plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "ask", message: pending }),
+      });
+      const contentType = res.headers.get("content-type") ?? "";
+      if (contentType.includes("text/event-stream")) {
+        const payload = await readPlanAskStream(res, (chunk) => {
+          setDraft((prev) => prev + chunk);
+        });
+        if (payload.error || !res.ok) {
+          setError(payload.error ?? "Could not update the plan. Try again.");
+          setDraft("");
+          await load();
+        } else {
+          setDraft("");
+          applyPayload(payload);
+        }
+      } else {
+        const json = (await res.json()) as PlanPayload;
+        if (!res.ok) {
+          setError(json.error ?? "Could not update the plan. Try again.");
+          setDraft("");
+          await load();
+        } else {
+          setDraft("");
+          applyPayload(json);
+        }
+      }
+    } catch {
+      setError("Could not update the plan. Try again.");
+      setDraft("");
       await load();
-    } else {
-      applyPayload(json);
     }
     setBusy(false);
   };
@@ -107,6 +205,7 @@ export function PlanReview({ runId, onPublished, onRestart }: PlanReviewProps) {
   const decide = async (payload: { decisionId?: string; optionId?: string; useRecommended?: boolean }) => {
     if (busy) return;
     setBusy(true);
+    setDraft("");
     setError("");
     const res = await fetch(`/api/runs/${runId}/plan`, {
       method: "POST",
@@ -168,7 +267,7 @@ export function PlanReview({ runId, onPublished, onRestart }: PlanReviewProps) {
             )}
           </div>
         )}
-        {thread.length === 0 && (
+        {thread.length === 0 && !busy && (
           <p className="py-8 text-center text-sm text-zinc-500">
             The team is writing the first draft…
           </p>
@@ -192,7 +291,17 @@ export function PlanReview({ runId, onPublished, onRestart }: PlanReviewProps) {
             )}
           </div>
         ))}
-        {busy && (
+        {busy && draft && (
+          <div className="mr-auto max-w-[92%] rounded-2xl bg-zinc-900 px-4 py-3 text-sm leading-relaxed text-zinc-200">
+            <p className="mb-1 text-[11px] font-medium text-zinc-500">Workspace AI</p>
+            <Markdown compact>{draft}</Markdown>
+            <span
+              aria-hidden
+              className="mt-1 inline-block h-3.5 w-1.5 animate-pulse rounded-sm bg-zinc-500 align-middle"
+            />
+          </div>
+        )}
+        {busy && !draft && (
           <div className="mr-auto flex items-center gap-2 rounded-2xl bg-zinc-900 px-4 py-3 text-sm text-zinc-500">
             <Spinner className="size-3.5" />
             Thinking…
@@ -236,6 +345,7 @@ export function PlanReview({ runId, onPublished, onRestart }: PlanReviewProps) {
             disabled={busy || !canPublish}
             onClick={async () => {
               setBusy(true);
+              setDraft("");
               setError("");
               const res = await fetch(`/api/runs/${runId}/plan`, {
                 method: "POST",
