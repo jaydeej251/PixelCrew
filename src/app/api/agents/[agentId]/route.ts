@@ -5,11 +5,10 @@ import { prisma } from "@/lib/db";
 import { getJobBoundary, getPositionLabel } from "@/lib/templates";
 import { POSITIONS, type PositionKey } from "@/lib/constants";
 import {
-  AuthError,
   assertAgentAccess,
-  authErrorStatus,
   requireProductSession,
 } from "@/lib/auth";
+import { apiErrorResponse } from "@/lib/api-error";
 
 const POSITION_DEPT: Record<string, string> = {
   executive: "Product",
@@ -42,13 +41,6 @@ const updateAgentSchema = z
   })
   .strict();
 
-function errorResponse(err: unknown) {
-  if (err instanceof AuthError) {
-    return NextResponse.json({ error: err.message }, { status: authErrorStatus(err) });
-  }
-  throw err;
-}
-
 export async function GET(
   _req: Request,
   { params }: { params: Promise<{ agentId: string }> },
@@ -64,7 +56,7 @@ export async function GET(
     });
     return NextResponse.json(memories);
   } catch (err) {
-    return errorResponse(err);
+    return apiErrorResponse(err);
   }
 }
 
@@ -118,7 +110,7 @@ export async function PATCH(
     });
     return NextResponse.json(agent);
   } catch (err) {
-    return errorResponse(err);
+    return apiErrorResponse(err);
   }
 }
 
@@ -133,6 +125,6 @@ export async function DELETE(
     await prisma.agent.delete({ where: { id: agentId } });
     return NextResponse.json({ ok: true });
   } catch (err) {
-    return errorResponse(err);
+    return apiErrorResponse(err);
   }
 }

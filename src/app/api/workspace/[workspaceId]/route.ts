@@ -7,7 +7,8 @@ import { POSITIONS } from "@/lib/constants";
 import { createHiredAgent, isPositionKey } from "@/lib/hire";
 import type { PositionKey } from "@/lib/constants";
 import { TEAM_TEMPLATES } from "@/lib/templates";
-import { AuthError, assertWorkspaceAccess, requireProductSession } from "@/lib/auth";
+import { assertWorkspaceAccess, requireProductSession } from "@/lib/auth";
+import { apiErrorResponse } from "@/lib/api-error";
 
 const workspaceMutationSchema = z.discriminatedUnion("action", [
   z.object({
@@ -30,12 +31,6 @@ const workspaceMutationSchema = z.discriminatedUnion("action", [
   }).strict(),
 ]);
 
-function authErrorResponse(err: unknown) {
-  if (err instanceof AuthError) {
-    return NextResponse.json({ error: err.message }, { status: err.message === "Unauthorized" ? 401 : 404 });
-  }
-  throw err;
-}
 
 export async function POST(
   req: Request,
@@ -92,6 +87,6 @@ export async function POST(
 
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   } catch (err) {
-    return authErrorResponse(err);
+    return apiErrorResponse(err);
   }
 }

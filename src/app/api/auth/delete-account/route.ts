@@ -1,13 +1,8 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/db";
-import {
-  AuthError,
-  authErrorStatus,
-  deleteSession,
-  requireSession,
-  SESSION_COOKIE,
-} from "@/lib/auth";
+import { deleteSession, requireSession, SESSION_COOKIE } from "@/lib/auth";
+import { apiErrorResponse } from "@/lib/api-error";
 
 /**
  * Delete the signed-in user and any organizations where they are the sole member.
@@ -47,9 +42,6 @@ export async function POST() {
 
     return NextResponse.json({ ok: true });
   } catch (err) {
-    if (err instanceof AuthError) {
-      return NextResponse.json({ error: err.message }, { status: authErrorStatus(err) });
-    }
-    throw err;
+    return apiErrorResponse(err);
   }
 }

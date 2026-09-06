@@ -9,12 +9,8 @@ import {
   looksLikeIncompleteOllamaApiKey,
 } from "@/lib/ollama-models";
 import { extractErrorText } from "@/lib/providers/http-errors";
-import {
-  AuthError,
-  assertWorkspaceAccess,
-  authErrorStatus,
-  requireProductSession,
-} from "@/lib/auth";
+import { assertWorkspaceAccess, requireProductSession } from "@/lib/auth";
+import { apiErrorResponse } from "@/lib/api-error";
 import { consumeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 export async function POST(req: Request) {
@@ -89,10 +85,7 @@ export async function POST(req: Request) {
     if (err instanceof SyntaxError) {
       return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
     }
-    if (err instanceof AuthError) {
-      return NextResponse.json({ error: err.message }, { status: authErrorStatus(err) });
-    }
-    throw err;
+    return apiErrorResponse(err);
   }
 }
 

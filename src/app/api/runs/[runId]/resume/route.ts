@@ -5,14 +5,8 @@ import { inngest } from "@/lib/inngest";
 import { runOrchestrator } from "@/lib/orchestrator";
 import { workspaceHasProvider } from "@/lib/run-setup";
 import { isResumable, prepareRunForResume, resumePhase } from "@/lib/run-resume";
-import { AuthError, assertRunAccess, requireProductSession } from "@/lib/auth";
-
-function authErrorResponse(err: unknown) {
-  if (err instanceof AuthError) {
-    return NextResponse.json({ error: err.message }, { status: err.message === "Unauthorized" ? 401 : 404 });
-  }
-  throw err;
-}
+import { assertRunAccess, requireProductSession } from "@/lib/auth";
+import { apiErrorResponse } from "@/lib/api-error";
 
 export async function POST(
   req: Request,
@@ -96,6 +90,6 @@ export async function POST(
       model: model ?? null,
     });
   } catch (err) {
-    return authErrorResponse(err);
+    return apiErrorResponse(err);
   }
 }

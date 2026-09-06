@@ -7,12 +7,12 @@ import { runOrchestrator } from "@/lib/orchestrator";
 import { configureAgentsForRun, workspaceHasProvider } from "@/lib/run-setup";
 import { normalizeNewRunGoal } from "@/lib/run-goal";
 import {
-  AuthError,
   assertWorkspaceAccess,
   checkPlanLimits,
   deriveRunTitle,
   requireProductSession,
 } from "@/lib/auth";
+import { apiErrorResponse } from "@/lib/api-error";
 import { consumeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 const createRunSchema = z
@@ -24,12 +24,6 @@ const createRunSchema = z
   })
   .strict();
 
-function authErrorResponse(err: unknown) {
-  if (err instanceof AuthError) {
-    return NextResponse.json({ error: err.message }, { status: err.message === "Unauthorized" ? 401 : 404 });
-  }
-  throw err;
-}
 
 export async function POST(req: Request) {
   try {
@@ -109,7 +103,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ runId: run.id, provider: llm.provider, model: llm.model });
   } catch (err) {
-    return authErrorResponse(err);
+    return apiErrorResponse(err);
   }
 }
 
@@ -136,6 +130,6 @@ export async function GET() {
     });
     return NextResponse.json(runs);
   } catch (err) {
-    return authErrorResponse(err);
+    return apiErrorResponse(err);
   }
 }

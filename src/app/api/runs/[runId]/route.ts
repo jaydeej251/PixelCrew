@@ -2,11 +2,8 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { cancelExecutionsForRun } from "@/lib/execution-runtime";
-import {
-  AuthError,
-  assertRunAccess,
-  requireProductSession,
-} from "@/lib/auth";
+import { assertRunAccess, requireProductSession } from "@/lib/auth";
+import { apiErrorResponse } from "@/lib/api-error";
 
 const updateRunSchema = z
   .object({
@@ -16,12 +13,6 @@ const updateRunSchema = z
   .strict()
   .refine((value) => value.title !== undefined || value.archive === true);
 
-function authErrorResponse(err: unknown) {
-  if (err instanceof AuthError) {
-    return NextResponse.json({ error: err.message }, { status: err.message === "Unauthorized" ? 401 : 404 });
-  }
-  throw err;
-}
 
 export async function GET(
   _req: Request,
@@ -43,7 +34,7 @@ export async function GET(
     if (!run) return NextResponse.json({ error: "Not found" }, { status: 404 });
     return NextResponse.json(run);
   } catch (err) {
-    return authErrorResponse(err);
+    return apiErrorResponse(err);
   }
 }
 
@@ -84,7 +75,7 @@ export async function PATCH(
     });
     return NextResponse.json(run);
   } catch (err) {
-    return authErrorResponse(err);
+    return apiErrorResponse(err);
   }
 }
 
@@ -120,6 +111,6 @@ export async function DELETE(
 
     return NextResponse.json({ ok: true });
   } catch (err) {
-    return authErrorResponse(err);
+    return apiErrorResponse(err);
   }
 }

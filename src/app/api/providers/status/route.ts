@@ -7,14 +7,9 @@ import {
 } from "@/lib/run-setup";
 import { findProviderCredential } from "@/lib/provider-credentials";
 import { resolveProviderConfig } from "@/lib/providers";
-import { AuthError, assertWorkspaceAccess, requireProductSession } from "@/lib/auth";
+import { assertWorkspaceAccess, requireProductSession } from "@/lib/auth";
+import { apiErrorResponse } from "@/lib/api-error";
 
-function authErrorResponse(err: unknown) {
-  if (err instanceof AuthError) {
-    return NextResponse.json({ error: err.message }, { status: err.message === "Unauthorized" ? 401 : 404 });
-  }
-  throw err;
-}
 
 export async function GET(req: Request) {
   try {
@@ -46,6 +41,6 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ providers: statuses });
   } catch (err) {
-    return authErrorResponse(err);
+    return apiErrorResponse(err);
   }
 }

@@ -12,7 +12,8 @@ import {
 } from "@/lib/workflow";
 import { councilThreadFromTasks, plannerSystemPrompt } from "@/lib/prompts";
 import { runOrchestrator, publishAndDelegate } from "@/lib/orchestrator";
-import { AuthError, assertRunAccess, requireProductSession } from "@/lib/auth";
+import { assertRunAccess, requireProductSession } from "@/lib/auth";
+import { apiErrorResponse } from "@/lib/api-error";
 import {
   allDecisionsAnswered,
   applyAnswer,
@@ -44,13 +45,6 @@ const planMutationSchema = z.discriminatedUnion("action", [
     { message: "A decision and option are required" },
   ),
 ]);
-
-function authErrorResponse(err: unknown) {
-  if (err instanceof AuthError) {
-    return NextResponse.json({ error: err.message }, { status: err.message === "Unauthorized" ? 401 : 404 });
-  }
-  throw err;
-}
 
 type QaMessage = { role: "user" | "assistant"; content: string; speaker?: string };
 
@@ -229,7 +223,7 @@ export async function GET(
     decisions: decisions.items,
   });
   } catch (err) {
-    return authErrorResponse(err);
+    return apiErrorResponse(err);
   }
 }
 
@@ -460,7 +454,7 @@ export async function POST(
     },
   });
   } catch (err) {
-    return authErrorResponse(err);
+    return apiErrorResponse(err);
   }
 }
 
