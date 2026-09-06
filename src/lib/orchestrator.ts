@@ -57,6 +57,7 @@ import {
 } from "./roster";
 import { ensureRole, isPositionKey } from "./hire";
 import { configureAgentsForRun, getDefaultModel, workspaceHasProvider } from "./run-setup";
+import { planningStageModelOverride } from "./stage-models";
 import { findProviderCredential } from "./provider-credentials";
 import type { PositionKey } from "./constants";
 import {
@@ -215,13 +216,14 @@ export async function executeAgentTask(
     agent.provider,
   );
 
+  const kind = planningKind(task.title);
+  const stageModel = planningStageModelOverride(agent.provider, agent.model, kind);
   const config = resolveProviderConfig(
     agent.provider,
-    agent.model,
+    stageModel ?? agent.model,
     credential ?? undefined,
   );
 
-  const kind = planningKind(task.title);
   const isEngineer = ENGINEER_POSITIONS.includes(
     agent.position as (typeof ENGINEER_POSITIONS)[number],
   );
@@ -235,8 +237,9 @@ export async function executeAgentTask(
     const masked = config.apiKey
       ? `${config.apiKey.slice(0, 6)}…${config.apiKey.slice(-4)}`
       : "(none)";
+    const stageNote = stageModel ? ` (run model was ${agent.model})` : "";
     console.log(
-      `[PixelCrew] ${agent.name} → ${config.provider}/${config.model} key=${masked}`,
+      `[PixelCrew] ${agent.name} → ${config.provider}/${config.model}${stageNote} key=${masked}`,
     );
   }
 
