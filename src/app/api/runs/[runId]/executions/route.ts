@@ -1,11 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import {
-  AuthError,
-  assertRunAccess,
-  authErrorStatus,
-  requireProductSession,
-} from "@/lib/auth";
+import { assertRunAccess, requireProductSession } from "@/lib/auth";
+import { apiErrorResponse } from "@/lib/api-error";
 import { boundedText } from "@/lib/execution-runtime";
 import { consumeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
@@ -113,9 +109,6 @@ export async function GET(
       })),
     });
   } catch (err) {
-    if (err instanceof AuthError) {
-      return NextResponse.json({ error: err.message }, { status: authErrorStatus(err) });
-    }
-    throw err;
+    return apiErrorResponse(err);
   }
 }

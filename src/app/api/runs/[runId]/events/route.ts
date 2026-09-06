@@ -1,11 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import {
-  AuthError,
-  assertRunAccess,
-  authErrorStatus,
-  requireProductSession,
-} from "@/lib/auth";
+import { assertRunAccess, requireProductSession } from "@/lib/auth";
+import { apiErrorResponse } from "@/lib/api-error";
 import { consumeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 export async function GET(
@@ -25,10 +21,7 @@ export async function GET(
     });
     if (!limit.allowed) return rateLimitResponse(limit);
   } catch (err) {
-    if (err instanceof AuthError) {
-      return NextResponse.json({ error: err.message }, { status: authErrorStatus(err) });
-    }
-    throw err;
+    return apiErrorResponse(err);
   }
 
   const encoder = new TextEncoder();

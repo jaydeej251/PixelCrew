@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { AuthError, authErrorStatus, requireProductSession } from "@/lib/auth";
+import { requireProductSession } from "@/lib/auth";
+import { apiErrorResponse } from "@/lib/api-error";
 import { SHOW_DEV_TOOLS } from "@/lib/dev-tools";
 import { SIMULATED_EVENTS } from "@/lib/office";
 
@@ -11,9 +12,6 @@ export async function POST() {
     }
     return NextResponse.json({ events: SIMULATED_EVENTS });
   } catch (err) {
-    if (err instanceof AuthError) {
-      return NextResponse.json({ error: err.message }, { status: authErrorStatus(err) });
-    }
-    throw err;
+    return apiErrorResponse(err);
   }
 }

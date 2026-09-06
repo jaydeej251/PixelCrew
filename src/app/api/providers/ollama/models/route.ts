@@ -9,11 +9,10 @@ import {
 } from "@/lib/ollama-list-models";
 import { getOllamaEndpointMode } from "@/lib/ollama-models";
 import {
-  AuthError,
   assertWorkspaceAccess,
-  authErrorStatus,
   requireProductSession,
 } from "@/lib/auth";
+import { apiErrorResponse } from "@/lib/api-error";
 import { consumeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
 
 /**
@@ -91,9 +90,6 @@ export async function GET(req: Request) {
       });
     }
   } catch (err) {
-    if (err instanceof AuthError) {
-      return NextResponse.json({ error: err.message }, { status: authErrorStatus(err) });
-    }
-    throw err;
+    return apiErrorResponse(err);
   }
 }

@@ -60,7 +60,7 @@ body {
 
 /* Virtual office (isometric 2.5D) */
 .office-stage-3d {
-  background: #87a8c8;
+  background: #1a2332;
 }
 
 .office-stage-3d canvas {
@@ -90,8 +90,8 @@ body {
   pointer-events: none;
   position: absolute;
   inset: 0 0 45%;
-  background: linear-gradient(to bottom, #87b6e8 0%, transparent 100%);
-  opacity: 0.25;
+  background: linear-gradient(to bottom, #1a2332 0%, transparent 100%);
+  opacity: 0.55;
 }
 
 .office-world {

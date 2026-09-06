@@ -1,18 +1,9 @@
 import { NextResponse } from "next/server";
-import { AuthError, assertRunAccess, requireProductSession } from "@/lib/auth";
+import { assertRunAccess, requireProductSession } from "@/lib/auth";
+import { apiErrorResponse } from "@/lib/api-error";
 import { createPreviewToken, SHARE_PREVIEW_TOKEN_TTL_SECONDS } from "@/lib/preview-token";
 import { resolvePreviewOrigins } from "@/lib/preview-origin";
 import { consumeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
-
-function authErrorResponse(err: unknown) {
-  if (err instanceof AuthError) {
-    return NextResponse.json(
-      { error: err.message },
-      { status: err.message === "Unauthorized" ? 401 : 404 },
-    );
-  }
-  throw err;
-}
 
 export async function GET(
   req: Request,
@@ -43,6 +34,6 @@ export async function GET(
       },
     );
   } catch (err) {
-    return authErrorResponse(err);
+    return apiErrorResponse(err);
   }
 }

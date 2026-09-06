@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { ContactShadows, Html, OrbitControls, Sky } from "@react-three/drei";
+import { ContactShadows, Html, OrbitControls } from "@react-three/drei";
 import { MOUSE, PointLight, Vector3, type MeshStandardMaterial } from "three";
 import {
   CELL,
@@ -401,14 +401,13 @@ export function Office3D({
         camera={{ position: [12, 10, 13], fov: 36, near: 0.1, far: 80 }}
         gl={{ antialias: true }}
       >
-        <color attach="background" args={["#7eb6e8"]} />
-        <fog attach="fog" args={["#93c5e8", 22, 42]} />
-        <Sky sunPosition={[8, 10, 4]} turbidity={3.2} rayleigh={0.45} />
-        <hemisphereLight args={["#fff7ed", "#4d7c0f", 0.75]} />
+        <color attach="background" args={["#1a2332"]} />
+        <fog attach="fog" args={["#243044", 24, 48]} />
+        <hemisphereLight args={["#a8b4c4", "#3f6212", 0.55]} />
         <directionalLight
           castShadow
           position={[8, 14, 6]}
-          intensity={1.7}
+          intensity={1.25}
           shadow-mapSize={[1024, 1024]}
           shadow-camera-far={30}
           shadow-camera-left={-14}
@@ -416,7 +415,7 @@ export function Office3D({
           shadow-camera-top={14}
           shadow-camera-bottom={-14}
         />
-        <ambientLight intensity={0.32} />
+        <ambientLight intensity={0.3} />
 
         <Voxel position={[0, -0.12, 0]} size={[42, 0.24, 42]} color="#16a34a" />
 

@@ -4,9 +4,10 @@ import type { HTMLAttributes } from "react";
 type AlertVariant = "error" | "success" | "info";
 
 const variants: Record<AlertVariant, string> = {
-  error: "border-red-900/50 bg-red-950/30 text-red-200",
-  success: "border-emerald-900/40 bg-emerald-950/20 text-emerald-200",
-  info: "border-zinc-700 bg-zinc-900/60 text-zinc-300",
+  error: "border-red-900/50 bg-red-950/90 text-red-200 backdrop-blur-md",
+  success:
+    "border-emerald-800/70 bg-emerald-950/95 text-emerald-100 shadow-lg shadow-black/40 backdrop-blur-md",
+  info: "border-zinc-700 bg-zinc-950/90 text-zinc-300 backdrop-blur-md",
 };
 
 export function Alert({

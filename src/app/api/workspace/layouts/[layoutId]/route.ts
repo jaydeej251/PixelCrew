@@ -1,11 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import {
-  AuthError,
-  assertWorkspaceAccess,
-  authErrorStatus,
-  requireProductSession,
-} from "@/lib/auth";
+import { assertWorkspaceAccess, requireProductSession } from "@/lib/auth";
+import { apiErrorResponse } from "@/lib/api-error";
 import {
   activateOfficeLayout,
   deleteOfficeLayout,
@@ -23,13 +19,6 @@ const updateLayoutSchema = z.discriminatedUnion("action", [
     data: z.unknown(),
   }).strict(),
 ]);
-
-function errorResponse(error: unknown) {
-  if (error instanceof AuthError) {
-    return NextResponse.json({ error: error.message }, { status: authErrorStatus(error) });
-  }
-  throw error;
-}
 
 export async function PATCH(
   request: Request,
@@ -71,7 +60,7 @@ export async function PATCH(
     if (!layout) return NextResponse.json({ error: "Not found" }, { status: 404 });
     return NextResponse.json({ ok: true, id: layout.id, name: layout.name });
   } catch (error) {
-    return errorResponse(error);
+    return apiErrorResponse(error);
   }
 }
 
@@ -99,6 +88,6 @@ export async function DELETE(
     }
     return NextResponse.json({ ok: true });
   } catch (error) {
-    return errorResponse(error);
+    return apiErrorResponse(error);
   }
 }

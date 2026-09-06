@@ -9,8 +9,16 @@ import {
   unansweredDecisionCount,
   type PlanDecision,
 } from "@/lib/plan-decisions";
+import { readResponseJson } from "@/lib/http-json";
 
 type ThreadItem = { role: "user" | "assistant"; content: string; speaker?: string };
+
+type PlanPayload = {
+  error?: string;
+  thread?: ThreadItem[];
+  plan?: string;
+  decisions?: PlanDecision[];
+};
 
 type PlanReviewProps = {
   runId: string;
@@ -28,11 +36,7 @@ export function PlanReview({ runId, onPublished, onRestart }: PlanReviewProps) {
   const [canPublish, setCanPublish] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
 
-  const applyPayload = (json: {
-    thread?: ThreadItem[];
-    plan?: string;
-    decisions?: PlanDecision[];
-  }) => {
+  const applyPayload = (json: PlanPayload) => {
     if (json.thread?.length) setThread(json.thread);
     if (json.decisions) setDecisions(json.decisions);
     const items = json.decisions ?? decisions;
@@ -42,7 +46,7 @@ export function PlanReview({ runId, onPublished, onRestart }: PlanReviewProps) {
   useEffect(() => {
     const controller = new AbortController();
     fetch(`/api/runs/${runId}/plan`, { signal: controller.signal })
-      .then((res) => res.json())
+      .then((res) => readResponseJson<PlanPayload>(res))
       .then((json) => {
         setThread(
           json.thread?.length
@@ -64,7 +68,7 @@ export function PlanReview({ runId, onPublished, onRestart }: PlanReviewProps) {
 
   const load = async () => {
     const res = await fetch(`/api/runs/${runId}/plan`);
-    const json = await res.json();
+    const json = await readResponseJson<PlanPayload>(res);
     setThread(
       json.thread?.length
         ? json.thread
@@ -89,38 +93,50 @@ export function PlanReview({ runId, onPublished, onRestart }: PlanReviewProps) {
     const pending = question;
     setQuestion("");
     setThread((prev) => [...prev, { role: "user", content: pending }]);
-    const res = await fetch(`/api/runs/${runId}/plan`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "ask", message: pending }),
-    });
-    const json = await res.json();
-    if (!res.ok) {
-      setError(json.error ?? "Could not update the plan. Try again.");
+    try {
+      const res = await fetch(`/api/runs/${runId}/plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "ask", message: pending }),
+      });
+      const json = await readResponseJson<PlanPayload>(res);
+      if (!res.ok) {
+        setError(json.error ?? "Could not update the plan. Try again.");
+        await load();
+      } else {
+        applyPayload(json);
+      }
+    } catch {
+      setError("Could not update the plan. Try again.");
       await load();
-    } else {
-      applyPayload(json);
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   };
 
   const decide = async (payload: { decisionId?: string; optionId?: string; useRecommended?: boolean }) => {
     if (busy) return;
     setBusy(true);
     setError("");
-    const res = await fetch(`/api/runs/${runId}/plan`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "decide", ...payload }),
-    });
-    const json = await res.json();
-    if (!res.ok) {
-      setError(json.error ?? "Could not save that choice.");
+    try {
+      const res = await fetch(`/api/runs/${runId}/plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "decide", ...payload }),
+      });
+      const json = await readResponseJson<PlanPayload>(res);
+      if (!res.ok) {
+        setError(json.error ?? "Could not save that choice.");
+        await load();
+      } else {
+        applyPayload(json);
+      }
+    } catch {
+      setError("Could not save that choice.");
       await load();
-    } else {
-      applyPayload(json);
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   };
 
   const remaining = unansweredDecisionCount(decisions);
@@ -237,19 +253,24 @@ export function PlanReview({ runId, onPublished, onRestart }: PlanReviewProps) {
             onClick={async () => {
               setBusy(true);
               setError("");
-              const res = await fetch(`/api/runs/${runId}/plan`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ action: "publish" }),
-              });
-              if (!res.ok) {
-                const json = await res.json();
-                setError(json.error ?? "Could not start building. Try again.");
-                if (json.decisions) setDecisions(json.decisions);
+              try {
+                const res = await fetch(`/api/runs/${runId}/plan`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ action: "publish" }),
+                });
+                const json = await readResponseJson<PlanPayload>(res);
+                if (!res.ok) {
+                  setError(json.error ?? "Could not start building. Try again.");
+                  if (json.decisions) setDecisions(json.decisions);
+                  return;
+                }
+                onPublished();
+              } catch {
+                setError("Could not start building. Try again.");
+              } finally {
                 setBusy(false);
-                return;
               }
-              onPublished();
             }}
           >
             Looks good — start building

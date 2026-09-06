@@ -2,14 +2,9 @@ import { NextResponse } from "next/server";
 import JSZip from "jszip";
 import { prisma } from "@/lib/db";
 import { assembleProject, assembleSingleFileHtml } from "@/lib/project-files";
-import { AuthError, assertRunAccess, requireProductSession } from "@/lib/auth";
+import { assertRunAccess, requireProductSession } from "@/lib/auth";
+import { apiErrorResponse } from "@/lib/api-error";
 
-function authErrorResponse(err: unknown) {
-  if (err instanceof AuthError) {
-    return NextResponse.json({ error: err.message }, { status: err.message === "Unauthorized" ? 401 : 404 });
-  }
-  throw err;
-}
 
 export async function GET(
   req: Request,
@@ -58,6 +53,6 @@ export async function GET(
       },
     });
   } catch (err) {
-    return authErrorResponse(err);
+    return apiErrorResponse(err);
   }
 }

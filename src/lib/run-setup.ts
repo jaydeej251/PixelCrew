@@ -55,6 +55,29 @@ function isValidProviderKey(provider: ProviderType, key: string): boolean {
   return key.length >= 8;
 }
 
+/** User-facing reason a raw key should be rejected before save. Null when OK. */
+export function providerKeyFormatError(
+  provider: ProviderType,
+  key: string,
+): string | null {
+  const trimmed = key.trim();
+  if (!trimmed) return "API key is required";
+  if (isValidProviderKey(provider, trimmed)) return null;
+  if (provider === "openrouter") {
+    return "OpenRouter keys must look like sk-or-v1-…. Paste the full key from openrouter.ai/keys.";
+  }
+  if (provider === "anthropic") {
+    return "Anthropic keys must start with sk-ant-.";
+  }
+  if (provider === "google") {
+    return "That Gemini/Google key looks too short. Paste the full key from Google AI Studio.";
+  }
+  if (provider === "ollama") {
+    return "That Ollama key looks invalid. Paste the full secret from ollama.com/settings/keys.";
+  }
+  return "That API key does not look valid. Paste the full secret and try again.";
+}
+
 /** Resolve API key: valid stored credential first, then env. Skips bad stored keys. */
 export function resolveApiKey(
   provider: ProviderType,

@@ -4,15 +4,15 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { encrypt } from "@/lib/crypto";
 import {
-  AuthError,
   assertWorkspaceAccess,
-  authErrorStatus,
   requireOrganizationRole,
   requireProductSession,
 } from "@/lib/auth";
+import { apiErrorResponse } from "@/lib/api-error";
 import { isOllamaCloudBaseUrl } from "@/lib/ollama-endpoints";
 import { looksLikeIncompleteOllamaApiKey } from "@/lib/ollama-models";
 import { setDefaultProviderCredential } from "@/lib/provider-credentials";
+import { providerKeyFormatError } from "@/lib/run-setup";
 
 const credentialSchema = z
   .object({
@@ -30,13 +30,6 @@ const setDefaultSchema = z
     id: z.string().min(1),
   })
   .strict();
-
-function authErrorResponse(err: unknown) {
-  if (err instanceof AuthError) {
-    return NextResponse.json({ error: err.message }, { status: authErrorStatus(err) });
-  }
-  throw err;
-}
 
 export async function POST(req: Request) {
   try {
@@ -73,6 +66,12 @@ export async function POST(req: Request) {
         { status: 400 },
       );
     }
+    if (trimmedKey && provider !== "ollama") {
+      const formatError = providerKeyFormatError(provider, trimmedKey);
+      if (formatError) {
+        return NextResponse.json({ error: formatError }, { status: 400 });
+      }
+    }
 
     const cred = await prisma.$transaction(async (tx) => {
       await tx.providerCredential.updateMany({
@@ -99,7 +98,7 @@ export async function POST(req: Request) {
       isDefault: cred.isDefault,
     });
   } catch (err) {
-    return authErrorResponse(err);
+    return apiErrorResponse(err);
   }
 }
 
@@ -128,7 +127,7 @@ export async function PATCH(req: Request) {
       isDefault: cred.isDefault,
     });
   } catch (err) {
-    return authErrorResponse(err);
+    return apiErrorResponse(err);
   }
 }
 
@@ -154,7 +153,7 @@ export async function GET(req: Request) {
     });
     return NextResponse.json(creds);
   } catch (err) {
-    return authErrorResponse(err);
+    return apiErrorResponse(err);
   }
 }
 
@@ -173,6 +172,6 @@ export async function DELETE(req: Request) {
     await prisma.providerCredential.delete({ where: { id } });
     return NextResponse.json({ ok: true });
   } catch (err) {
-    return authErrorResponse(err);
+    return apiErrorResponse(err);
   }
 }

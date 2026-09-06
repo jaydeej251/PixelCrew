@@ -14,11 +14,11 @@ const FAQ = [
   },
   {
     q: "Can I change an app after it finishes?",
-    a: "Yes — use Request changes on the Done banner to open a new chat with your previous goal and a “Changes I want” section. That starts a new run and counts toward your monthly limit.",
+    a: "Yes — use Request changes on the Done banner. Your current app stays on screen until you Start; Cancel keeps it. Starting counts as a new monthly run.",
   },
   {
     q: "What if my prompt or plan was wrong?",
-    a: "On the plan screen, choose Wrong direction — start over. After a run fails or finishes, use Restart with a new brief. Both open a new chat with your brief so you can rewrite it.",
+    a: "On the plan screen, choose Wrong direction — start over. After a run fails or finishes, use Restart with a new brief. Cancel keeps your current app until you Start the redesign.",
   },
   {
     q: "Is there a guide if I get stuck?",

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { ChevronDown, Download, ExternalLink, Link2, MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,98 @@ type RunDeliverableActionsProps = {
   onRestart?: () => void;
 };
 
+/** Escape overflow:hidden ancestors (office stage) by rendering menus in a fixed portal. */
+function useFixedMenuStyle(open: boolean) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [style, setStyle] = useState<CSSProperties | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+
+    const update = () => {
+      const el = triggerRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const width = Math.max(rect.width, 220);
+      const estimatedHeight = 300;
+      const gap = 4;
+      const spaceBelow = window.innerHeight - rect.bottom - 8;
+      const openUp = spaceBelow < estimatedHeight && rect.top > spaceBelow;
+
+      let left = rect.left;
+      if (left + width > window.innerWidth - 8) {
+        left = Math.max(8, window.innerWidth - width - 8);
+      }
+      if (left < 8) left = 8;
+
+      if (openUp) {
+        setStyle({
+          position: "fixed",
+          left,
+          width,
+          bottom: window.innerHeight - rect.top + gap,
+          top: "auto",
+          zIndex: 80,
+        });
+      } else {
+        setStyle({
+          position: "fixed",
+          left,
+          width,
+          top: rect.bottom + gap,
+          bottom: "auto",
+          zIndex: 80,
+        });
+      }
+    };
+
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [open]);
+
+  return { triggerRef, style: open ? style : null };
+}
+
+function MenuPortal({
+  open,
+  style,
+  onClose,
+  children,
+  closeLabel,
+}: {
+  open: boolean;
+  style: CSSProperties | null;
+  onClose: () => void;
+  children: ReactNode;
+  closeLabel: string;
+}) {
+  if (!open || !style || typeof document === "undefined") return null;
+
+  return createPortal(
+    <>
+      <button
+        type="button"
+        className="fixed inset-0 z-[70] cursor-default"
+        aria-label={closeLabel}
+        onClick={onClose}
+      />
+      <div
+        className="overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl"
+        style={style}
+        role="menu"
+      >
+        {children}
+      </div>
+    </>,
+    document.body,
+  );
+}
+
 function DownloadMenu({
   runId,
   compact,
@@ -28,10 +121,12 @@ function DownloadMenu({
   compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const { triggerRef, style } = useFixedMenuStyle(open);
 
   return (
     <div className={cn("relative", compact ? "" : "w-full")}>
       <Button
+        ref={triggerRef}
         type="button"
         variant="secondary"
         className={cn(
@@ -48,48 +143,37 @@ function DownloadMenu({
         </span>
         <ChevronDown size={14} className={cn("transition-transform", open && "rotate-180")} />
       </Button>
-      {open && (
-        <>
-          <button
-            type="button"
-            className="fixed inset-0 z-10 cursor-default"
-            aria-label="Close download menu"
-            onClick={() => setOpen(false)}
-          />
-          <div
-            className={cn(
-              "absolute z-20 mt-1 min-w-[220px] overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-lg",
-              compact ? "right-0" : "left-0 w-full",
-            )}
-            role="menu"
-          >
-            <a
-              href={`/api/runs/${runId}/export?format=single`}
-              download
-              className="block px-3 py-2 text-left text-sm text-zinc-100 hover:bg-zinc-800"
-              role="menuitem"
-              onClick={() => setOpen(false)}
-            >
-              <span className="font-medium">Save app (HTML)</span>
-              <span className="mt-0.5 block text-[11px] text-zinc-500">
-                One file you can open directly
-              </span>
-            </a>
-            <a
-              href={`/api/runs/${runId}/export`}
-              download
-              className="block px-3 py-2 text-left text-sm text-zinc-100 hover:bg-zinc-800"
-              role="menuitem"
-              onClick={() => setOpen(false)}
-            >
-              <span className="font-medium">Download source (ZIP)</span>
-              <span className="mt-0.5 block text-[11px] text-zinc-500">
-                Project folder for developers
-              </span>
-            </a>
-          </div>
-        </>
-      )}
+      <MenuPortal
+        open={open}
+        style={style}
+        onClose={() => setOpen(false)}
+        closeLabel="Close download menu"
+      >
+        <a
+          href={`/api/runs/${runId}/export?format=single`}
+          download
+          className="block px-3 py-2 text-left text-sm text-zinc-100 hover:bg-zinc-800"
+          role="menuitem"
+          onClick={() => setOpen(false)}
+        >
+          <span className="font-medium">Save app (HTML)</span>
+          <span className="mt-0.5 block text-[11px] text-zinc-500">
+            One file you can open directly
+          </span>
+        </a>
+        <a
+          href={`/api/runs/${runId}/export`}
+          download
+          className="block px-3 py-2 text-left text-sm text-zinc-100 hover:bg-zinc-800"
+          role="menuitem"
+          onClick={() => setOpen(false)}
+        >
+          <span className="font-medium">Download source (ZIP)</span>
+          <span className="mt-0.5 block text-[11px] text-zinc-500">
+            Project folder for developers
+          </span>
+        </a>
+      </MenuPortal>
     </div>
   );
 }
@@ -111,6 +195,7 @@ function HudMoreMenu({
   showPreviewActions?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const { triggerRef, style } = useFixedMenuStyle(open);
   const hasItems =
     showPreviewActions || Boolean(onRequestChanges) || Boolean(onRestart);
 
@@ -119,9 +204,10 @@ function HudMoreMenu({
   return (
     <div className="relative">
       <Button
+        ref={triggerRef}
         type="button"
         variant="ghost"
-        className="w-full !h-8 !justify-between !px-2 text-zinc-300"
+          className="w-full !h-8 !justify-between !px-2 text-zinc-200"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-haspopup="menu"
@@ -132,93 +218,85 @@ function HudMoreMenu({
         </span>
         <ChevronDown size={14} className={cn("transition-transform", open && "rotate-180")} />
       </Button>
-      {open && (
-        <>
-          <button
-            type="button"
-            className="fixed inset-0 z-10 cursor-default"
-            aria-label="Close more menu"
-            onClick={() => setOpen(false)}
-          />
-          <div
-            className="absolute right-0 z-20 mt-1 w-full min-w-[220px] overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-lg"
-            role="menu"
-          >
-            {showPreviewActions && (
-              <>
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-100 hover:bg-zinc-800"
-                  role="menuitem"
-                  onClick={() => {
-                    setOpen(false);
-                    onCopyLink();
-                  }}
-                >
-                  <Link2 size={14} />
-                  {copyState === "copied"
-                    ? "Link copied"
-                    : copyState === "error"
-                      ? "Could not copy link"
-                      : "Copy link"}
-                </button>
-                <a
-                  href={`/api/runs/${runId}/export?format=single`}
-                  download
-                  className="block px-3 py-2 text-left text-sm text-zinc-100 hover:bg-zinc-800"
-                  role="menuitem"
-                  onClick={() => setOpen(false)}
-                >
-                  Save app (HTML)
-                </a>
-                <a
-                  href={`/api/runs/${runId}/export`}
-                  download
-                  className="block px-3 py-2 text-left text-sm text-zinc-100 hover:bg-zinc-800"
-                  role="menuitem"
-                  onClick={() => setOpen(false)}
-                >
-                  Download source (ZIP)
-                </a>
-              </>
-            )}
-            {onRequestChanges && (
-              <button
-                type="button"
-                className="block w-full px-3 py-2 text-left text-sm text-zinc-100 hover:bg-zinc-800"
-                role="menuitem"
-                onClick={() => {
-                  setOpen(false);
-                  onRequestChanges();
-                }}
-              >
-                Request changes
-              </button>
-            )}
-            {onRestart && (
-              <button
-                type="button"
-                className="block w-full px-3 py-2 text-left text-sm text-zinc-100 hover:bg-zinc-800"
-                role="menuitem"
-                onClick={() => {
-                  setOpen(false);
-                  onRestart();
-                }}
-              >
-                Restart with a new brief
-              </button>
-            )}
-            <Link
-              href="/faq"
-              className="block px-3 py-2 text-left text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+      <MenuPortal
+        open={open}
+        style={style}
+        onClose={() => setOpen(false)}
+        closeLabel="Close more menu"
+      >
+        {showPreviewActions && (
+          <>
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-zinc-100 hover:bg-zinc-800"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                onCopyLink();
+              }}
+            >
+              <Link2 size={14} />
+              {copyState === "copied"
+                ? "Link copied"
+                : copyState === "error"
+                  ? "Could not copy link"
+                  : "Copy link"}
+            </button>
+            <a
+              href={`/api/runs/${runId}/export?format=single`}
+              download
+              className="block px-3 py-2 text-left text-sm text-zinc-100 hover:bg-zinc-800"
               role="menuitem"
               onClick={() => setOpen(false)}
             >
-              FAQ — static vs production
-            </Link>
-          </div>
-        </>
-      )}
+              Save app (HTML)
+            </a>
+            <a
+              href={`/api/runs/${runId}/export`}
+              download
+              className="block px-3 py-2 text-left text-sm text-zinc-100 hover:bg-zinc-800"
+              role="menuitem"
+              onClick={() => setOpen(false)}
+            >
+              Download source (ZIP)
+            </a>
+          </>
+        )}
+        {onRequestChanges && (
+          <button
+            type="button"
+            className="block w-full px-3 py-2 text-left text-sm text-zinc-100 hover:bg-zinc-800"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onRequestChanges();
+            }}
+          >
+            Request changes
+          </button>
+        )}
+        {onRestart && (
+          <button
+            type="button"
+            className="block w-full px-3 py-2 text-left text-sm text-zinc-100 hover:bg-zinc-800"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onRestart();
+            }}
+          >
+            Restart with a new brief
+          </button>
+        )}
+        <Link
+          href="/faq"
+          className="block px-3 py-2 text-left text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+          role="menuitem"
+          onClick={() => setOpen(false)}
+        >
+          FAQ — static vs production
+        </Link>
+      </MenuPortal>
     </div>
   );
 }
@@ -261,9 +339,9 @@ export function RunDeliverableActions({
               <ExternalLink size={14} />
               Open your app
             </Button>
-            <p className="text-[11px] text-zinc-500">
+            <p className="text-[11px] text-zinc-400">
               Static preview + ZIP in beta.{" "}
-              <Link href="/faq" className="text-zinc-400 underline-offset-2 hover:underline">
+              <Link href="/faq" className="text-zinc-300 underline-offset-2 hover:underline">
                 FAQ
               </Link>
             </p>

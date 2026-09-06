@@ -1,13 +1,10 @@
-import { NextResponse } from "next/server";
-import { AuthError, authErrorStatus, requirePlatformRole, requireSession } from "@/lib/auth";
+import { requirePlatformRole, requireSession } from "@/lib/auth";
 import type { SessionUser } from "@/lib/auth";
+import { apiErrorResponse } from "@/lib/api-error";
 
+/** Admin routes share the product JSON error contract (never empty 500 bodies). */
 export function adminErrorResponse(err: unknown) {
-  if (err instanceof AuthError) {
-    return NextResponse.json({ error: err.message }, { status: authErrorStatus(err) });
-  }
-  console.error(err);
-  return NextResponse.json({ error: "Internal error" }, { status: 500 });
+  return apiErrorResponse(err);
 }
 
 export async function requireAdminSession(): Promise<SessionUser> {
