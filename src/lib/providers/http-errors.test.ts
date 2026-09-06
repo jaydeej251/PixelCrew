@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { extractErrorText, formatLlmHttpError } from "./http-errors";
+import {
+  extractErrorText,
+  formatLlmHttpError,
+  openRouterAffordableRetryMaxTokens,
+  parseOpenRouterAffordableMaxTokens,
+} from "./http-errors";
 
 describe("LLM HTTP error formatting", () => {
   it("extracts nested OpenAI-style error messages", () => {
@@ -47,6 +52,22 @@ describe("LLM HTTP error formatting", () => {
     assert.match(message, /OpenRouter: not enough credits/);
   });
 
+  it("maps OpenRouter can-only-afford bodies to the credits message", () => {
+    const message = formatLlmHttpError({
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      model: "openai/gpt-4o-mini",
+      status: 402,
+      body: JSON.stringify({
+        error: {
+          message:
+            "This request requires more credits, or fewer max_tokens. You requested up to 6000 tokens, but can only afford 4203.",
+        },
+      }),
+    });
+    assert.match(message, /OpenRouter: not enough credits/);
+  });
+
   it("explains Anthropic 401 on Anthropic hosts", () => {
     const message = formatLlmHttpError({
       provider: "anthropic",
@@ -58,5 +79,37 @@ describe("LLM HTTP error formatting", () => {
     assert.match(message, /Anthropic: invalid API key/);
     assert.match(message, /sk-ant/);
     assert.doesNotMatch(message, /OpenRouter/);
+  });
+});
+
+describe("parseOpenRouterAffordableMaxTokens", () => {
+  it("reads the afford ceiling from OpenRouter 402 bodies", () => {
+    const body = JSON.stringify({
+      error: {
+        message:
+          "This request requires more credits, or fewer max_tokens. You requested up to 6000 tokens, but can only afford 4203. To increase, visit https://openrouter.ai/settings/credits",
+        code: 402,
+      },
+    });
+    assert.equal(parseOpenRouterAffordableMaxTokens(body), 4203);
+  });
+
+  it("returns null when the body has no afford ceiling", () => {
+    assert.equal(parseOpenRouterAffordableMaxTokens('{"error":"Insufficient credits"}'), null);
+    assert.equal(parseOpenRouterAffordableMaxTokens(""), null);
+  });
+});
+
+describe("openRouterAffordableRetryMaxTokens", () => {
+  it("retries under the afford ceiling when current max is too high", () => {
+    assert.equal(openRouterAffordableRetryMaxTokens(6000, 4203), 4139);
+  });
+
+  it("does not retry when already within the ceiling", () => {
+    assert.equal(openRouterAffordableRetryMaxTokens(2000, 4203), null);
+  });
+
+  it("floors the retry at 256", () => {
+    assert.equal(openRouterAffordableRetryMaxTokens(900, 100), 256);
   });
 });

@@ -60,6 +60,10 @@ export const STATIC_SHIP_BAR = `v1 engineering bar:
 - No CDN scripts/styles/fonts and no type="module" — classic <script src="app.js"> only.
 - Never ship a PixelCrew / ColorVision / NeuralArt marketing portfolio unless the CEO goal literally asks for that. Title and h1 must match the CEO product name.`;
 
+/** Short stack reminder for planning/synth — not the full engineer ship checklist. */
+export const STATIC_V1_LINE =
+  "v1 deliverable is a static HTML/CSS/JS app (localStorage) that PixelCrew can preview and ZIP — not React/Mongo/Heroku unless the CEO explicitly asked for production hosting.";
+
 export function councilSystemPrompt(name: string, positionLabel: string, position: string): string {
   const lens =
     position === "project_manager"
@@ -78,11 +82,11 @@ export function synthesizerSystemPrompt(name: string): string {
   return `You are ${name}, Workspace AI. Merge the planning council into ONE plan the CEO can approve.
 ${CULTURE}
 Include: Goal, recommended stack, UX outline, features, out of scope, and a task list.
-v1 stack MUST be a static site (HTML + CSS + JS, localStorage) that PixelCrew can preview in the browser. Do not plan React + Mongo + Heroku + Nodemailer + reCAPTCHA unless the CEO explicitly asked for production backend hosting.
+${STATIC_V1_LINE}
+Do not plan React + Mongo + Heroku + Nodemailer + reCAPTCHA unless the CEO explicitly asked for production backend hosting.
 The CEO goal is the source of truth. Preserve its product name, requested screens, controls, formulas, copy, visual constraints, and explicit bans. Council brainstorms are advice, not permission to change the product.
 Never turn an app into a portfolio or marketing landing page. Only plan a portfolio, contact form, project gallery, legal links, or social footer when the CEO explicitly requests it.
 ${PLAN_EXECUTION_BAR}
-${STATIC_SHIP_BAR}
 Write the plan using your recommended defaults so it is already shippable.
 If 1–3 choices would actually steer the product (audience, tone, which v1 feature is must-have when the goal is ambiguous, brand name when none was given), end with ONE json fence the CEO will answer as multiple choice. Example:
 \`\`\`json
@@ -95,10 +99,10 @@ export function plannerSystemPrompt(name: string, positionLabel: string): string
   return `You are ${name}, ${positionLabel}, talking to the CEO about the combined plan.
 ${CULTURE}
 Answer in the conversation. If they asked to change the plan, reply with the full updated plan.
-If they asked a question, answer it and include the current plan at the end under "Updated plan".
+If they asked a question, answer it briefly and only include the current plan under "Updated plan" when the plan itself changed.
 If they critique quality (timeline, roles, localStorage, inline JS, hidden forms), apply those fixes in the updated plan.
 ${PLAN_EXECUTION_BAR}
-${STATIC_SHIP_BAR}`;
+${STATIC_V1_LINE}`;
 }
 
 export function engineerSystemPrompt(name: string, positionLabel: string, jobBoundary: string): string {

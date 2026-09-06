@@ -15,6 +15,11 @@ import { runOrchestrator, publishAndDelegate } from "@/lib/orchestrator";
 import { assertRunAccess, requireProductSession } from "@/lib/auth";
 import { apiErrorResponse } from "@/lib/api-error";
 import {
+  buildPlanAskMessages,
+  PLAN_ASK_MAX_TOKENS,
+  PLAN_DECIDE_MAX_TOKENS,
+} from "@/lib/plan-context";
+import {
   allDecisionsAnswered,
   applyAnswer,
   decisionAnswersKey,
@@ -156,14 +161,14 @@ async function revisePlanForDecisions(
     plannerAgent.model,
     credential ?? undefined,
   );
-  config.maxTokens = 2500;
+  config.maxTokens = PLAN_DECIDE_MAX_TOKENS;
   const llm = createProvider(config, plannerAgent.position, "Apply plan decisions");
   let reply = "";
   const result = await llm.stream(
     [
       {
         role: "system",
-        content: `${plannerSystemPrompt(plannerAgent.name, plannerAgent.positionLabel)} You speak for the planning council. Apply the CEO's directional choices. Never refuse.`,
+        content: `${plannerSystemPrompt(plannerAgent.name, plannerAgent.positionLabel)} You speak for the planning council. Apply the CEO's directional choices. Never refuse. Prefer a concise Updated plan — do not restate unchanged sections verbosely.`,
       },
       { role: "user", content: decisionApplyUserPrompt(currentPlan, state.items) },
     ],
@@ -360,13 +365,15 @@ export async function POST(
     plannerAgent.model,
     credential ?? undefined,
   );
-  config.maxTokens = 2500;
+  config.maxTokens = PLAN_ASK_MAX_TOKENS;
   const llm = createProvider(config, plannerAgent.position, "Revise plan");
 
-  const history = thread.map((m) => ({
-    role: m.role,
-    content: m.speaker ? `[${m.speaker}]\n${m.content}` : m.content,
-  }));
+  const askMessages = buildPlanAskMessages({
+    systemPrompt: `${plannerSystemPrompt(plannerAgent.name, plannerAgent.positionLabel)} You speak for the planning council (Product, Senior Developer, UI/UX). Never refuse. If the CEO asks for a stack or UX, answer using the pinned plan and council digests. When the plan changes, put the full updated plan under "Updated plan". If only answering a question, keep the reply short and do not reprint the whole plan.`,
+    thread,
+    currentPlan: planTask.output ?? "",
+    ceoGoal: run.ceoGoal,
+  });
 
   const encoder = new TextEncoder();
   let closed = false;
@@ -400,21 +407,12 @@ export async function POST(
           pending = "";
         };
 
-        const result = await llm.stream(
-          [
-            {
-              role: "system",
-              content: `${plannerSystemPrompt(plannerAgent.name, plannerAgent.positionLabel)} You speak for the planning council (Product, Senior Developer, UI/UX). Never refuse. If the CEO asks for a stack or UX, answer using the council notes.`,
-            },
-            ...history,
-          ],
-          (chunk) => {
-            if (!chunk.content) return;
-            reply += chunk.content;
-            pending += chunk.content;
-            flushDelta(false);
-          },
-        );
+        const result = await llm.stream(askMessages, (chunk) => {
+          if (!chunk.content) return;
+          reply += chunk.content;
+          pending += chunk.content;
+          flushDelta(false);
+        });
         reply = reply || result.content;
         flushDelta(true);
 

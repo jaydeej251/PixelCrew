@@ -1,4 +1,5 @@
 import { slugify } from "./utils";
+import { truncatePlanForPrompt } from "./plan-context";
 
 export type PlanDecisionOption = {
   id: string;
@@ -219,7 +220,7 @@ export function applyAnswer(
 
 export function decisionApplyUserPrompt(plan: string, items: PlanDecision[]): string {
   return `Current plan:
-${plan}
+${truncatePlanForPrompt(plan)}
 
 The CEO picked these directional answers:
 ${formatCeoDecisions(items)}
