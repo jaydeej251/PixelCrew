@@ -368,31 +368,91 @@ export async function POST(
     content: m.speaker ? `[${m.speaker}]\n${m.content}` : m.content,
   }));
 
-  let reply = "";
-  const result = await llm.stream(
-    [
-      {
-        role: "system",
-        content: `${plannerSystemPrompt(plannerAgent.name, plannerAgent.positionLabel)} You speak for the planning council (Product, Senior Developer, UI/UX). Never refuse. If the CEO asks for a stack or UX, answer using the council notes.`,
-      },
-      ...history,
-    ],
-    (chunk) => {
-      reply += chunk.content;
+  const encoder = new TextEncoder();
+  let closed = false;
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (data: unknown) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+        } catch {
+          closed = true;
+        }
+      };
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        try {
+          controller.close();
+        } catch {
+          // already closed
+        }
+      };
+
+      try {
+        let reply = "";
+        let pending = "";
+        const flushDelta = (force = false) => {
+          if (!pending) return;
+          if (!force && pending.length < 12 && !pending.includes("\n")) return;
+          send({ type: "delta", content: pending });
+          pending = "";
+        };
+
+        const result = await llm.stream(
+          [
+            {
+              role: "system",
+              content: `${plannerSystemPrompt(plannerAgent.name, plannerAgent.positionLabel)} You speak for the planning council (Product, Senior Developer, UI/UX). Never refuse. If the CEO asks for a stack or UX, answer using the council notes.`,
+            },
+            ...history,
+          ],
+          (chunk) => {
+            if (!chunk.content) return;
+            reply += chunk.content;
+            pending += chunk.content;
+            flushDelta(false);
+          },
+        );
+        reply = reply || result.content;
+        flushDelta(true);
+
+        thread.push({ role: "assistant", content: reply, speaker: "Workspace AI" });
+        await savePlanThread(runId, thread);
+
+        const updated = stripDecisionFence(extractUpdatedPlan(reply, planTask.output ?? ""));
+        if (updated !== planTask.output) {
+          await writeRevisedPlan(runId, planTask.id, updated);
+        }
+
+        const decisions = await getDecisionState(runId);
+        send({
+          type: "done",
+          ok: true,
+          plan: updated,
+          thread,
+          decisions: decisions.items,
+        });
+      } catch (err) {
+        console.error("[PixelCrew] plan ask stream failed:", err);
+        send({
+          type: "error",
+          error: "Could not update the plan. Try again.",
+        });
+      } finally {
+        close();
+      }
     },
-  );
-  reply = reply || result.content;
+  });
 
-  thread.push({ role: "assistant", content: reply, speaker: "Workspace AI" });
-  await savePlanThread(runId, thread);
-
-  const updated = stripDecisionFence(extractUpdatedPlan(reply, planTask.output ?? ""));
-  if (updated !== planTask.output) {
-    await writeRevisedPlan(runId, planTask.id, updated);
-  }
-
-  const decisions = await getDecisionState(runId);
-  return NextResponse.json({ ok: true, plan: updated, thread, decisions: decisions.items });
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
+  });
   } catch (err) {
     return apiErrorResponse(err);
   }
