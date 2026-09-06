@@ -33,6 +33,11 @@ export function formatLlmHttpError(opts: {
     return "OpenRouter: invalid API key. Check sk-or-v1- prefix in .env.local.";
   }
 
+  const isAnthropic = opts.baseUrl.includes("api.anthropic.com");
+  if (isAnthropic && unauthorized) {
+    return "Anthropic: invalid API key. Paste a full sk-ant-… key from console.anthropic.com, or re-save it under Anthropic in Settings.";
+  }
+
   if (raw) return raw;
   return `${opts.provider} HTTP ${opts.status}`;
 }

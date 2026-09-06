@@ -36,4 +36,15 @@ describe("providerKeyFormatError", () => {
       null,
     );
   });
+
+  it("rejects Anthropic keys that are not sk-ant-…", () => {
+    assert.match(String(providerKeyFormatError("anthropic", "sk-bad")), /sk-ant/);
+  });
+
+  it("accepts well-formed Anthropic keys", () => {
+    assert.equal(
+      providerKeyFormatError("anthropic", "sk-ant-api03-abcdefghijklmnopqrstuvwxyz"),
+      null,
+    );
+  });
 });

@@ -66,8 +66,15 @@ export function resolveProviderConfig(
         model,
       };
     }
-    case "openai_compatible":
     case "anthropic":
+      return {
+        provider,
+        apiKey,
+        // Anthropic’s OpenAI-compatible chat surface (Bearer + /v1/chat/completions).
+        baseUrl: "https://api.anthropic.com/v1",
+        model,
+      };
+    case "openai_compatible":
       return {
         provider,
         apiKey,
@@ -97,7 +104,9 @@ export function createProvider(
     throw new Error(
       config.provider === "ollama"
         ? "Ollama Cloud requires an API key from ollama.com/settings/keys. Save it under Ollama in the sidebar, or set OLLAMA_API_KEY in .env.local."
-        : `No valid API key for ${config.provider}. Add OPENROUTER_API_KEY or OPEN_ROUTER_KEY to .env.local and restart the dev server, or save a key in the sidebar.`,
+        : config.provider === "anthropic"
+          ? "No valid Anthropic API key. Save a sk-ant-… key under Anthropic in Settings, or set ANTHROPIC_API_KEY in .env.local (dev only)."
+          : `No valid API key for ${config.provider}. Add OPENROUTER_API_KEY or OPEN_ROUTER_KEY to .env.local and restart the dev server, or save a key in the sidebar.`,
     );
   }
 

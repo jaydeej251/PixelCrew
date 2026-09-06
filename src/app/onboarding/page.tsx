@@ -8,7 +8,7 @@ import { buttonClassName } from "@/components/ui/button";
 const STEPS = [
   {
     title: "Add an API key in Settings",
-    body: "Bring your own OpenRouter, Gemini, or Ollama key (local or cloud). Paste the full secret — incomplete keys are rejected.",
+    body: "Bring your own OpenRouter, Anthropic, Gemini, or Ollama key (local or cloud). Paste the full secret — incomplete keys are rejected.",
   },
   {
     title: "Test the key before you Start",

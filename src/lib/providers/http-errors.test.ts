@@ -46,4 +46,17 @@ describe("LLM HTTP error formatting", () => {
     });
     assert.match(message, /OpenRouter: not enough credits/);
   });
+
+  it("explains Anthropic 401 on Anthropic hosts", () => {
+    const message = formatLlmHttpError({
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com/v1",
+      model: "claude-3-5-haiku-latest",
+      status: 401,
+      body: '{"error":{"message":"invalid x-api-key"}}',
+    });
+    assert.match(message, /Anthropic: invalid API key/);
+    assert.match(message, /sk-ant/);
+    assert.doesNotMatch(message, /OpenRouter/);
+  });
 });

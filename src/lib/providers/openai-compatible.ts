@@ -23,6 +23,11 @@ export class OpenAICompatibleProvider implements LLMProvider {
       headers["X-Title"] = process.env.PRODUCT_NAME ?? "PixelCrew";
     }
 
+    // Anthropic OpenAI-compat layer accepts Bearer; version header keeps the contract explicit.
+    if (baseUrl.includes("api.anthropic.com")) {
+      headers["anthropic-version"] = "2023-06-01";
+    }
+
     const res = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers,

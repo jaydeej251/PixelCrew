@@ -12,6 +12,7 @@ import {
 const env = process.env as Record<string, string | undefined>;
 const originalBaseUrl = env.OLLAMA_BASE_URL;
 const originalApiKey = env.OLLAMA_API_KEY;
+const originalAnthropicKey = env.ANTHROPIC_API_KEY;
 const originalNodeEnv = env.NODE_ENV;
 
 afterEach(() => {
@@ -19,6 +20,8 @@ afterEach(() => {
   else env.OLLAMA_BASE_URL = originalBaseUrl;
   if (originalApiKey === undefined) delete env.OLLAMA_API_KEY;
   else env.OLLAMA_API_KEY = originalApiKey;
+  if (originalAnthropicKey === undefined) delete env.ANTHROPIC_API_KEY;
+  else env.ANTHROPIC_API_KEY = originalAnthropicKey;
   if (originalNodeEnv === undefined) delete env.NODE_ENV;
   else env.NODE_ENV = originalNodeEnv;
 });
@@ -117,5 +120,18 @@ describe("ollama provider config", () => {
       "Build a page",
     );
     assert.equal(provider.constructor.name, "OllamaNativeChatProvider");
+  });
+});
+
+describe("anthropic provider config", () => {
+  it("points at Anthropic’s OpenAI-compatible base URL", () => {
+    delete env.ANTHROPIC_API_KEY;
+    env.NODE_ENV = "development";
+    env.ANTHROPIC_API_KEY = "sk-ant-test-key-abcdefghijklmnopqrstuvwxyz";
+
+    const config = resolveProviderConfig("anthropic", "claude-3-5-haiku-latest");
+    assert.equal(config.baseUrl, "https://api.anthropic.com/v1");
+    assert.equal(config.apiKey, "sk-ant-test-key-abcdefghijklmnopqrstuvwxyz");
+    assert.equal(config.provider, "anthropic");
   });
 });

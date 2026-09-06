@@ -10,7 +10,7 @@ const PLANS = [
     price: "$0",
     runs: `${FREE_RUNS_PER_MONTH} new runs / month`,
     features: [
-      "BYOK (OpenRouter, Gemini, Ollama)",
+      "BYOK (OpenRouter, Anthropic, Gemini, Ollama)",
       "Office + planning council",
       "Plan approve → files → preview + zip",
       "1 workspace",

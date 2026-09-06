@@ -9,8 +9,9 @@ import {
 import { OLLAMA_CLOUD_BASE_URL, OLLAMA_LOCAL_BASE_URL } from "./ollama-endpoints";
 
 describe("run readiness", () => {
-  it("requires live key test for OpenRouter and Ollama Cloud only", () => {
+  it("requires live key test for OpenRouter, Anthropic, and Ollama Cloud", () => {
     assert.equal(providerRequiresLiveKeyTest("openrouter", null), true);
+    assert.equal(providerRequiresLiveKeyTest("anthropic", null), true);
     assert.equal(providerRequiresLiveKeyTest("ollama", "cloud"), true);
     assert.equal(providerRequiresLiveKeyTest("ollama", "local"), false);
     assert.equal(providerRequiresLiveKeyTest("mock", null), false);

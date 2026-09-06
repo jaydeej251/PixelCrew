@@ -21,7 +21,7 @@ export function providerRequiresLiveKeyTest(
   provider: string,
   ollamaMode: OllamaEndpointMode | null,
 ): boolean {
-  if (provider === "openrouter") return true;
+  if (provider === "openrouter" || provider === "anthropic") return true;
   if (provider === "ollama" && ollamaMode === "cloud") return true;
   return false;
 }
@@ -68,9 +68,9 @@ export function writeProviderTestOk(
 const PROVIDER_PREFERENCE = [
   "ollama",
   "openrouter",
+  "anthropic",
   "google",
   "openai_compatible",
-  "anthropic",
 ] as const;
 
 /**
