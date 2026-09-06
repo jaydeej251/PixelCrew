@@ -95,7 +95,7 @@ export default function Home() {
           <p className="font-medium text-zinc-200">What works today</p>
           <ul className="mt-2 list-disc space-y-1 pl-5">
             <li>Office floor, planning council, plan review, project files, preview + zip</li>
-            <li>Your OpenRouter, Gemini, or Ollama keys (local or cloud)</li>
+            <li>Your OpenRouter, Anthropic, Gemini, or Ollama keys (local or cloud)</li>
           </ul>
           <p className="mt-3 font-medium text-zinc-200">Not in this beta</p>
           <ul className="mt-2 list-disc space-y-1 pl-5">

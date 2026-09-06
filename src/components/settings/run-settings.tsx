@@ -15,6 +15,7 @@ import {
   type OllamaEndpointMode,
 } from "@/lib/ollama-models";
 import { writeProviderTestOk } from "@/lib/run-readiness";
+import { readResponseJson } from "@/lib/http-json";
 
 type ProviderStatus = {
   provider: string;
@@ -211,17 +212,40 @@ export function RunSettings({
               </p>
             )}
             {provider === "openrouter" && current.ready && (
-              <TestKeyButton
-                workspaceId={workspaceId}
-                provider="openrouter"
-                credentialId={current.activeCredentialId}
-                onResult={onProviderTestResult}
-              />
+              <>
+                <p className="text-[11px] leading-snug text-zinc-500">
+                  Browse models on{" "}
+                  <a
+                    href="https://openrouter.ai/models"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-zinc-300 underline-offset-2 hover:underline"
+                  >
+                    openrouter.ai/models
+                  </a>
+                  , then paste the model id here — OpenRouter is the catalog; we just need the
+                  name for this run.
+                </p>
+                <TestKeyButton
+                  workspaceId={workspaceId}
+                  provider="openrouter"
+                  credentialId={current.activeCredentialId}
+                  onResult={onProviderTestResult}
+                />
+              </>
             )}
             {provider === "ollama" && current.ready && ollamaMode === "cloud" && (
               <TestKeyButton
                 workspaceId={workspaceId}
                 provider="ollama"
+                credentialId={current.activeCredentialId}
+                onResult={onProviderTestResult}
+              />
+            )}
+            {provider === "anthropic" && current.ready && (
+              <TestKeyButton
+                workspaceId={workspaceId}
+                provider="anthropic"
                 credentialId={current.activeCredentialId}
                 onResult={onProviderTestResult}
               />
@@ -243,6 +267,7 @@ function modelPlaceholder(
     return "Model name";
   }
   if (provider === "openrouter") return "e.g. openai/gpt-4o-mini";
+  if (provider === "anthropic") return "e.g. claude-3-5-haiku-latest";
   if (provider === "google") return "e.g. gemini-2.0-flash";
   return "Model name";
 }
@@ -480,13 +505,18 @@ function TestKeyButton({
   onResult,
 }: {
   workspaceId: string;
-  provider: "openrouter" | "ollama";
+  provider: "openrouter" | "ollama" | "anthropic";
   credentialId?: string | null;
   onResult?: (ok: boolean) => void;
 }) {
   const [result, setResult] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const label = provider === "ollama" ? "Test Ollama Cloud key" : "Test OpenRouter key";
+  const label =
+    provider === "ollama"
+      ? "Test Ollama Cloud key"
+      : provider === "anthropic"
+        ? "Test Anthropic key"
+        : "Test OpenRouter key";
 
   return (
     <div>
@@ -497,22 +527,35 @@ function TestKeyButton({
         onClick={async () => {
           setLoading(true);
           setResult(null);
-          const res = await fetch("/api/providers/test", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ workspaceId, provider }),
-          });
-          const json = await res.json();
-          const detail = json.message ?? json.error ?? "Test failed";
-          const probeBits =
-            json.probes && typeof json.probes === "object"
-              ? ` [models=${json.probes.models?.status ?? "?"} tags=${json.probes.tags?.status ?? "?"} api/chat=${json.probes.nativeChat?.status ?? "?"} v1/chat=${json.probes.openaiChat?.status ?? "?"}]`
-              : "";
-          const ok = Boolean(json.ok);
-          writeProviderTestOk(workspaceId, provider, credentialId, ok);
-          onResult?.(ok);
-          setResult(ok ? `✓ ${detail} (${json.source})` : `✗ ${detail}${probeBits}`);
-          setLoading(false);
+          try {
+            const res = await fetch("/api/providers/test", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ workspaceId, provider }),
+            });
+            const json = await readResponseJson<{
+              ok?: boolean;
+              message?: string;
+              error?: string;
+              source?: string;
+              probes?: Record<string, { status?: number }>;
+            }>(res);
+            const detail = json.message ?? json.error ?? "Test failed";
+            const probeBits =
+              json.probes && typeof json.probes === "object"
+                ? ` [models=${json.probes.models?.status ?? "?"} tags=${json.probes.tags?.status ?? "?"} api/chat=${json.probes.nativeChat?.status ?? "?"} v1/chat=${json.probes.openaiChat?.status ?? "?"}]`
+                : "";
+            const ok = Boolean(json.ok);
+            writeProviderTestOk(workspaceId, provider, credentialId, ok);
+            onResult?.(ok);
+            setResult(ok ? `✓ ${detail} (${json.source})` : `✗ ${detail}${probeBits}`);
+          } catch {
+            writeProviderTestOk(workspaceId, provider, credentialId, false);
+            onResult?.(false);
+            setResult("✗ Test failed");
+          } finally {
+            setLoading(false);
+          }
         }}
       >
         {loading ? "Testing…" : label}

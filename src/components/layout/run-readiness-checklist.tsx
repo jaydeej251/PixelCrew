@@ -12,6 +12,7 @@ import {
   writeProviderTestOk,
   type ProviderReadyStatus,
 } from "@/lib/run-readiness";
+import { readResponseJson } from "@/lib/http-json";
 import { Check, Circle, Settings2 } from "lucide-react";
 
 type RunReadinessChecklistProps = {
@@ -130,7 +131,13 @@ export function RunReadinessChecklist({
   }, [readiness.canStart, readiness.blockingReason]);
 
   const runTest = async () => {
-    if (provider !== "openrouter" && provider !== "ollama") return;
+    if (
+      provider !== "openrouter" &&
+      provider !== "ollama" &&
+      provider !== "anthropic"
+    ) {
+      return;
+    }
     setTesting(true);
     setTestMessage(null);
     try {
@@ -139,7 +146,11 @@ export function RunReadinessChecklist({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ workspaceId, provider }),
       });
-      const json = await res.json();
+      const json = await readResponseJson<{
+        ok?: boolean;
+        message?: string;
+        error?: string;
+      }>(res);
       const ok = Boolean(json.ok);
       writeProviderTestOk(workspaceId, provider, credentialId, ok);
       setLiveTestResult(ok);
@@ -235,6 +246,8 @@ export function RunReadinessChecklist({
               </>
             ) : provider === "ollama" ? (
               "Test Ollama Cloud key"
+            ) : provider === "anthropic" ? (
+              "Test Anthropic key"
             ) : (
               "Test OpenRouter key"
             )}

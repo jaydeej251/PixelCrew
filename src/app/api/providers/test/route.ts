@@ -19,10 +19,15 @@ export async function POST(req: Request) {
     const { workspaceId, provider } = await req.json();
     if (
       typeof workspaceId !== "string" ||
-      (provider !== "openrouter" && provider !== "ollama")
+      (provider !== "openrouter" &&
+        provider !== "ollama" &&
+        provider !== "anthropic")
     ) {
       return NextResponse.json(
-        { error: "A valid workspaceId and openrouter or ollama provider are required" },
+        {
+          error:
+            "A valid workspaceId and openrouter, anthropic, or ollama provider are required",
+        },
         { status: 400 },
       );
     }
@@ -37,6 +42,10 @@ export async function POST(req: Request) {
 
     if (provider === "ollama") {
       return NextResponse.json(await testOllamaCloud(workspaceId));
+    }
+
+    if (provider === "anthropic") {
+      return NextResponse.json(await testAnthropic(workspaceId));
     }
 
     const cred = await findProviderCredential(prisma, workspaceId, "openrouter");
@@ -87,6 +96,53 @@ export async function POST(req: Request) {
     }
     return apiErrorResponse(err);
   }
+}
+
+async function testAnthropic(workspaceId: string) {
+  const cred = await findProviderCredential(prisma, workspaceId, "anthropic");
+  const resolved = resolveApiKey("anthropic", cred);
+
+  if (!resolved.key) {
+    return {
+      ok: false,
+      source: resolved.source,
+      message:
+        "No valid Anthropic key found. Keys must start with sk-ant-. Save one under Anthropic in Settings, or set ANTHROPIC_API_KEY in .env.local (dev only).",
+    };
+  }
+
+  if (!resolved.key.startsWith("sk-ant-")) {
+    return {
+      ok: false,
+      source: resolved.source,
+      message: `Key from ${resolved.source} looks wrong — it should start with sk-ant- (yours starts with "${resolved.key.slice(0, 8)}…"). Re-save under Anthropic in Settings.`,
+    };
+  }
+
+  const model = getDefaultModel("anthropic");
+  const res = await fetch("https://api.anthropic.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${resolved.key}`,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: "user", content: "Say OK" }],
+      max_tokens: 5,
+    }),
+  });
+
+  const text = await res.text();
+  return {
+    ok: res.ok,
+    source: resolved.source,
+    status: res.status,
+    message: res.ok
+      ? "Anthropic key works"
+      : extractErrorText(text) || text.slice(0, 200) || `HTTP ${res.status}`,
+  };
 }
 
 async function testOllamaCloud(workspaceId: string) {

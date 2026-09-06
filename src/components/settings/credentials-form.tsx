@@ -14,6 +14,7 @@ import { looksLikeIncompleteOllamaApiKey } from "@/lib/ollama-models";
 
 const PROVIDERS = [
   { id: "openrouter", label: "OpenRouter" },
+  { id: "anthropic", label: "Anthropic (Claude)" },
   { id: "google", label: "Google Gemini" },
   { id: "ollama", label: "Ollama (cloud or local)" },
   { id: "openai_compatible", label: "OpenAI-compatible" },
@@ -236,7 +237,9 @@ export function CredentialsForm({
             placeholder={
               provider === "ollama"
                 ? "Ollama Cloud API key (paste full id.secret)"
-                : "API key"
+                : provider === "anthropic"
+                  ? "Anthropic API key (sk-ant-…)"
+                  : "API key"
             }
             value={apiKey}
             onChange={(e) => {

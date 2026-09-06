@@ -129,6 +129,7 @@ export function getDefaultModel(provider: ProviderType): string {
 export const RUN_PROVIDERS = [
   { id: "mock" as const, label: "Mock (no API key)" },
   { id: "openrouter" as const, label: "OpenRouter" },
+  { id: "anthropic" as const, label: "Anthropic (Claude)" },
   { id: "google" as const, label: "Google Gemini" },
   { id: "ollama" as const, label: "Ollama (local or cloud)" },
 ];

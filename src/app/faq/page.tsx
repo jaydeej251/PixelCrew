@@ -26,7 +26,7 @@ const FAQ = [
   },
   {
     q: "How do API keys work?",
-    a: "Bring your own OpenRouter, Gemini, or Ollama key. Add it in Settings, then Test before Start so demos do not die on Unauthorized.",
+    a: "Bring your own OpenRouter, Anthropic, Gemini, or Ollama key. Add it in Settings, then Test before Start so demos do not die on Unauthorized.",
   },
   {
     q: "How many runs do I get?",
