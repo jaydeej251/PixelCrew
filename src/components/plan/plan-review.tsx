@@ -19,6 +19,7 @@ type PlanPayload = {
   thread?: ThreadItem[];
   plan?: string;
   decisions?: PlanDecision[];
+  status?: string;
 };
 
 type PlanReviewProps = {
@@ -110,32 +111,7 @@ export function PlanReview({ runId, onPublished, onRestart }: PlanReviewProps) {
     setCanPublish(Boolean(String(json.plan ?? "").trim()) && allDecisionsAnswered(items));
   };
 
-  useEffect(() => {
-    const controller = new AbortController();
-    fetch(`/api/runs/${runId}/plan`, { signal: controller.signal })
-      .then((res) => readResponseJson<PlanPayload>(res))
-      .then((json) => {
-        setThread(
-          json.thread?.length
-            ? json.thread
-            : json.plan
-              ? [{ role: "assistant", content: json.plan, speaker: "Plan" }]
-              : [],
-        );
-        const items = (json.decisions ?? []) as PlanDecision[];
-        setDecisions(items);
-        setCanPublish(Boolean(String(json.plan ?? "").trim()) && allDecisionsAnswered(items));
-      })
-      .catch((error: unknown) => {
-        if (error instanceof Error && error.name === "AbortError") return;
-        setError("Could not load the plan");
-      });
-    return () => controller.abort();
-  }, [runId]);
-
-  const load = async () => {
-    const res = await fetch(`/api/runs/${runId}/plan`);
-    const json = await readResponseJson<PlanPayload>(res);
+  const applyLoadedPlan = (json: PlanPayload) => {
     setThread(
       json.thread?.length
         ? json.thread
@@ -147,6 +123,69 @@ export function PlanReview({ runId, onPublished, onRestart }: PlanReviewProps) {
     setDecisions(items);
     setCanPublish(Boolean(String(json.plan ?? "").trim()) && allDecisionsAnswered(items));
   };
+
+  const load = async (signal?: AbortSignal) => {
+    const res = await fetch(`/api/runs/${runId}/plan`, { signal });
+    const json = await readResponseJson<PlanPayload>(res);
+    applyLoadedPlan(json);
+    return json;
+  };
+
+  // Load once on mount, then keep polling while the draft is still empty.
+  // STREAM_END can open this panel before /plan has a thread (or after a
+  // flaky empty response), and without a retry the UI stays on "writing…".
+  useEffect(() => {
+    const controller = new AbortController();
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const schedule = (delayMs: number) => {
+      if (cancelled) return;
+      timer = setTimeout(() => {
+        void tick();
+      }, delayMs);
+    };
+
+    const tick = async () => {
+      try {
+        const json = await load(controller.signal);
+        if (cancelled) return;
+        setError("");
+        const hasDraft =
+          Boolean(json.thread?.length) || Boolean(String(json.plan ?? "").trim());
+        if (hasDraft) return;
+        const status = json.status ?? "";
+        if (status === "failed" || status === "cancelled") {
+          setError("Planning stopped before a draft was ready.");
+          return;
+        }
+        // Keep retrying while the run is still planning or already paused with
+        // an empty draft (race / empty response). Stop otherwise.
+        if (
+          status === "paused" ||
+          status === "running" ||
+          status === "pending" ||
+          !status
+        ) {
+          schedule(1500);
+        }
+      } catch (error: unknown) {
+        if (error instanceof Error && error.name === "AbortError") return;
+        if (cancelled) return;
+        setError("Could not load the plan");
+        schedule(2500);
+      }
+    };
+
+    void tick();
+    return () => {
+      cancelled = true;
+      controller.abort();
+      if (timer) clearTimeout(timer);
+    };
+    // load closes over runId; re-run only when the run changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: poll tied to runId
+  }, [runId]);
 
   useEffect(() => {
     const el = scroller.current;
@@ -228,6 +267,7 @@ export function PlanReview({ runId, onPublished, onRestart }: PlanReviewProps) {
 
   const remaining = unansweredDecisionCount(decisions);
   const hasDecisions = decisions.length > 0;
+  const decisionsPending = hasDecisions && remaining > 0;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -237,44 +277,20 @@ export function PlanReview({ runId, onPublished, onRestart }: PlanReviewProps) {
         </h2>
         <p className="mt-1 text-sm text-zinc-400">
           {hasDecisions
-            ? "The team drafted a plan using the recommended answers. Confirm anything that would steer the whole product, then start building."
+            ? "Read the team’s draft below. Direction choices stay pinned at the bottom — confirm those, then start building."
             : "Read it, ask for changes, then start building when it looks right."}
         </p>
       </div>
 
       <div
         ref={scroller}
-        className="min-h-[220px] flex-1 space-y-3 overflow-y-auto pr-1"
+        className="min-h-[160px] flex-1 space-y-3 overflow-y-auto pr-1"
       >
-        {hasDecisions && (
-          <div className="space-y-3">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-              Direction {remaining === 0 ? "confirmed" : `${decisions.length - remaining} of ${decisions.length} chosen`}
-            </p>
-            {decisions.map((decision) => (
-              <DecisionCard
-                key={decision.id}
-                decision={decision}
-                disabled={busy}
-                onPick={(optionId) => void decide({ decisionId: decision.id, optionId })}
-              />
-            ))}
-            {remaining > 0 && (
-              <Button
-                variant="ghost"
-                className="w-full text-xs"
-                disabled={busy}
-                onClick={() => void decide({ useRecommended: true })}
-              >
-                Use recommended for {remaining === decisions.length ? "all" : "the rest"}
-              </Button>
-            )}
-          </div>
-        )}
         {thread.length === 0 && !busy && (
-          <p className="py-8 text-center text-sm text-zinc-500">
-            The team is writing the first draft…
-          </p>
+          <div className="flex flex-col items-center justify-center gap-2 py-8 text-sm text-zinc-500">
+            <Spinner className="size-4" />
+            <p>The team is writing the first draft…</p>
+          </div>
         )}
         {thread.map((m, i) => (
           <div
@@ -313,7 +329,49 @@ export function PlanReview({ runId, onPublished, onRestart }: PlanReviewProps) {
         )}
       </div>
 
-      <div className="mt-4 shrink-0 space-y-3 border-t border-zinc-800/80 pt-4">
+      {hasDecisions && (
+        <div
+          className={`mt-3 shrink-0 space-y-3 border-t pt-3 ${
+            decisionsPending
+              ? "border-indigo-500/40 bg-indigo-500/5"
+              : "border-zinc-800/80"
+          }`}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p
+              className={`text-[11px] font-medium uppercase tracking-wide ${
+                decisionsPending ? "text-indigo-300" : "text-zinc-500"
+              }`}
+            >
+              {remaining === 0
+                ? "Direction confirmed"
+                : `Your call — ${remaining} direction${remaining === 1 ? "" : "s"} left`}
+            </p>
+            {remaining > 0 && (
+              <Button
+                variant="ghost"
+                className="h-auto px-2 py-1 text-xs text-indigo-200 hover:text-indigo-100"
+                disabled={busy}
+                onClick={() => void decide({ useRecommended: true })}
+              >
+                Use recommended for {remaining === decisions.length ? "all" : "the rest"}
+              </Button>
+            )}
+          </div>
+          <div className="max-h-[min(36vh,280px)] space-y-3 overflow-y-auto pr-1">
+            {decisions.map((decision) => (
+              <DecisionCard
+                key={decision.id}
+                decision={decision}
+                disabled={busy}
+                onPick={(optionId) => void decide({ decisionId: decision.id, optionId })}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="mt-3 shrink-0 space-y-3 border-t border-zinc-800/80 pt-3">
         <textarea
           className="w-full resize-none rounded-xl border border-zinc-800 bg-zinc-900/50 px-3 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-indigo-500/40 focus:outline-none"
           rows={2}

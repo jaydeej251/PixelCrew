@@ -1,4 +1,8 @@
-import { formatLlmHttpError } from "./http-errors";
+import {
+  formatLlmHttpError,
+  openRouterAffordableRetryMaxTokens,
+  parseOpenRouterAffordableMaxTokens,
+} from "./http-errors";
 import type { LLMProvider, ChatMessage, StreamChunk, ProviderConfig } from "./types";
 
 export class OpenAICompatibleProvider implements LLMProvider {
@@ -7,6 +11,15 @@ export class OpenAICompatibleProvider implements LLMProvider {
   async stream(
     messages: ChatMessage[],
     onChunk: (chunk: StreamChunk) => void,
+  ): Promise<StreamChunk> {
+    return this.streamOnce(messages, onChunk, this.config.maxTokens ?? 900, false);
+  }
+
+  private async streamOnce(
+    messages: ChatMessage[],
+    onChunk: (chunk: StreamChunk) => void,
+    maxTokens: number,
+    isRetry: boolean,
   ): Promise<StreamChunk> {
     const baseUrl = this.config.baseUrl ?? "https://api.openai.com/v1";
     const apiKey = this.config.apiKey?.trim() ?? "";
@@ -35,7 +48,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
         model: this.config.model,
         messages,
         stream: true,
-        max_tokens: this.config.maxTokens ?? 900,
+        max_tokens: maxTokens,
       }),
     });
 
@@ -45,6 +58,21 @@ export class OpenAICompatibleProvider implements LLMProvider {
       console.warn(
         `[PixelCrew] ${this.config.provider} HTTP ${res.status} ${url} model=${this.config.model} body=${err.slice(0, 300)}`,
       );
+
+      if (!isRetry && baseUrl.includes("openrouter.ai") && res.status === 402) {
+        const affordable = parseOpenRouterAffordableMaxTokens(err);
+        const retryMax =
+          affordable !== null
+            ? openRouterAffordableRetryMaxTokens(maxTokens, affordable)
+            : null;
+        if (retryMax !== null) {
+          console.warn(
+            `[PixelCrew] OpenRouter affordability retry max_tokens=${maxTokens}→${retryMax}`,
+          );
+          return this.streamOnce(messages, onChunk, retryMax, true);
+        }
+      }
+
       throw new Error(
         formatLlmHttpError({
           provider: this.config.provider,

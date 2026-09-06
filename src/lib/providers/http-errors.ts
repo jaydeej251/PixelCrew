@@ -26,7 +26,7 @@ export function formatLlmHttpError(opts: {
     );
   }
 
-  if (isOpenRouter && (raw.includes("more credits") || raw.includes("Insufficient"))) {
+  if (isOpenRouter && (raw.includes("more credits") || raw.includes("Insufficient") || raw.includes("can only afford"))) {
     return "OpenRouter: not enough credits. Add funds at openrouter.ai/settings/credits, use a free model, or switch to Ollama locally.";
   }
   if (isOpenRouter && (raw.includes("Authentication") || raw.includes("API key") || unauthorized)) {
@@ -40,6 +40,28 @@ export function formatLlmHttpError(opts: {
 
   if (raw) return raw;
   return `${opts.provider} HTTP ${opts.status}`;
+}
+
+/**
+ * OpenRouter 402 bodies often say “can only afford 4203” when max_tokens is too high
+ * for remaining credits. Returns that ceiling, or null if not present.
+ */
+export function parseOpenRouterAffordableMaxTokens(body: string): number | null {
+  const raw = extractErrorText(body);
+  const match = raw.match(/can only afford\s+(\d+)/i);
+  if (!match) return null;
+  const n = Number.parseInt(match[1]!, 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
+/** One retry budget under the afford ceiling (OpenRouter reserves against max_tokens). */
+export function openRouterAffordableRetryMaxTokens(
+  currentMaxTokens: number,
+  affordable: number,
+): number | null {
+  if (affordable <= 0 || currentMaxTokens <= affordable) return null;
+  return Math.max(256, affordable - 64);
 }
 
 export function extractErrorText(body: string): string {

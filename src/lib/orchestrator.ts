@@ -160,10 +160,13 @@ async function loadPriorContext(runId: string, task: Task): Promise<string> {
 
 function summarizeOutput(output: string): string {
   const files = parseFileFences(output);
-  if (files.length === 0) return output.slice(0, 2500);
+  if (files.length === 0) {
+    // Council → synth digests stay tight; full dumps blow token budget.
+    return output.slice(0, 1_400);
+  }
   const listing = files.map((f) => `- ${f.path} (${f.content.length} chars)`).join("\n");
-  const bodies = files.map((f) => `### ${f.path}\n${f.content.slice(0, 1800)}`).join("\n\n");
-  return `Files emitted:\n${listing}\n\n${bodies}`.slice(0, 10_000);
+  const bodies = files.map((f) => `### ${f.path}\n${f.content.slice(0, 1_200)}`).join("\n\n");
+  return `Files emitted:\n${listing}\n\n${bodies}`.slice(0, 7_000);
 }
 
 function planningKind(title: string): "dispatch" | "council" | "synth" | "legacy" | null {
@@ -222,10 +225,10 @@ export async function executeAgentTask(
   const isEngineer = ENGINEER_POSITIONS.includes(
     agent.position as (typeof ENGINEER_POSITIONS)[number],
   );
-  if (kind === "dispatch" || kind === "synth" || kind === "legacy") config.maxTokens = 2500;
+  if (kind === "dispatch" || kind === "synth" || kind === "legacy") config.maxTokens = 2200;
   else if (kind === "council") config.maxTokens = 1200;
-  else if (isEngineer) config.maxTokens = 6000;
-  else if (agent.position === "qa_engineer") config.maxTokens = 2500;
+  else if (isEngineer) config.maxTokens = 4000;
+  else if (agent.position === "qa_engineer") config.maxTokens = 2200;
   else config.maxTokens = 1500;
 
   if (config.provider !== "mock" && config.provider !== "ollama") {
@@ -276,8 +279,21 @@ export async function executeAgentTask(
                 agent.position,
               );
 
+  const goalAlreadyInDescription =
+    Boolean(task.description) &&
+    ceoGoal.length > 0 &&
+    task.description!.includes(ceoGoal);
   const userPrompt = kind
-    ? `${task.description ?? ""}\n\n${prior ? `Council / upstream work:\n${prior}\n\n` : ""}CEO source of truth (never replace this with a template):\n${ceoGoal}\n\nDo the work. Do not refuse or hand this off.`
+    ? [
+        task.description ?? "",
+        prior ? `Council / upstream work:\n${prior}` : "",
+        goalAlreadyInDescription
+          ? ""
+          : `CEO source of truth (never replace this with a template):\n${ceoGoal}`,
+        "Do the work. Do not refuse or hand this off.",
+      ]
+        .filter(Boolean)
+        .join("\n\n")
     : [
         `CEO source of truth (acceptance criteria):\n${ceoGoal}`,
         prior ? `CEO context and upstream work:\n${prior}` : "",
