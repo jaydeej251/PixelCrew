@@ -167,34 +167,21 @@ export function Dashboard() {
   const subscribeToRunRef = useRef<(id: string) => void>(() => undefined);
   const floorBusyRef = useRef(false);
   const hydratedLlmRef = useRef(false);
-  const runLlmRef = useRef({ provider: runProvider, model: runModel });
-  runLlmRef.current = { provider: runProvider, model: runModel };
+  const workspaceId = data?.workspace.id;
 
-  const persistRunLlm = useCallback((workspaceId: string, provider: string, model: string) => {
-    writeRunLlmPreference(workspaceId, provider, model);
-  }, []);
+  const persistRunLlm = (id: string, provider: string, model: string) => {
+    writeRunLlmPreference(id, provider, model);
+  };
 
-  const handleRunProviderChange = useCallback(
-    (provider: string) => {
-      setRunProvider(provider);
-      runLlmRef.current.provider = provider;
-      if (data?.workspace.id) {
-        persistRunLlm(data.workspace.id, provider, runLlmRef.current.model);
-      }
-    },
-    [data?.workspace.id, persistRunLlm],
-  );
+  const handleRunProviderChange = (provider: string) => {
+    setRunProvider(provider);
+    if (workspaceId) persistRunLlm(workspaceId, provider, runModel);
+  };
 
-  const handleRunModelChange = useCallback(
-    (model: string) => {
-      setRunModel(model);
-      runLlmRef.current.model = model;
-      if (data?.workspace.id) {
-        persistRunLlm(data.workspace.id, runLlmRef.current.provider, model);
-      }
-    },
-    [data?.workspace.id, persistRunLlm],
-  );
+  const handleRunModelChange = (model: string) => {
+    setRunModel(model);
+    if (workspaceId) persistRunLlm(workspaceId, runProvider, model);
+  };
 
   // Exit arrange mode when plan review opens (adjust during render — not in an effect).
   if (awaitingPlan && editingOffice) {
@@ -226,7 +213,6 @@ export function Dashboard() {
       });
       setRunProvider(initial.provider);
       setRunModel(initial.model);
-      runLlmRef.current = initial;
       // Seed storage so refresh keeps the pick even if agents still say OpenRouter.
       writeRunLlmPreference(json.workspace.id, initial.provider, initial.model);
     }
@@ -702,16 +688,14 @@ export function Dashboard() {
     }
     if (typeof json.provider === "string" && json.provider) {
       setRunProvider(json.provider);
-      runLlmRef.current.provider = json.provider;
     }
     if (typeof json.model === "string" && json.model) {
       setRunModel(json.model);
-      runLlmRef.current.model = json.model;
     }
     persistRunLlm(
       data.workspace.id,
-      runLlmRef.current.provider,
-      runLlmRef.current.model,
+      typeof json.provider === "string" && json.provider ? json.provider : runProvider,
+      typeof json.model === "string" && json.model ? json.model : runModel,
     );
     await beginCreatedRun(json.runId as string, goalForRun);
   };
@@ -765,16 +749,14 @@ export function Dashboard() {
     }
     if (typeof json.provider === "string" && json.provider) {
       setRunProvider(json.provider);
-      runLlmRef.current.provider = json.provider;
     }
     if (typeof json.model === "string" && json.model) {
       setRunModel(json.model);
-      runLlmRef.current.model = json.model;
     }
     persistRunLlm(
       data.workspace.id,
-      runLlmRef.current.provider,
-      runLlmRef.current.model,
+      typeof json.provider === "string" && json.provider ? json.provider : runProvider,
+      typeof json.model === "string" && json.model ? json.model : runModel,
     );
     await beginCreatedRun(json.runId as string, goalForRun);
   };

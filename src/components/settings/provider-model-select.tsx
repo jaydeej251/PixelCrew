@@ -43,23 +43,34 @@ export function ProviderModelSelect({
   onUserModelChange,
 }: ProviderModelSelectProps) {
   const needsFetch = provider === "ollama" && ollamaMode === "local";
+  const listIdentity = needsFetch
+    ? `fetch:${workspaceId}:${credentialsRevision}`
+    : "idle";
+  const [refreshKey, setRefreshKey] = useState(0);
+  const fetchIdentity = `${listIdentity}:${refreshKey}`;
+  const [activeIdentity, setActiveIdentity] = useState(fetchIdentity);
   const [fetchState, setFetchState] = useState<FetchState>({
     status: "idle",
     models: [],
   });
-  const [refreshKey, setRefreshKey] = useState(0);
+
+  // Reset / enter loading when scope changes (adjust during render — same pattern as readiness).
+  if (activeIdentity !== fetchIdentity) {
+    setActiveIdentity(fetchIdentity);
+    setFetchState(
+      needsFetch
+        ? {
+            status: "loading",
+            models: fetchState.status === "ready" ? fetchState.models : [],
+          }
+        : { status: "idle", models: [] },
+    );
+  }
 
   useEffect(() => {
-    if (!needsFetch) {
-      setFetchState({ status: "idle", models: [] });
-      return;
-    }
+    if (!needsFetch) return;
 
     const controller = new AbortController();
-    setFetchState((prev) => ({
-      status: "loading",
-      models: prev.status === "ready" ? prev.models : [],
-    }));
 
     fetch(
       `/api/providers/ollama/models?workspaceId=${encodeURIComponent(workspaceId)}`,
@@ -119,16 +130,13 @@ export function ProviderModelSelect({
     });
   }, [provider, ollamaMode, fetched]);
 
-  useEffect(() => {
-    if (provider === "mock") {
-      if (model !== "mock") onModelChange("mock");
-      return;
-    }
-    if (choices.length === 0) return;
+  // Snap invalid/typo models onto the catalog during render (no effect setState).
+  if (provider === "mock") {
+    if (model !== "mock") onModelChange("mock");
+  } else if (choices.length > 0) {
     const next = coerceModelToChoices(model, choices);
     if (next !== model) onModelChange(next);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- snap when catalog/provider changes
-  }, [provider, choices.join("|"), ollamaMode, needsFetch, fetchState.status]);
+  }
 
   if (provider === "mock") return null;
 
