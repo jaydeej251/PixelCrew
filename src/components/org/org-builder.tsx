@@ -6,6 +6,9 @@ import { Panel, PanelContent, PanelHeader, PanelTitle } from "@/components/ui/pa
 import { Pencil, Plus, Trash2, Users, X } from "lucide-react";
 import type { PositionKey } from "@/lib/constants";
 import { DEFAULT_JOB_BOUNDARIES, POSITIONS } from "@/lib/constants";
+import { getOllamaEndpointMode } from "@/lib/ollama-models";
+import { defaultModelForProviderSelect } from "@/lib/provider-models";
+import { ProviderModelSelect } from "@/components/settings/provider-model-select";
 
 type Agent = {
   id: string;
@@ -34,6 +37,7 @@ type ProviderOption = {
   label: string;
   ready: boolean;
   defaultModel: string;
+  activeBaseUrl?: string | null;
 };
 
 type OrgBuilderProps = {
@@ -44,6 +48,11 @@ type OrgBuilderProps = {
   defaultModel: string;
   workspaceId: string;
   credentialsRevision?: number;
+  /**
+   * Local Ollama: one brain for the whole team (no per-seat provider/model).
+   * Cloud providers including Ollama Cloud keep per-agent pickers.
+   */
+  sharedBrainOnly?: boolean;
   onApplyTemplate: (templateId: string) => Promise<void>;
   onHire: (data: HirePayload) => Promise<void>;
   onUpdate: (id: string, data: HirePayload) => Promise<void>;
@@ -78,7 +87,12 @@ const FALLBACK_PROVIDERS: ProviderOption[] = [
   },
 ];
 
-function brainLabel(provider?: string, model?: string): string {
+function brainLabel(
+  provider?: string,
+  model?: string,
+  sharedBrainOnly?: boolean,
+): string {
+  if (sharedBrainOnly) return "Team brain (local Ollama)";
   if (!provider || provider === "mock") return "Default on Start";
   const short = (model || "").trim();
   if (!short) return provider;
@@ -92,6 +106,7 @@ export function OrgBuilder({
   defaultModel,
   workspaceId,
   credentialsRevision = 0,
+  sharedBrainOnly = false,
   onApplyTemplate,
   onHire,
   onUpdate,
@@ -144,6 +159,10 @@ export function OrgBuilder({
   const selectedProvider = providerOptions.find((p) => p.provider === provider);
   const selectedNeedsKey =
     provider !== "mock" && selectedProvider && !selectedProvider.ready;
+  const ollamaMode =
+    provider === "ollama"
+      ? getOllamaEndpointMode(selectedProvider?.activeBaseUrl)
+      : null;
 
   const byPosition = agents.reduce<Record<string, Agent[]>>((acc, a) => {
     (acc[a.position] ??= []).push(a);
@@ -167,7 +186,9 @@ export function OrgBuilder({
     setName(agent.name);
     setPosition(agent.position as PositionKey);
     setJobBoundary(agent.jobBoundary);
-    setProvider(agent.provider && agent.provider !== "mock" ? agent.provider : defaultProvider);
+    const nextProvider =
+      agent.provider && agent.provider !== "mock" ? agent.provider : defaultProvider;
+    setProvider(nextProvider);
     setModel(
       agent.provider && agent.provider !== "mock" && agent.model
         ? agent.model
@@ -197,7 +218,18 @@ export function OrgBuilder({
   const handleProviderChange = (nextId: string) => {
     setProvider(nextId);
     const next = providerOptions.find((s) => s.provider === nextId);
-    if (next) setModel(next.defaultModel);
+    if (nextId === "ollama") {
+      setModel(
+        defaultModelForProviderSelect(
+          "ollama",
+          getOllamaEndpointMode(next?.activeBaseUrl),
+        ),
+      );
+    } else if (next) {
+      setModel(next.defaultModel || defaultModelForProviderSelect(nextId));
+    } else {
+      setModel(defaultModelForProviderSelect(nextId));
+    }
     setFormError("");
   };
 
@@ -209,9 +241,12 @@ export function OrgBuilder({
         name: name.trim(),
         position,
         jobBoundary: jobBoundary.trim(),
-        provider,
-        model:
-          provider === "mock"
+        provider: sharedBrainOnly
+          ? defaultProvider
+          : provider,
+        model: sharedBrainOnly
+          ? defaultModel
+          : provider === "mock"
             ? "mock"
             : model.trim() ||
               providerOptions.find((p) => p.provider === provider)?.defaultModel ||
@@ -270,38 +305,51 @@ export function OrgBuilder({
         onChange={(e) => setJobBoundary(e.target.value)}
       />
       <div className="space-y-1">
-        <p className="text-[11px] font-medium text-zinc-500">AI brain</p>
-        <select
-          className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100"
-          value={provider}
-          onChange={(e) => handleProviderChange(e.target.value)}
-        >
-          {providerOptions.map((s) => (
-            <option key={s.provider} value={s.provider}>
-              {s.label}
-              {s.provider !== "mock" && (s.ready ? " ✓" : " (no key)")}
-            </option>
-          ))}
-        </select>
-        {provider !== "mock" && (
-          <input
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100"
-            placeholder="Model id (e.g. openai/gpt-4o-mini)"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            required
-          />
-        )}
-        {selectedNeedsKey && (
-          <p className="text-[11px] leading-snug text-amber-400/90">
-            No key saved for this provider yet. Add it under Your API keys before Start, or
-            Start will ask for it.
+        {sharedBrainOnly ? (
+          <p className="rounded-md border border-amber-900/50 bg-amber-950/30 px-2 py-1.5 text-[11px] leading-snug text-amber-200/90">
+            Local Ollama uses one brain for the whole team. Set provider and model under{" "}
+            <span className="text-amber-100">Which AI to use</span> below — Start applies it to
+            everyone.
           </p>
+        ) : (
+          <>
+            <p className="text-[11px] font-medium text-zinc-500">AI brain</p>
+            <select
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100"
+              value={provider}
+              onChange={(e) => handleProviderChange(e.target.value)}
+            >
+              {providerOptions.map((s) => (
+                <option key={s.provider} value={s.provider}>
+                  {s.label}
+                  {s.provider !== "mock" && (s.ready ? " ✓" : " (no key)")}
+                </option>
+              ))}
+            </select>
+            {provider !== "mock" && (
+              <ProviderModelSelect
+                id="teammate-model"
+                workspaceId={workspaceId}
+                provider={provider}
+                model={model}
+                onModelChange={setModel}
+                credentialsRevision={credentialsRevision}
+                ollamaMode={ollamaMode}
+                disabled={busy}
+              />
+            )}
+            {selectedNeedsKey && (
+              <p className="text-[11px] leading-snug text-amber-400/90">
+                No key saved for this provider yet. Add it under Your API keys before Start, or
+                Start will ask for it.
+              </p>
+            )}
+            <p className="text-[11px] leading-snug text-zinc-600">
+              Which AI to use below sets everyone at once. Override a seat here anytime —
+              Start keeps that seat’s brain unless you change the main picker again.
+            </p>
+          </>
         )}
-        <p className="text-[11px] leading-snug text-zinc-600">
-          Keys stay workspace-wide under Your API keys. Mock seats inherit the default brain
-          on Start; teammates with a set brain keep it.
-        </p>
       </div>
       {formError ? (
         <p className="rounded-md border border-red-900/60 bg-red-950/40 px-2 py-1.5 text-xs text-red-300">
@@ -325,8 +373,9 @@ export function OrgBuilder({
         </PanelHeader>
         <PanelContent className="space-y-2">
           <p className="text-xs text-zinc-500">
-            Pick a starting team. You can add, edit, or remove people after. Each seat can use a
-            different AI provider and model.
+            {sharedBrainOnly
+              ? "Pick a starting team. With local Ollama, everyone shares one AI brain from Which AI to use."
+              : "Pick a starting team. Which AI to use sets the whole roster; edit a seat to override one person."}
           </p>
           {templates.map((t) => (
             <button
@@ -372,7 +421,6 @@ export function OrgBuilder({
         </PanelHeader>
         <PanelContent>
           {hiring && form("New teammate")}
-          {editingId && form("Edit teammate")}
 
           <div className="space-y-3">
             {Object.entries(byPosition).map(([pos, members]) => (
@@ -381,55 +429,66 @@ export function OrgBuilder({
                   {members[0]?.positionLabel} ({members.length})
                 </p>
                 <ul className="space-y-1">
-                  {members.map((a) => (
-                    <li
-                      key={a.id}
-                      className="flex items-center gap-2 rounded-lg bg-zinc-900/60 px-2 py-1.5 text-sm"
-                    >
-                      <span
-                        className="h-2 w-2 shrink-0 rounded-full"
-                        style={{ backgroundColor: a.avatarColor }}
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-zinc-200">{a.name}</span>
-                        <span className="block truncate text-[11px] text-zinc-500">
-                          {brainLabel(a.provider, a.model)}
-                        </span>
-                      </span>
-                      <button
-                        type="button"
-                        className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100"
-                        title="Edit"
-                        onClick={() => startEdit(a)}
-                      >
-                        <Pencil size={12} />
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-red-400"
-                        title="Remove"
-                        onClick={async () => {
-                          if (!confirm(`Remove ${a.name} from the team?`)) return;
-                          setBusy(true);
-                          setFormError("");
-                          try {
-                            await onRemove(a.id);
-                            if (editingId === a.id) resetForm();
-                          } catch (err) {
-                            setFormError(
-                              err instanceof Error
-                                ? err.message
-                                : "Couldn’t remove that teammate.",
-                            );
-                          } finally {
-                            setBusy(false);
-                          }
-                        }}
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </li>
-                  ))}
+                  {members.map((a) => {
+                    const isEditing = editingId === a.id;
+                    return (
+                      <li key={a.id} className="space-y-1">
+                        <div className="flex items-center gap-2 rounded-lg bg-zinc-900/60 px-2 py-1.5 text-sm">
+                          <span
+                            className="h-2 w-2 shrink-0 rounded-full"
+                            style={{ backgroundColor: a.avatarColor }}
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-zinc-200">{a.name}</span>
+                            <span className="block truncate text-[11px] text-zinc-500">
+                              {brainLabel(a.provider, a.model, sharedBrainOnly)}
+                            </span>
+                          </span>
+                          <button
+                            type="button"
+                            className={`rounded p-1 hover:bg-zinc-800 hover:text-zinc-100 ${
+                              isEditing
+                                ? "bg-zinc-800 text-zinc-100 ring-1 ring-zinc-500"
+                                : "text-zinc-500"
+                            }`}
+                            title="Edit"
+                            aria-expanded={isEditing}
+                            onClick={() => {
+                              if (isEditing) resetForm();
+                              else startEdit(a);
+                            }}
+                          >
+                            <Pencil size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-red-400"
+                            title="Remove"
+                            onClick={async () => {
+                              if (!confirm(`Remove ${a.name} from the team?`)) return;
+                              setBusy(true);
+                              setFormError("");
+                              try {
+                                await onRemove(a.id);
+                                if (editingId === a.id) resetForm();
+                              } catch (err) {
+                                setFormError(
+                                  err instanceof Error
+                                    ? err.message
+                                    : "Couldn’t remove that teammate.",
+                                );
+                              } finally {
+                                setBusy(false);
+                              }
+                            }}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                        {isEditing ? form("Edit teammate") : null}
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             ))}

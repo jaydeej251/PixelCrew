@@ -37,6 +37,7 @@ import { PlanReview } from "@/components/plan/plan-review";
 import { OFFICE_VIEW_KEY, type OfficeViewMode } from "@/components/office/office-layout";
 import { PLAN_PUBLISHED_TITLE } from "@/lib/workflow";
 import { streamsFromEvents, type ThoughtTask } from "@/lib/thought-process";
+import { resolveInitialRunLlm, writeRunLlmPreference } from "@/lib/run-llm-preference";
 import { OfficeEditorHud } from "@/components/office/office-editor-hud";
 import {
   applyBlueprintEdit,
@@ -166,6 +167,34 @@ export function Dashboard() {
   const subscribeToRunRef = useRef<(id: string) => void>(() => undefined);
   const floorBusyRef = useRef(false);
   const hydratedLlmRef = useRef(false);
+  const runLlmRef = useRef({ provider: runProvider, model: runModel });
+  runLlmRef.current = { provider: runProvider, model: runModel };
+
+  const persistRunLlm = useCallback((workspaceId: string, provider: string, model: string) => {
+    writeRunLlmPreference(workspaceId, provider, model);
+  }, []);
+
+  const handleRunProviderChange = useCallback(
+    (provider: string) => {
+      setRunProvider(provider);
+      runLlmRef.current.provider = provider;
+      if (data?.workspace.id) {
+        persistRunLlm(data.workspace.id, provider, runLlmRef.current.model);
+      }
+    },
+    [data?.workspace.id, persistRunLlm],
+  );
+
+  const handleRunModelChange = useCallback(
+    (model: string) => {
+      setRunModel(model);
+      runLlmRef.current.model = model;
+      if (data?.workspace.id) {
+        persistRunLlm(data.workspace.id, runLlmRef.current.provider, model);
+      }
+    },
+    [data?.workspace.id, persistRunLlm],
+  );
 
   // Exit arrange mode when plan review opens (adjust during render — not in an effect).
   if (awaitingPlan && editingOffice) {
@@ -188,10 +217,18 @@ export function Dashboard() {
     }
     const json = await res.json();
     setData(json);
-    if (!hydratedLlmRef.current && json.agents?.[0]) {
+    if (!hydratedLlmRef.current && json.workspace?.id) {
       hydratedLlmRef.current = true;
-      setRunProvider(json.agents[0].provider ?? "mock");
-      setRunModel(json.agents[0].model ?? "mock");
+      const initial = resolveInitialRunLlm({
+        workspaceId: json.workspace.id,
+        agentProvider: json.agents?.[0]?.provider,
+        agentModel: json.agents?.[0]?.model,
+      });
+      setRunProvider(initial.provider);
+      setRunModel(initial.model);
+      runLlmRef.current = initial;
+      // Seed storage so refresh keeps the pick even if agents still say OpenRouter.
+      writeRunLlmPreference(json.workspace.id, initial.provider, initial.model);
     }
     if (!editingOfficeRef.current && json.officeLayout) {
       setOfficeDraft(cloneBlueprint(json.officeLayout.data));
@@ -663,6 +700,19 @@ export function Dashboard() {
       void load();
       return;
     }
+    if (typeof json.provider === "string" && json.provider) {
+      setRunProvider(json.provider);
+      runLlmRef.current.provider = json.provider;
+    }
+    if (typeof json.model === "string" && json.model) {
+      setRunModel(json.model);
+      runLlmRef.current.model = json.model;
+    }
+    persistRunLlm(
+      data.workspace.id,
+      runLlmRef.current.provider,
+      runLlmRef.current.model,
+    );
     await beginCreatedRun(json.runId as string, goalForRun);
   };
 
@@ -713,6 +763,19 @@ export function Dashboard() {
       void load();
       return;
     }
+    if (typeof json.provider === "string" && json.provider) {
+      setRunProvider(json.provider);
+      runLlmRef.current.provider = json.provider;
+    }
+    if (typeof json.model === "string" && json.model) {
+      setRunModel(json.model);
+      runLlmRef.current.model = json.model;
+    }
+    persistRunLlm(
+      data.workspace.id,
+      runLlmRef.current.provider,
+      runLlmRef.current.model,
+    );
     await beginCreatedRun(json.runId as string, goalForRun);
   };
 
@@ -987,7 +1050,7 @@ export function Dashboard() {
                   role="dialog"
                   aria-modal="true"
                   aria-labelledby="plan-review-title"
-                  className="relative z-10 flex h-full max-h-[calc(100dvh-5.5rem)] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-zinc-700/80 bg-zinc-950/95 p-4 shadow-xl sm:max-h-[min(85vh,720px)] sm:h-auto"
+                  className="relative z-10 flex h-[min(100%,calc(100dvh-5.5rem))] max-h-[calc(100dvh-5.5rem)] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-zinc-700/80 bg-zinc-950/95 p-4 shadow-xl sm:h-[min(85vh,720px)] sm:max-h-[min(85vh,720px)]"
                 >
                   <PlanReview
                     runId={runId}
@@ -1214,8 +1277,8 @@ export function Dashboard() {
                       workspaceId={data.workspace.id}
                       provider={runProvider}
                       model={runModel}
-                      onProviderChange={setRunProvider}
-                      onModelChange={setRunModel}
+                      onProviderChange={handleRunProviderChange}
+                      onModelChange={handleRunModelChange}
                       onOpenSettings={() => setSettingsOpen(true)}
                       credentialsRevision={credentialsRevision}
                       compact
@@ -1332,8 +1395,8 @@ export function Dashboard() {
         agents={data.agents}
         runProvider={runProvider}
         runModel={runModel}
-        onProviderChange={setRunProvider}
-        onModelChange={setRunModel}
+        onProviderChange={handleRunProviderChange}
+        onModelChange={handleRunModelChange}
         onCredentialsChange={() => setCredentialsRevision((n) => n + 1)}
         onProviderTestResult={(ok) => {
           setCredentialsRevision((n) => n + 1);

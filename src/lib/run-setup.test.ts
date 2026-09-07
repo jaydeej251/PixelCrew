@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 import {
+  allowsPerAgentBrains,
+  shouldForceOllamaTeamBrain,
+  shouldShareBrainAcrossRoster,
+} from "./agent-brains";
+import {
   providerKeyFormatError,
   resolveApiKey,
   shouldInheritRunBrain,
@@ -69,6 +74,52 @@ describe("per-teammate brains helpers", () => {
         { provider: "openrouter" },
       ]),
       ["openrouter", "anthropic"],
+    );
+  });
+
+  it("shares one brain for local Ollama only", () => {
+    assert.equal(shouldShareBrainAcrossRoster("ollama", "local"), true);
+    assert.equal(allowsPerAgentBrains("ollama", "local"), false);
+
+    assert.equal(shouldShareBrainAcrossRoster("ollama", "cloud"), false);
+    assert.equal(allowsPerAgentBrains("ollama", "cloud"), true);
+
+    assert.equal(shouldShareBrainAcrossRoster("openrouter", "local"), false);
+    assert.equal(allowsPerAgentBrains("anthropic", null), true);
+  });
+
+  it("forces Ollama onto the whole team when seats still say OpenRouter", () => {
+    assert.equal(
+      shouldForceOllamaTeamBrain({
+        startProvider: "ollama",
+        ollamaMode: "cloud",
+        rosterProviders: ["openrouter", "openrouter"],
+      }),
+      true,
+    );
+    assert.equal(
+      shouldForceOllamaTeamBrain({
+        startProvider: "ollama",
+        ollamaMode: "local",
+        rosterProviders: ["openrouter"],
+      }),
+      true,
+    );
+    assert.equal(
+      shouldForceOllamaTeamBrain({
+        startProvider: "ollama",
+        ollamaMode: "cloud",
+        rosterProviders: ["ollama", "mock"],
+      }),
+      false,
+    );
+    assert.equal(
+      shouldForceOllamaTeamBrain({
+        startProvider: "openrouter",
+        ollamaMode: "local",
+        rosterProviders: ["openrouter"],
+      }),
+      false,
     );
   });
 });

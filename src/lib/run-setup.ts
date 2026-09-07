@@ -1,7 +1,12 @@
 import type { ProviderType } from "@prisma/client";
 import { decrypt } from "./crypto";
-import { isOllamaCloudBaseUrl } from "./ollama-endpoints";
+import {
+  isOllamaCloudBaseUrl,
+  resolveOllamaBaseUrl,
+} from "./ollama-endpoints";
+import { getOllamaEndpointMode, type OllamaEndpointMode } from "./ollama-models";
 import { findProviderCredential } from "./provider-credentials";
+import { shouldForceOllamaTeamBrain } from "./agent-brains";
 
 export {
   isOllamaCloudBaseUrl,
@@ -11,6 +16,11 @@ export {
   OLLAMA_LOCAL_BASE_URL,
 } from "./ollama-endpoints";
 export { findProviderCredential, setDefaultProviderCredential } from "./provider-credentials";
+export {
+  allowsPerAgentBrains,
+  shouldForceOllamaTeamBrain,
+  shouldShareBrainAcrossRoster,
+} from "./agent-brains";
 
 const ENV_ALIASES: Record<ProviderType, string[]> = {
   mock: [],
@@ -169,21 +179,33 @@ export function uniqueRosterProviders(
   return [...new Set(agents.map((a) => a.provider))];
 }
 
+/** Active Ollama endpoint mode for this workspace (credential / env / key heuristic). */
+export async function getWorkspaceOllamaMode(
+  workspaceId: string,
+): Promise<OllamaEndpointMode | null> {
+  const { prisma } = await import("./db");
+  const cred = await findProviderCredential(prisma, workspaceId, "ollama");
+  const { key } = resolveApiKey("ollama", cred);
+  const baseUrl = resolveOllamaBaseUrl(cred?.baseUrl, Boolean(key));
+  return getOllamaEndpointMode(baseUrl);
+}
+
 /**
- * Apply the run-level default only to unset (mock) seats.
- * Does not overwrite teammates who already have a provider/model.
- * Call only after credentials for the default (if needed) and the roster are validated.
+ * Apply the run-level brain to agents.
+ * - default: only unset (mock) seats — preserves per-teammate cloud brains
+ * - forceAll: every seat (local Ollama shared-brain mode)
  */
 export async function configureAgentsForRun(
   workspaceId: string,
   provider: ProviderType,
   model?: string,
+  opts?: { forceAll?: boolean },
 ) {
   const { prisma } = await import("./db");
   const resolvedModel = model?.trim() || getDefaultModel(provider);
 
   await prisma.agent.updateMany({
-    where: { workspaceId, provider: "mock" },
+    where: opts?.forceAll ? { workspaceId } : { workspaceId, provider: "mock" },
     data: { provider, model: resolvedModel },
   });
 
@@ -223,7 +245,10 @@ export async function assertRosterProvidersReady(
 }
 
 /**
- * Validate default + roster keys, then fill mock seats only.
+ * Validate keys, then apply brains for Start/resume.
+ * - Local Ollama: one choice flattens the whole roster.
+ * - Start with Ollama while seats still say OpenRouter/etc.: flatten to Ollama (CEO pick wins).
+ * - Cloud multi-provider: only fill mock seats; keep per-teammate overrides.
  * Never mutates agents when validation fails.
  */
 export async function prepareWorkspaceBrainsForRun(
@@ -235,9 +260,31 @@ export async function prepareWorkspaceBrainsForRun(
   | { ok: false; error: string }
 > {
   const { prisma } = await import("./db");
-  const mockCount = await prisma.agent.count({
-    where: { workspaceId, provider: "mock" },
+  const ollamaMode = await getWorkspaceOllamaMode(workspaceId);
+  const roster = await prisma.agent.findMany({
+    where: { workspaceId },
+    select: { provider: true },
   });
+  const rosterProviders = roster.map((a) => a.provider);
+
+  if (shouldForceOllamaTeamBrain({ startProvider: provider, ollamaMode, rosterProviders })) {
+    const check = await workspaceHasProvider(workspaceId, "ollama");
+    if (!check.ready) {
+      return {
+        ok: false,
+        error:
+          ollamaMode === "local"
+            ? "Local Ollama is not ready. Start the Ollama app on this machine, or switch to Use cloud under Your API keys."
+            : "Ollama is not ready. Under Your API keys, click Use local (app on this computer) or Use cloud and save a key, then try again.",
+      };
+    }
+    const llm = await configureAgentsForRun(workspaceId, provider, model, {
+      forceAll: true,
+    });
+    return { ok: true, ...llm };
+  }
+
+  const mockCount = rosterProviders.filter((p) => p === "mock").length;
 
   if (mockCount > 0 && provider !== "mock") {
     const check = await workspaceHasProvider(workspaceId, provider);
@@ -249,8 +296,8 @@ export async function prepareWorkspaceBrainsForRun(
     }
   }
 
-  const roster = await assertRosterProvidersReady(workspaceId);
-  if (!roster.ok) return roster;
+  const ready = await assertRosterProvidersReady(workspaceId);
+  if (!ready.ok) return ready;
 
   const llm = await configureAgentsForRun(workspaceId, provider, model);
   return { ok: true, ...llm };
