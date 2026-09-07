@@ -2,10 +2,14 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   councilSystemPrompt,
+  dispatcherSystemPrompt,
   engineerSystemPrompt,
   plannerSystemPrompt,
+  qaFixSystemPrompt,
   synthesizerSystemPrompt,
+  workerSystemPrompt,
 } from "./prompts";
+import { DEFAULT_TOKEN_BUDGET } from "./workflow";
 
 const SHIP_MARKERS = ["addEventListener", 'type="module"', "javascript:void(0)"];
 
@@ -37,5 +41,81 @@ describe("stage-slim system prompts", () => {
   it("still tells synth/planner that v1 is static HTML/CSS/JS", () => {
     assert.match(synthesizerSystemPrompt("Avery"), /static HTML\/CSS\/JS/);
     assert.match(plannerSystemPrompt("Avery", "Workspace AI"), /static HTML\/CSS\/JS/);
+  });
+
+  it("tells dispatcher not to duplicate engineer when senior covers", () => {
+    const prompt = dispatcherSystemPrompt("Avery");
+    assert.match(prompt, /Respect the CEO's roster/);
+    assert.match(prompt, /do NOT request frontend_engineer/);
+  });
+
+  it("uses engineer ship prompt when senior implements", () => {
+    const prompt = workerSystemPrompt(
+      "Sam",
+      "Senior Developer",
+      "Architecture",
+      "tech_architect",
+      "Implement product work from the plan",
+    );
+    assert.match(prompt, /addEventListener/);
+    assert.doesNotMatch(prompt, /surgical QA fix/);
+  });
+
+  it("uses surgical follow-up prompt for Apply requested changes", () => {
+    const prompt = workerSystemPrompt(
+      "Sam",
+      "Senior Developer",
+      "Architecture",
+      "tech_architect",
+      "Apply requested changes",
+    );
+    assert.match(prompt, /NOT a redesign/i);
+    assert.match(prompt, /ONLY what they asked/);
+  });
+
+  it("uses surgical qa-fix prompt for Fix QA punch list", () => {
+    const viaWorker = workerSystemPrompt(
+      "Sam",
+      "Senior Developer",
+      "Architecture",
+      "tech_architect",
+      "Fix QA punch list (round 1)",
+    );
+    const direct = qaFixSystemPrompt("Sam", "Senior Developer");
+    assert.match(viaWorker, /surgical QA fix/);
+    assert.match(viaWorker, /Do NOT re-emit unchanged files/);
+    assert.match(direct, /Do NOT rebuild the whole app/);
+  });
+
+  it("keeps council-style worker prompt for senior review tasks", () => {
+    const prompt = workerSystemPrompt(
+      "Sam",
+      "Senior Developer",
+      "Architecture",
+      "tech_architect",
+      "Review published plan and delegate",
+    );
+    assert.doesNotMatch(prompt, /addEventListener/);
+  });
+
+  it("mentions Preview and ZIP working controls in ship bar", () => {
+    assert.match(engineerSystemPrompt("Ada", "Engineer", "Build"), /Preview and after ZIP/);
+  });
+
+  it("QA prompt requires cross-file evidence and bans false localStorage FAILs", async () => {
+    const { qaSystemPrompt } = await import("./prompts");
+    const prompt = qaSystemPrompt("Taylor", "QA Engineer", "Review shipped files");
+    assert.match(prompt, /Search HTML, CSS, and JS/);
+    assert.match(prompt, /not “not evidenced in app\.js”/);
+    assert.match(prompt, /Do NOT FAIL for “overwrite instead of append”/);
+    assert.match(prompt, /Theme\/aesthetic gaps/);
+    assert.match(prompt, /Prefer PASS with nits/);
+    assert.doesNotMatch(prompt, /localStorage that overwrites a requested collection instead of appending/);
+  });
+});
+
+describe("token budget safeguard", () => {
+  it("hard gate aliases DEFAULT_TOKEN_BUDGET at 256k", () => {
+    assert.equal(DEFAULT_TOKEN_BUDGET, 256_000);
   });
 });

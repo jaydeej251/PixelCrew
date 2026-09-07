@@ -46,7 +46,7 @@ export function DeliverableActionSheet({
   const title = isFollowUp ? "Request changes" : "Restart with a new brief";
   const submitLabel = isFollowUp ? "Start changes" : "Start redesign";
   const placeholder = isFollowUp
-    ? "What should change? e.g. darker theme, add export…"
+    ? "What should change? e.g. fix inventory drawer — keep everything else the same…"
     : "Rewrite what you want to build…";
 
   useEffect(() => {
@@ -100,7 +100,9 @@ export function DeliverableActionSheet({
               {title}
             </h2>
             <p className="mt-1 text-[13px] leading-relaxed text-zinc-400">
-              Your current app stays available until you start.
+              {isFollowUp
+                ? "Your current app stays until you start. Start opens a new chat that patches only what you ask (copies your current files) and uses one monthly run."
+                : "Your current app stays until you start. Redesign opens a new chat and uses one monthly run."}
             </p>
           </div>
           <button

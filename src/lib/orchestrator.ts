@@ -6,7 +6,6 @@ import { evalStayInRole } from "./evals";
 import {
   buildWorkflowGraph,
   WORKFLOW_STAGES,
-  DEFAULT_TOKEN_BUDGET,
   DEFAULT_MAX_CONCURRENT_LLM,
   DISPATCH_TITLE,
   COUNCIL_PRODUCT_TITLE,
@@ -22,6 +21,13 @@ import {
   pickPlanTask,
   type WorkflowStage,
 } from "./workflow";
+import {
+  decideTokenSpendGate,
+  isTokenSpendGateError,
+  TokenSpendGateError,
+  TOKEN_SOFT_GATE_TITLE,
+  type TokenSpendGateKind,
+} from "./token-spend-gate";
 import {
   looksLikeHandoffOrRefusal,
   looksTruncated,
@@ -40,7 +46,14 @@ import {
   parseFileFences,
   scaffoldGaps,
 } from "./project-files";
-import { evalShippedProject, formatShipReport } from "./ship-quality";
+import {
+  FOLLOW_UP_IMPLEMENT_TITLE,
+  isFollowUpGoal,
+  isFollowUpImplementTitle,
+  parseFollowUpGoal,
+  surgicalFollowUpPlan,
+} from "./follow-up-goal";
+import { evalShippedProject, formatShipReport, javascriptSyntaxError } from "./ship-quality";
 import { evalPlanQuality, formatPlanReport } from "./plan-quality";
 import {
   parsePlanDecisions,
@@ -50,7 +63,9 @@ import {
 import {
   engineeringAssignment,
   ENGINEER_POSITIONS,
-  engineersOnTeam,
+  buildersOnTeam,
+  filterAutoHireRoles,
+  isSoloSeniorBuild,
   pickOne,
   qaOnTeam,
   REVIEWER_POSITIONS,
@@ -69,14 +84,20 @@ import {
 } from "./execution-runtime";
 import {
   INITIAL_QA_TITLE,
-  QA_MAX_REWORK_ROUNDS,
+  QA_HONEST_RECHECK_TITLE,
   countQaReworkRounds,
+  hasPendingHonestQaRecheck,
   isQaFixTitle,
   isQaReviewTitle,
+  isQaReworkExhaustedMessage,
+  markHonestQaRecheckConsumed,
   nextQaReworkRound,
   parseQaVerdict,
   qaFixTitle,
   qaRecheckTitle,
+  qaReworkExhaustedMessage,
+  qaReworkRoundLimit,
+  QA_REWORK_EXTENDED_TITLE,
 } from "./qa-verdict";
 
 type EmitFn = (type: string, payload: AgentEventPayload) => Promise<void>;
@@ -182,6 +203,47 @@ function summarizeOutput(output: string): string {
   return `Files emitted:\n${listing}\n\n${bodies}`.slice(0, 7_000);
 }
 
+/** Current shipped code for surgical QA fixes and honest QA review. */
+async function loadShippedCodeSnapshot(runId: string): Promise<string> {
+  const code = await prisma.artifact.findMany({
+    where: { runId, type: "code", filePath: { not: null } },
+    select: { filePath: true, content: true },
+    orderBy: { filePath: "asc" },
+  });
+  if (code.length === 0) return "";
+
+  // Prefer HTML/CSS/JS product files first so QA sees markup before large READMEs.
+  const rank = (path: string) => {
+    if (/\.html?$/i.test(path)) return 0;
+    if (/\.css$/i.test(path)) return 1;
+    if (/\.jsx?$/i.test(path) || /\.tsx?$/i.test(path)) return 2;
+    return 3;
+  };
+  const sorted = [...code].sort(
+    (a, b) => rank(a.filePath!) - rank(b.filePath!) || a.filePath!.localeCompare(b.filePath!),
+  );
+
+  const parts: string[] = [];
+  let used = 0;
+  // Budget must fit a full static app (HTML+CSS+JS). An 8k/file cut mid-init() made QA
+  // FAIL shops/listeners that existed past the truncation — false punch lists forever.
+  const TOTAL_BUDGET = 48_000;
+  for (const artifact of sorted) {
+    const path = artifact.filePath!;
+    const remaining = TOTAL_BUDGET - used;
+    if (remaining < 200) break;
+    const raw = artifact.content;
+    const content =
+      raw.length > remaining
+        ? `${raw.slice(0, remaining)}\n/* …truncated for prompt — prefer smaller files */`
+        : raw;
+    const block = `\`\`\`file:${path}\n${content}\n\`\`\``;
+    parts.push(block);
+    used += block.length;
+  }
+  return parts.join("\n\n");
+}
+
 function planningKind(title: string): "dispatch" | "council" | "synth" | "legacy" | null {
   if (title === DISPATCH_TITLE) return "dispatch";
   if (
@@ -239,9 +301,16 @@ export async function executeAgentTask(
   const isEngineer = ENGINEER_POSITIONS.includes(
     agent.position as (typeof ENGINEER_POSITIONS)[number],
   );
+  const isQaFixTask = isQaFixTitle(task.title);
+  const isFollowUpTask = isFollowUpImplementTitle(task.title);
+  const isSurgicalPatch = isQaFixTask || isFollowUpTask;
+  const seniorBuilding =
+    agent.position === "tech_architect" &&
+    (/^Implement\b/i.test(task.title) || isSurgicalPatch);
   if (kind === "dispatch" || kind === "synth" || kind === "legacy") config.maxTokens = 2200;
   else if (kind === "council") config.maxTokens = 1200;
-  else if (isEngineer) config.maxTokens = 4000;
+  else if (isSurgicalPatch && (isEngineer || seniorBuilding)) config.maxTokens = 3500;
+  else if (isEngineer || seniorBuilding) config.maxTokens = 5000;
   else if (agent.position === "qa_engineer") config.maxTokens = 2200;
   else config.maxTokens = 1500;
 
@@ -263,7 +332,9 @@ export async function executeAgentTask(
   const provider = createProvider(config, agent.position, task.title, ceoGoal);
   const prior = await loadPriorContext(runId, task);
   let shipContext = "";
-  if (agent.position === "qa_engineer") {
+  const isQaReview =
+    agent.position === "qa_engineer" && isQaReviewTitle(task.title);
+  if (isQaReview) {
     const codeFiles = await prisma.artifact.findMany({
       where: { runId, type: "code" },
       select: { filePath: true, content: true },
@@ -277,6 +348,10 @@ export async function executeAgentTask(
       ),
     );
   }
+
+  // Fix agents, follow-up patches, and QA reviewers need real artifacts.
+  const shippedSnapshot =
+    isSurgicalPatch || isQaReview ? await loadShippedCodeSnapshot(runId) : "";
 
   const systemPrompt =
     kind === "dispatch"
@@ -292,12 +367,16 @@ export async function executeAgentTask(
                 agent.positionLabel,
                 agent.jobBoundary,
                 agent.position,
+                task.title,
               );
 
   const goalAlreadyInDescription =
     Boolean(task.description) &&
     ceoGoal.length > 0 &&
     task.description!.includes(ceoGoal);
+  const ceoBlock = goalAlreadyInDescription
+    ? ""
+    : `CEO source of truth (acceptance criteria):\n${ceoGoal}`;
   const userPrompt = kind
     ? [
         task.description ?? "",
@@ -309,14 +388,52 @@ export async function executeAgentTask(
       ]
         .filter(Boolean)
         .join("\n\n")
-    : [
-        `CEO source of truth (acceptance criteria):\n${ceoGoal}`,
-        prior ? `CEO context and upstream work:\n${prior}` : "",
-        `Your task: ${task.title}\n${task.description ?? ""}`,
-        shipContext,
-      ]
-        .filter(Boolean)
-        .join("\n\n");
+    : isSurgicalPatch
+      ? [
+          isFollowUpTask
+            ? (() => {
+                const { baseGoal, changes } = parseFollowUpGoal(ceoGoal);
+                return [
+                  `Original product (keep this — do not redesign):\n${baseGoal}`,
+                  `Changes I want (ONLY these):\n${changes || ceoGoal}`,
+                ].join("\n\n");
+              })()
+            : ceoBlock,
+          prior ? `QA punch list / upstream:\n${prior}` : "",
+          `Your task: ${task.title}\n${goalAlreadyInDescription ? "" : task.description ?? ""}`.trim(),
+          shippedSnapshot
+            ? `CURRENT shipped files (edit these — emit only paths you change):\n${shippedSnapshot}`
+            : "No shipped files found yet — emit only the minimum files needed for the requested change.",
+          isFollowUpTask
+            ? "Surgical Request-changes patch only: emit changed files as complete file fences. Do not redesign theme, layout, or unrelated features."
+            : "Surgical fix only: emit changed files as complete file fences. Do not rewrite the whole app.",
+        ]
+          .filter(Boolean)
+          .join("\n\n")
+      : isQaReview
+        ? [
+            ceoBlock,
+            `Your task: ${task.title}`,
+            goalAlreadyInDescription ? "" : task.description ?? "",
+            shipContext ? `Deterministic ship check:\n${shipContext}` : "",
+            shippedSnapshot
+              ? `CURRENT shipped files (authoritative — review these, not truncated fix logs):\n${shippedSnapshot}`
+              : "No shipped code artifacts found yet.",
+            prior
+              ? `Recent engineer output (secondary; may be incomplete patches):\n${prior}`
+              : "",
+            "Judge the CURRENT shipped files above. Features may be split across HTML/CSS/JS. Do not FAIL items that are already present.",
+          ]
+            .filter(Boolean)
+            .join("\n\n")
+      : [
+          ceoBlock,
+          prior ? `CEO context and upstream work:\n${prior}` : "",
+          `Your task: ${task.title}`,
+          goalAlreadyInDescription ? "" : task.description ?? "",
+        ]
+          .filter(Boolean)
+          .join("\n\n");
 
   await emit("TASK_STARTED", {
     agentId: agent.id,
@@ -405,10 +522,13 @@ export async function executeAgentTask(
   }
 
   if (
-    (kind || isEngineer) &&
+    (kind || isEngineer || seniorBuilding) &&
     (result.finishReason === "length" ||
       looksTruncated(fullOutput) ||
-      hasUnclosedFence(fullOutput))
+      hasUnclosedFence(fullOutput) ||
+      parseFileFences(fullOutput).some(
+        (f) => /\.m?js$/i.test(f.path) && javascriptSyntaxError(f.content),
+      ))
   ) {
     result = await provider.stream(
       [
@@ -418,7 +538,7 @@ export async function executeAgentTask(
         {
           role: "user",
           content:
-            "You were cut off. Continue exactly from the last word. Do not restart. Finish every remaining section.",
+            "You were cut off or left incomplete JavaScript. Continue exactly from the last word. Finish every remaining section and close every file fence. Every .js file must be complete and parseable.",
         },
       ],
       onChunk,
@@ -426,7 +546,9 @@ export async function executeAgentTask(
     await flushThinking(true);
   }
 
-  if (isEngineer) {
+  // First Implement may rewrite for ship bar. QA-fix / Request-changes are surgical —
+  // do not force a second full-app rewrite. Exception: invalid/truncated JS must be repaired.
+  if ((isEngineer || seniorBuilding) && !isSurgicalPatch) {
     const firstFiles = parseFileFences(fullOutput);
     const ship = evalShippedProject(firstFiles, { role: agent.position, ceoGoal });
     if (!ship.passed) {
@@ -440,7 +562,7 @@ export async function executeAgentTask(
           { role: "assistant", content: previous },
           {
             role: "user",
-            content: `${formatShipReport(ship)}\n\nRewrite the files and fix every FAIL. Emit complete \`\`\`file:path fences. Build the CEO's product (not a PixelCrew portfolio). No placeholder copy, no missing image src, no secrets. Static HTML/CSS/JS only.`,
+            content: `${formatShipReport(ship)}\n\nDo NOT rebuild the whole app. Emit ONLY the files that fail the checks above as complete \`\`\`file:path fences. Keep working files unchanged. Static HTML/CSS/JS only. Every .js file must be complete and parseable.`,
           },
         ],
         onChunk,
@@ -455,6 +577,51 @@ export async function executeAgentTask(
       if (!rewritten.passed) {
         throw new RunAbortedError(
           `Engineering output still failed acceptance after rewrite.\n${formatShipReport(rewritten)}`,
+        );
+      }
+    }
+  } else if ((isEngineer || seniorBuilding) && isSurgicalPatch) {
+    const fixFiles = parseFileFences(fullOutput);
+    const jsFails = fixFiles.filter(
+      (f) => /\.m?js$/i.test(f.path) && javascriptSyntaxError(f.content),
+    );
+    if (jsFails.length > 0) {
+      const detail = jsFails
+        .map((f) => `${f.path}: ${javascriptSyntaxError(f.content)}`)
+        .join("; ");
+      const previous = fullOutput;
+      fullOutput = "";
+      thinkBuf = "";
+      result = await provider.stream(
+        [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+          { role: "assistant", content: previous },
+          {
+            role: "user",
+            content:
+              `Your emitted JavaScript does not parse (${detail}). ` +
+              `That causes Uncaught SyntaxError in Preview and dead forms/buttons. ` +
+              `Re-emit ONLY the complete, parseable .js file(s) as full \`\`\`file:path fences. ` +
+              `Do not truncate mid-line or mid-template-string.`,
+          },
+        ],
+        onChunk,
+      );
+      fullOutput = fullOutput || result.content;
+      await flushThinking(true);
+      if (parseFileFences(fullOutput).length === 0) fullOutput = previous;
+      const repaired = parseFileFences(fullOutput).filter((f) =>
+        jsFails.some((j) => j.path === f.path),
+      );
+      const stillBad = repaired.filter(
+        (f) => /\.m?js$/i.test(f.path) && javascriptSyntaxError(f.content),
+      );
+      if (stillBad.length > 0) {
+        console.warn(
+          `[PixelCrew] QA-fix still emitted invalid JS (${stillBad
+            .map((f) => f.path)
+            .join(", ")}); broken scripts will not be persisted.`,
         );
       }
     }
@@ -573,8 +740,26 @@ export async function executeAgentTask(
 
   const artifactType = mapPositionToArtifact(agent.position);
   const files = parseFileFences(fullOutput);
-  if (files.length > 0) {
-    await persistProjectFiles(runId, files);
+  // Only Implement / Request-changes / QA-fix may ship code. Planning council often
+  // dumps fences that look like "coding" — persisting them causes a full rewrite later.
+  const mayShipCode =
+    isSurgicalPatch ||
+    /^Implement\b/i.test(task.title) ||
+    isFollowUpImplementTitle(task.title);
+  if (files.length > 0 && mayShipCode) {
+    // Never overwrite a working app.js with a truncated emit (Preview SyntaxError + dead UI).
+    const persistable = files.filter((file) => {
+      if (!/\.m?js$/i.test(file.path)) return true;
+      const err = javascriptSyntaxError(file.content);
+      if (!err) return true;
+      console.warn(
+        `[PixelCrew] Refusing to persist invalid ${file.path}: ${err}`,
+      );
+      return false;
+    });
+    if (persistable.length > 0) {
+      await persistProjectFiles(runId, persistable);
+    }
     const notes = leftoverProse(fullOutput, files);
     if (notes.length > 40) {
       await prisma.artifact.create({
@@ -584,6 +769,21 @@ export async function executeAgentTask(
           title: `${agent.positionLabel}: notes`,
           content: notes,
           filePath: `${agent.position}/${task.id}-notes.md`,
+        },
+      });
+    }
+  } else if (files.length > 0 && !mayShipCode) {
+    console.warn(
+      `[PixelCrew] Ignoring ${files.length} file fence(s) from non-ship task “${task.title}” (planning/review — code belongs in Implement).`,
+    );
+    if (artifactType) {
+      await prisma.artifact.create({
+        data: {
+          runId,
+          type: artifactType,
+          title: `${agent.positionLabel}: ${task.title}`,
+          content: fullOutput,
+          filePath: `${agent.position}/${task.id}.md`,
         },
       });
     }
@@ -714,7 +914,11 @@ async function staffRoles(
   provider: Agent["provider"],
   model: string,
 ) {
-  const unique = [...new Set(needed)];
+  const existing = await prisma.agent.findMany({
+    where: { workspaceId },
+    select: { position: true },
+  });
+  const unique = filterAutoHireRoles(existing, needed);
   for (const position of unique) {
     if (!isPositionKey(position)) continue;
     const { agent, created } = await ensureRole({
@@ -740,11 +944,14 @@ async function staffRoles(
 async function seedDispatchTask(runId: string, ceoGoal: string) {
   const exists = await prisma.task.findFirst({ where: { runId, title: DISPATCH_TITLE } });
   if (exists) return exists;
+  const followUp = isFollowUpGoal(ceoGoal);
   const task = await prisma.task.create({
     data: {
       runId,
       title: DISPATCH_TITLE,
-      description: `CEO goal:\n${ceoGoal}\n\nStaff Product, Senior Developer, and UI/UX. Write a brief the CEO can understand.`,
+      description: followUp
+        ? `CEO Request-changes (surgical patch — do NOT redesign):\n${ceoGoal}\n\nStaff Product, Senior Developer, and UI/UX briefly. The plan must keep the existing app and only apply "Changes I want".`
+        : `CEO goal:\n${ceoGoal}\n\nStaff Product, Senior Developer, and UI/UX. Write a brief the CEO can understand.`,
       position: DISPATCHER_POSITION,
       priority: 100,
     },
@@ -866,7 +1073,11 @@ export async function publishAndDelegate(runId: string) {
   if (!planText.trim()) {
     throw new Error("No combined plan to publish");
   }
-  const publishQuality = evalPlanQuality(planText, { ceoGoal: run.ceoGoal });
+  const publishQuality = evalPlanQuality(planText, {
+    ceoGoal: isFollowUpGoal(run.ceoGoal)
+      ? parseFollowUpGoal(run.ceoGoal).baseGoal || run.ceoGoal
+      : run.ceoGoal,
+  });
   if (!publishQuality.passed) {
     throw new Error(
       `This plan no longer matches the CEO goal and cannot be published.\n${formatPlanReport(publishQuality)}`,
@@ -874,9 +1085,9 @@ export async function publishAndDelegate(runId: string) {
   }
   let agents = run.workspace.agents;
   const sample = agents[0];
-  const reviewer = pickOne(agents, REVIEWER_POSITIONS);
   let assignment = engineeringAssignment(agents);
 
+  // Only auto-hire a generalist engineer when nobody can build (no senior, no eng seats).
   if (assignment.mode === "none") {
     await ensureRole({
       workspaceId: run.workspaceId,
@@ -900,12 +1111,23 @@ export async function publishAndDelegate(runId: string) {
     },
   });
 
+  const capacityNote = isSoloSeniorBuild(assignment)
+    ? "One engineer is building (Senior Developer — not parallel FE/BE)."
+    : assignment.mode === "split"
+      ? "Frontend and backend seats will build in parallel (capped)."
+      : `Engineering capacity: ${assignment.positions.join(", ") || "none"}.`;
+
+  const followUp = isFollowUpGoal(run.ceoGoal);
+  const { changes: followUpChanges } = parseFollowUpGoal(run.ceoGoal);
+  // Request-changes: skip Senior "review" LLM — go straight to surgical Implement.
+  const reviewer = followUp ? null : pickOne(agents, REVIEWER_POSITIONS);
+
   const reviewTask = reviewer
     ? await prisma.task.create({
         data: {
           runId,
           title: "Review published plan and delegate",
-          description: `The CEO goal is the source of truth:\n${run.ceoGoal}\n\nThe CEO published this plan. Review it without changing the product. Engineering capacity: ${assignment.positions.join(", ") || "none"}.\n\nPlan:\n${planText.slice(0, 4000)}`,
+          description: `The CEO goal is the source of truth:\n${run.ceoGoal}\n\nThe CEO published this plan. Review it without changing the product. ${capacityNote}\nDelegate clearly — do NOT write production HTML/CSS/JS here (no \`\`\`file: fences). Implement owns the real code after this review.\n\nPlan:\n${planText.slice(0, 4000)}`,
           position: reviewer.position,
           priority: 90,
           dependsOnIds: planTask ? [planTask.id] : [],
@@ -915,6 +1137,12 @@ export async function publishAndDelegate(runId: string) {
 
   const dependsOn = reviewTask ? [reviewTask.id] : planTask ? [planTask.id] : [];
   const buildIds: string[] = [];
+  const surgicalDesc =
+    `CEO Request-changes (surgical):\n${followUpChanges || run.ceoGoal}\n\n` +
+    `CURRENT app files are already on this run. Apply ONLY the requested change. ` +
+    `Emit ONLY changed files as complete \`\`\`file:path fences. ` +
+    `Do NOT redesign theme, layout, copy, or unrelated features. Keep everything else identical.\n` +
+    STATIC_SHIP_BAR;
 
   if (assignment.mode === "none") {
     await prisma.task.create({
@@ -928,6 +1156,20 @@ export async function publishAndDelegate(runId: string) {
         status: "blocked",
       },
     });
+  } else if (followUp) {
+    // Request changes: one surgical patch owner — never dual FE/BE full rebuilds.
+    const pos = buildersOnTeam(agents)[0]?.position ?? assignment.soloPosition ?? "engineer";
+    const work = await prisma.task.create({
+      data: {
+        runId,
+        title: FOLLOW_UP_IMPLEMENT_TITLE,
+        description: surgicalDesc,
+        position: pos,
+        priority: 80,
+        dependsOnIds: dependsOn,
+      },
+    });
+    buildIds.push(work.id);
   } else if (assignment.mode === "split") {
     const fe = await prisma.task.create({
       data: {
@@ -958,7 +1200,9 @@ export async function publishAndDelegate(runId: string) {
       data: {
         runId,
         title: "Implement product work from the plan",
-        description: `CEO source of truth:\n${run.ceoGoal}\n\nYou are the only engineering capacity (${pos}). Emit a complete runnable static app (index.html + CSS + JS) using \`\`\`file:path fences. Implement every named screen, control, state, formula, and visual constraint. Specific copy from the CEO goal, CSS/SVG visuals — no missing images, no John Doe placeholders.\n${STATIC_SHIP_BAR}`,
+        description: isSoloSeniorBuild(assignment)
+          ? `CEO source of truth:\n${run.ceoGoal}\n\nYou are the only engineering capacity (Senior Developer). One engineer is building — not parallel FE/BE. Emit a complete runnable static app (index.html + CSS + JS) using \`\`\`file:path fences. Implement every named screen, control, state, formula, and visual constraint. Specific copy from the CEO goal, CSS/SVG visuals — no missing images, no John Doe placeholders.\n${STATIC_SHIP_BAR}`
+          : `CEO source of truth:\n${run.ceoGoal}\n\nYou are the only engineering capacity (${pos}). Emit a complete runnable static app (index.html + CSS + JS) using \`\`\`file:path fences. Implement every named screen, control, state, formula, and visual constraint. Specific copy from the CEO goal, CSS/SVG visuals — no missing images, no John Doe placeholders.\n${STATIC_SHIP_BAR}`,
         position: pos,
         priority: 80,
         dependsOnIds: dependsOn,
@@ -972,8 +1216,9 @@ export async function publishAndDelegate(runId: string) {
       data: {
         runId,
         title: INITIAL_QA_TITLE,
-        description:
-          `CEO source of truth:\n${run.ceoGoal}\n\nReview the actual emitted files against every acceptance criterion in that goal. Verdict FAIL or PASS, then a punch list. Fail wrong product type/name, missing screens or controls, invented template sections, inline JS, localStorage overwrites, hidden forms, and unsafe external links. Do not invent passing results. Do not rewrite the product.`,
+        description: followUp
+          ? `CEO Request-changes to verify:\n${followUpChanges || run.ceoGoal}\n\nReview CURRENT shipped files. PASS if the requested change works. Do NOT FAIL for unrelated polish or demand a redesign. Prefer PASS with nits. Verdict FAIL or PASS, then a punch list only about the requested change.`
+          : `CEO source of truth:\n${run.ceoGoal}\n\nReview the actual emitted files against every acceptance criterion in that goal. Verdict FAIL or PASS, then a punch list. Fail wrong product type/name, missing screens or controls, invented template sections, inline JS, localStorage overwrites, hidden forms, and unsafe external links. Do not invent passing results. Do not rewrite the product.`,
         position: "qa_engineer",
         priority: 40,
         dependsOnIds: buildIds,
@@ -995,11 +1240,15 @@ type QaReworkDecision =
   | { action: "pass" }
   | { action: "none" }
   | { action: "exhausted"; message: string }
-  | { action: "rework"; round: number };
+  | { action: "rework"; round: number }
+  | { action: "recheck_only" };
 
 /**
  * After a QA stage finishes: PASS → done; FAIL → open engineer fixes + re-QA
- * (capped); exhausted FAIL → fail the run. UNKNOWN does not open a loop.
+ * (capped); Resume may first run an honest QA-only recheck (full files) so a
+ * false FAIL can become PASS without another engineer burn; exhausted FAIL →
+ * ship current files (Preview/ZIP), keep run failed so Resume can extend.
+ * UNKNOWN does not open a loop.
  */
 async function decideAndEnqueueQaRework(
   runId: string,
@@ -1026,20 +1275,61 @@ async function decideAndEnqueueQaRework(
   });
   const alreadyOpened = allTasks.some(
     (t) =>
-      isQaFixTitle(t.title) &&
-      t.dependsOnIds.includes(latest.id),
+      t.dependsOnIds.includes(latest.id) &&
+      (isQaFixTitle(t.title) || isQaReviewTitle(t.title)),
   );
   if (alreadyOpened) return { action: "none" };
 
+  const gateArts = await prisma.artifact.findMany({
+    where: { runId },
+    select: { id: true, title: true, content: true },
+  });
+  const roundLimit = qaReworkRoundLimit(gateArts);
   const completedRounds = countQaReworkRounds(allTasks);
-  if (completedRounds >= QA_MAX_REWORK_ROUNDS) {
+  if (completedRounds >= roundLimit) {
     return {
       action: "exhausted",
-      message: `QA still FAIL after ${QA_MAX_REWORK_ROUNDS} fix rounds. Run did not complete.`,
+      message: qaReworkExhaustedMessage(roundLimit),
     };
   }
 
-  const engineers = engineersOnTeam(agents);
+  // After Resume extension: re-QA with full shipped files before spending another fix round.
+  if (hasPendingHonestQaRecheck(gateArts)) {
+    const pending = gateArts.find(
+      (a) =>
+        a.title === QA_REWORK_EXTENDED_TITLE &&
+        hasPendingHonestQaRecheck([a]),
+    );
+    if (pending) {
+      await prisma.artifact.update({
+        where: { id: pending.id },
+        data: { content: markHonestQaRecheckConsumed(pending.content) },
+      });
+    }
+    await prisma.task.create({
+      data: {
+        runId,
+        title: QA_HONEST_RECHECK_TITLE,
+        description: `CEO source of truth:\n${ceoGoal}\n\nHonest re-audit after Resume. Review the CURRENT shipped HTML/CSS/JS files (authoritative). Features may be split across files. Prefer PASS with nits when core Preview flows work. Do not FAIL for listeners that exist past a prior truncated view. Verdict FAIL or PASS, then a punch list with real evidence.`,
+        position: "qa_engineer",
+        priority: 40,
+        dependsOnIds: [latest.id],
+      },
+    });
+    const tasks = await prisma.task.findMany({ where: { runId } });
+    await prisma.workflow.upsert({
+      where: { runId },
+      create: { runId, graph: buildWorkflowGraph(tasks) },
+      update: { graph: buildWorkflowGraph(tasks) },
+    });
+    await emit("TASK_STARTED", {
+      message: "Resume — honest QA recheck with full shipped files (no engineer burn yet)",
+      taskTitle: QA_HONEST_RECHECK_TITLE,
+    });
+    return { action: "recheck_only" };
+  }
+
+  const engineers = buildersOnTeam(agents);
   if (engineers.length === 0) {
     return {
       action: "exhausted",
@@ -1051,31 +1341,27 @@ async function decideAndEnqueueQaRework(
   const punch =
     punchList.trim() ||
     "(QA did not list punch items — re-check the CEO goal against the shipped files and fix every gap.)";
-  const fixPositions = [...new Set(engineers.map((e) => e.position))];
-  const fixIds: string[] = [];
-
-  for (const position of fixPositions) {
-    const fix = await prisma.task.create({
-      data: {
-        runId,
-        title: qaFixTitle(round),
-        description: `CEO source of truth:\n${ceoGoal}\n\nQA Verdict: FAIL (round ${round}). Fix every blocker/major on this punch list by rewriting the affected files with \`\`\`file:path fences. Do not invent a new product.\n\nPunch list:\n${punch}`,
-        position,
-        priority: 85,
-        dependsOnIds: [latest.id],
-      },
-    });
-    fixIds.push(fix.id);
-  }
+  // One fix owner — FE+BE both applying the same punch list doubled tokens.
+  const fixOwner = buildersOnTeam(agents)[0]!;
+  const fix = await prisma.task.create({
+    data: {
+      runId,
+      title: qaFixTitle(round),
+      description: `CEO source of truth:\n${ceoGoal}\n\nQA Verdict: FAIL (round ${round}). Apply a surgical fix for every blocker/major on this punch list. Emit ONLY changed files as complete \`\`\`file:path fences — do not rewrite the whole app. Do not invent a new product.\n\nPunch list:\n${punch}`,
+      position: fixOwner.position,
+      priority: 85,
+      dependsOnIds: [latest.id],
+    },
+  });
 
   await prisma.task.create({
     data: {
       runId,
       title: qaRecheckTitle(round),
-      description: `CEO source of truth:\n${ceoGoal}\n\nRe-check after round ${round} fixes. Review the actual emitted files against every acceptance criterion. Verdict FAIL or PASS, then a punch list. Do not invent passing results. Do not rewrite the product.`,
+      description: `CEO source of truth:\n${ceoGoal}\n\nRe-check AFTER round ${round} surgical fixes. Verify ONLY the prior punch list below — do not re-litigate the entire product or demand a redesign. PASS if those items are cleared (nits OK). Verdict FAIL or PASS, then a short punch list.\n\nPrior punch list:\n${punch}`,
       position: "qa_engineer",
       priority: 40,
-      dependsOnIds: fixIds,
+      dependsOnIds: [fix.id],
     },
   });
 
@@ -1087,7 +1373,7 @@ async function decideAndEnqueueQaRework(
   });
 
   await emit("TASK_STARTED", {
-    message: `QA FAIL — engineering fix round ${round}/${QA_MAX_REWORK_ROUNDS}`,
+    message: `QA FAIL — engineering fix round ${round}/${roundLimit}`,
     taskTitle: qaFixTitle(round),
   });
 
@@ -1148,15 +1434,35 @@ export async function runOrchestrator(runId: string) {
   );
   agents = await loadRoster();
 
-  const published = await prisma.artifact.findFirst({
+  let published = await prisma.artifact.findFirst({
     where: { runId, title: PLAN_PUBLISHED_TITLE },
   });
 
-  if (run.tasks.length === 0) {
+  // Request-changes: skip Dispatch→Council×3→Synth→pause. Auto-publish surgical plan → Implement.
+  if (!published && isFollowUpGoal(run.ceoGoal)) {
+    const planBody = surgicalFollowUpPlan(run.ceoGoal);
+    await prisma.artifact.create({
+      data: {
+        runId,
+        type: "prd",
+        title: "Surgical follow-up plan",
+        content: planBody,
+      },
+    });
+    await emit("TASK_STARTED", {
+      message: "Request changes — skipping planning council; patching current files only",
+      taskTitle: FOLLOW_UP_IMPLEMENT_TITLE,
+    });
+    await publishAndDelegate(runId);
+    published = await prisma.artifact.findFirst({
+      where: { runId, title: PLAN_PUBLISHED_TITLE },
+    });
+  } else if (run.tasks.length === 0) {
     await seedDispatchTask(runId, run.ceoGoal);
   }
 
   let abortReason: string | null = null;
+  let tokenGateKind: TokenSpendGateKind | null = null;
 
   const executeWorkflowStage = async (stage: WorkflowStage) => {
     agents = await loadRoster();
@@ -1174,7 +1480,7 @@ export async function runOrchestrator(runId: string) {
     const stageCap = Math.min(
       cap,
       stage.maxParallel,
-      stage.id === "build" ? Math.max(1, engineersOnTeam(agents).length) : stage.maxParallel,
+      stage.id === "build" ? Math.max(1, buildersOnTeam(agents).length) : stage.maxParallel,
     );
 
     await emit("TASK_STARTED", {
@@ -1214,10 +1520,16 @@ export async function runOrchestrator(runId: string) {
           where: { id: runId },
           select: { totalTokens: true },
         });
-        if ((usage?.totalTokens ?? 0) >= DEFAULT_TOKEN_BUDGET) {
-          throw new RunAbortedError(
-            `Token budget reached (${DEFAULT_TOKEN_BUDGET}). Remaining work was not started.`,
-          );
+        const gateArts = await prisma.artifact.findMany({
+          where: { runId },
+          select: { title: true },
+        });
+        const gate = decideTokenSpendGate(usage?.totalTokens ?? 0, gateArts);
+        if (gate.action === "soft_gate") {
+          throw new TokenSpendGateError("soft", gate.tokens);
+        }
+        if (gate.action === "hard_gate") {
+          throw new TokenSpendGateError("hard", gate.tokens);
         }
         await executeAgentTask(runId, agent, task, emit, orgId, loopStartedAt);
       } catch (err) {
@@ -1229,6 +1541,44 @@ export async function runOrchestrator(runId: string) {
           await prisma.agent.update({
             where: { id: agent.id },
             data: { status: "idle" },
+          });
+          return;
+        }
+        if (isTokenSpendGateError(err)) {
+          await prisma.task.update({
+            where: { id: task.id },
+            data: { status: "queued", claimedById: null, claimedAt: null },
+          });
+          await prisma.agent.update({
+            where: { id: agent.id },
+            data: { status: "idle" },
+          });
+          tokenGateKind = err.kind;
+          abortReason = err.message;
+          if (err.kind === "soft") {
+            const existingSoft = await prisma.artifact.findFirst({
+              where: { runId, title: TOKEN_SOFT_GATE_TITLE },
+            });
+            if (!existingSoft) {
+              await prisma.artifact.create({
+                data: {
+                  runId,
+                  type: "other",
+                  title: TOKEN_SOFT_GATE_TITLE,
+                  content: JSON.stringify({
+                    tokens: err.tokens,
+                    at: new Date().toISOString(),
+                  }),
+                },
+              });
+            }
+          }
+          await emit("AGENT_BLOCKED", {
+            agentId: agent.id,
+            agentName: agent.name,
+            message: err.message,
+            tokenGate: err.kind,
+            taskTitle: task.title,
           });
           return;
         }
@@ -1271,7 +1621,26 @@ export async function runOrchestrator(runId: string) {
 
       if (inFlight.size === 0) {
         idleRounds++;
-        if (idleRounds > 8) break;
+        if (idleRounds > 8) {
+          const stuck = await prisma.task.findMany({
+            where: {
+              runId,
+              position: { in: stage.positions },
+              status: { in: ["queued", "claimed", "in_progress", "failed", "blocked"] },
+            },
+            select: { title: true, status: true, position: true },
+            take: 8,
+          });
+          const detail =
+            stuck.length > 0
+              ? stuck.map((t) => `“${t.title}” (${t.status}/${t.position})`).join("; ")
+              : "no claimable tasks";
+          abortReason =
+            `The team got stuck in ${stage.label} and stopped. ${detail}. ` +
+            `Often a dependency failed earlier — Resume retries failed work, or Fork/Restart for a clean path.`;
+          console.warn(`[PixelCrew] Stage ${stage.label} idle-stuck: ${detail}`);
+          break;
+        }
       } else {
         idleRounds = 0;
       }
@@ -1359,9 +1728,12 @@ export async function runOrchestrator(runId: string) {
         abortReason = decision.message;
         break;
       }
-      await executeWorkflowStage(buildStage);
-      if (!(await isRunLoopActive(runId, loopStartedAt))) return;
-      if (abortReason) break;
+      if (decision.action === "rework") {
+        await executeWorkflowStage(buildStage);
+        if (!(await isRunLoopActive(runId, loopStartedAt))) return;
+        if (abortReason) break;
+      }
+      // rework and recheck_only both run QA; recheck_only skips engineering.
       await executeWorkflowStage(qaStage);
       if (!(await isRunLoopActive(runId, loopStartedAt))) return;
     }
@@ -1369,12 +1741,29 @@ export async function runOrchestrator(runId: string) {
 
   if (!(await isRunLoopActive(runId, loopStartedAt))) return;
 
-  const remaining = await prisma.task.count({
+  const unfinished = await prisma.task.findMany({
     where: { runId, status: { not: "done" } },
+    select: { title: true, status: true, position: true },
+    orderBy: { createdAt: "asc" },
+    take: 12,
   });
+  const remaining = unfinished.length;
 
   if (abortReason) {
-    await emitRunEvent(runId, "RUN_CANCELLED", { message: abortReason });
+    // QA round-cap is a quality gate, not a delete. Persist scaffold so Preview/ZIP
+    // still work; keep status failed so Resume can grant more fix rounds.
+    if (isQaReworkExhaustedMessage(abortReason)) {
+      await persistScaffoldFiles(runId, run.ceoGoal);
+      await emitRunEvent(runId, "RUN_CANCELLED", {
+        message: abortReason,
+        shippedDespiteQaFail: true,
+      });
+    } else {
+      await emitRunEvent(runId, "RUN_CANCELLED", {
+        message: abortReason,
+        ...(tokenGateKind ? { tokenGate: tokenGateKind } : {}),
+      });
+    }
     await prisma.run.update({
       where: { id: runId },
       data: { status: "failed", completedAt: new Date() },
@@ -1390,6 +1779,14 @@ export async function runOrchestrator(runId: string) {
       data: { status: "completed", completedAt: new Date() },
     });
   } else {
+    const detail = unfinished
+      .map((t) => `“${t.title}” (${t.status})`)
+      .join("; ");
+    const message =
+      `The team stopped before finishing. Unfinished: ${detail}. ` +
+      `Use Resume to retry, or start a new chat / fork if the run is stuck.`;
+    console.warn(`[PixelCrew] Incomplete pipeline (${remaining} tasks): ${detail}`);
+    await emitRunEvent(runId, "RUN_CANCELLED", { message });
     await prisma.run.update({
       where: { id: runId },
       data: { status: "failed", completedAt: new Date() },

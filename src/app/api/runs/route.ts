@@ -7,6 +7,11 @@ import { runOrchestrator } from "@/lib/orchestrator";
 import { prepareWorkspaceBrainsForRun } from "@/lib/run-setup";
 import { normalizeNewRunGoal } from "@/lib/run-goal";
 import {
+  FOLLOW_UP_FROM_RUN_TITLE,
+  isFollowUpGoal,
+} from "@/lib/follow-up-goal";
+import {
+  assertRunAccess,
   assertWorkspaceAccess,
   checkPlanLimits,
   deriveRunTitle,
@@ -21,9 +26,10 @@ const createRunSchema = z
     ceoGoal: z.string().trim().min(1).max(20_000),
     provider: z.nativeEnum(ProviderType).default("mock"),
     model: z.string().trim().min(1).max(200).optional(),
+    /** Prior chat when Request changes — copy code artifacts so patches are surgical. */
+    parentRunId: z.string().min(1).optional(),
   })
   .strict();
-
 
 export async function POST(req: Request) {
   try {
@@ -43,7 +49,7 @@ export async function POST(req: Request) {
         { status: 400 },
       );
     }
-    const { workspaceId, provider, model } = parsed.data;
+    const { workspaceId, provider, model, parentRunId } = parsed.data;
     const goal = normalizeNewRunGoal(parsed.data.ceoGoal);
     if (!goal) {
       return NextResponse.json(
@@ -61,6 +67,20 @@ export async function POST(req: Request) {
 
     const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } });
     if (!workspace) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+    if (parentRunId) {
+      await assertRunAccess(parentRunId, session);
+      const parent = await prisma.run.findUnique({
+        where: { id: parentRunId },
+        select: { workspaceId: true, archivedAt: true },
+      });
+      if (!parent || parent.archivedAt || parent.workspaceId !== workspaceId) {
+        return NextResponse.json(
+          { error: "Parent chat not found in this workspace." },
+          { status: 400 },
+        );
+      }
+    }
 
     const providerType = provider;
     const brains = await prepareWorkspaceBrainsForRun(workspaceId, providerType, model);
@@ -86,6 +106,37 @@ export async function POST(req: Request) {
       },
     });
 
+    // Request changes: seed the prior app so engineers patch instead of redesigning.
+    if (parentRunId && isFollowUpGoal(goal)) {
+      const priorCode = await prisma.artifact.findMany({
+        where: { runId: parentRunId, type: "code", filePath: { not: null } },
+        select: { type: true, title: true, content: true, filePath: true },
+      });
+      if (priorCode.length > 0) {
+        await prisma.artifact.createMany({
+          data: priorCode.map((a) => ({
+            runId: run.id,
+            type: a.type,
+            title: a.title,
+            content: a.content,
+            filePath: a.filePath,
+          })),
+        });
+      }
+      await prisma.artifact.create({
+        data: {
+          runId: run.id,
+          type: "other",
+          title: FOLLOW_UP_FROM_RUN_TITLE,
+          content: JSON.stringify({
+            parentRunId,
+            copiedFiles: priorCode.length,
+            at: new Date().toISOString(),
+          }),
+        },
+      });
+    }
+
     if (process.env.INNGEST_EVENT_KEY) {
       await inngest.send({ name: "run/started", data: { runId: run.id } });
     } else {
@@ -96,6 +147,7 @@ export async function POST(req: Request) {
       runId: run.id,
       provider: brains.provider,
       model: brains.model,
+      followUpFrom: parentRunId && isFollowUpGoal(goal) ? parentRunId : undefined,
     });
   } catch (err) {
     return apiErrorResponse(err);

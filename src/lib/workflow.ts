@@ -1,7 +1,7 @@
 import {
   COUNCIL_POSITIONS,
   DISPATCHER_POSITION,
-  ENGINEER_POSITIONS,
+  BUILD_STAGE_POSITIONS,
   REVIEWER_POSITIONS,
 } from "./roster";
 
@@ -51,7 +51,7 @@ export const WORKFLOW_STAGES: WorkflowStage[] = [
   {
     id: "build",
     label: "Engineering",
-    positions: [...ENGINEER_POSITIONS],
+    positions: [...BUILD_STAGE_POSITIONS],
     maxParallel: 2,
   },
   {
@@ -78,8 +78,13 @@ export function buildWorkflowGraph(
   };
 }
 
-export const DEFAULT_TOKEN_BUDGET = 35_000;
 export const DEFAULT_MAX_CONCURRENT_LLM = 2;
+
+export {
+  TOKEN_SOFT_GATE,
+  TOKEN_HARD_GATE,
+  TOKEN_HARD_GATE as DEFAULT_TOKEN_BUDGET,
+} from "./token-spend-gate";
 
 export const DISPATCH_TITLE = "Staff the goal";
 export const COUNCIL_PRODUCT_TITLE = "Product brainstorm";

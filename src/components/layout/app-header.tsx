@@ -16,6 +16,7 @@ type AppHeaderProps = {
   runOutcome: "idle" | "running" | "paused" | "completed" | "failed";
   onCancel: () => void;
   onResume?: () => void;
+  resumeLabel?: string;
   onOpenSettings: () => void;
   onLogout: () => void;
   onSimulate?: () => void;
@@ -51,6 +52,7 @@ export function AppHeader({
   runOutcome,
   onCancel,
   onResume,
+  resumeLabel = "Resume",
   onOpenSettings,
   onLogout,
   onSimulate,
@@ -160,7 +162,7 @@ export function AppHeader({
 
           {!running && runOutcome === "failed" && onResume && (
             <Button variant="primary" type="button" className="!h-8 !px-3" onClick={onResume}>
-              Resume
+              {resumeLabel}
             </Button>
           )}
 

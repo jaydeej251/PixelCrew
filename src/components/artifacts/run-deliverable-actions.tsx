@@ -340,7 +340,7 @@ export function RunDeliverableActions({
               Open your app
             </Button>
             <p className="text-[11px] text-zinc-400">
-              Static preview + ZIP in beta.{" "}
+              Preview is the product in beta. ZIP is an optional export — not a live deploy.{" "}
               <Link href="/faq" className="text-zinc-300 underline-offset-2 hover:underline">
                 FAQ
               </Link>
@@ -397,7 +397,7 @@ export function RunDeliverableActions({
       </div>
       {runFinished && (
         <p className="px-1 text-[11px] text-zinc-500">
-          Beta: static preview + ZIP —{" "}
+          Preview first; ZIP optional —{" "}
           <Link href="/faq" className="underline-offset-2 hover:underline">
             FAQ
           </Link>

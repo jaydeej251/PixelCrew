@@ -36,6 +36,13 @@ import type { AgentStatus } from "@prisma/client";
 import { PlanReview } from "@/components/plan/plan-review";
 import { OFFICE_VIEW_KEY, type OfficeViewMode } from "@/components/office/office-layout";
 import { PLAN_PUBLISHED_TITLE } from "@/lib/workflow";
+import {
+  hasOpenSoftTokenGate,
+  TOKEN_HARD_GATE,
+  TOKEN_SOFT_GATE,
+} from "@/lib/token-spend-gate";
+import { hasPreviewableApp } from "@/lib/project-files";
+import { isQaReworkExhaustedMessage } from "@/lib/qa-verdict";
 import { streamsFromEvents, type ThoughtTask } from "@/lib/thought-process";
 import { resolveInitialRunLlm, writeRunLlmPreference } from "@/lib/run-llm-preference";
 import { OfficeEditorHud } from "@/components/office/office-editor-hud";
@@ -50,10 +57,11 @@ import {
   type OfficeLayoutSummary,
   type TileEdge,
 } from "@/lib/office-blueprint";
+import { CHANGES_I_WANT_MARKER } from "@/lib/follow-up-goal";
 
 /** Strip nested follow-up suffixes so Request changes stays on the original brief. */
 function baseGoalFromRunGoal(goal: string): string {
-  const marker = "\n\nChanges I want:\n";
+  const marker = CHANGES_I_WANT_MARKER;
   const idx = goal.indexOf(marker);
   if (idx === -1) return goal.trim();
   return goal.slice(0, idx).trim();
@@ -148,6 +156,7 @@ export function Dashboard() {
   const [runProvider, setRunProvider] = useState("mock");
   const [runModel, setRunModel] = useState("mock");
   const [runError, setRunError] = useState("");
+  const [tokenSpendGate, setTokenSpendGate] = useState<"soft" | "hard" | null>(null);
   const [awaitingPlan, setAwaitingPlan] = useState(false);
   const [runOutcome, setRunOutcome] = useState<
     "idle" | "running" | "paused" | "completed" | "failed"
@@ -304,18 +313,37 @@ export function Dashboard() {
       setAwaitingPlan(true);
       setRunOutcome("paused");
       setRunning(false);
+      setTokenSpendGate(null);
     } else if (run.status === "completed") {
       setAwaitingPlan(false);
       setRunOutcome("completed");
       setRunning(false);
+      setTokenSpendGate(null);
     } else if (run.status === "failed" || run.status === "cancelled") {
       setAwaitingPlan(false);
       setRunOutcome("failed");
       setRunning(false);
+      if (hasOpenSoftTokenGate(run.artifacts)) {
+        setTokenSpendGate("soft");
+      } else if ((run.totalTokens ?? 0) >= TOKEN_HARD_GATE) {
+        setTokenSpendGate("hard");
+      } else {
+        setTokenSpendGate(null);
+      }
+      const cancelMsg = [...mappedEvents]
+        .reverse()
+        .find(
+          (e) =>
+            e.type === "RUN_CANCELLED" && typeof e.payload?.message === "string",
+        )?.payload?.message;
+      if (typeof cancelMsg === "string" && cancelMsg.trim()) {
+        setRunError(cancelMsg);
+      }
     } else if (run.status === "running" || run.status === "pending") {
       setAwaitingPlan(false);
       setRunOutcome("running");
       setRunning(true);
+      setTokenSpendGate(null);
       subscribeToRunRef.current(run.id);
     } else {
       setAwaitingPlan(false);
@@ -456,14 +484,34 @@ export function Dashboard() {
       })),
     );
     setRunStats({ totalTokens: run.totalTokens ?? 0, estCostUsd: run.estCostUsd ?? 0 });
-    if (run.status === "completed") setRunOutcome("completed");
+    if (run.status === "completed") {
+      setRunOutcome("completed");
+      setTokenSpendGate(null);
+    }
     if (run.status === "paused") {
       setAwaitingPlan(true);
       setRunOutcome("paused");
+      setTokenSpendGate(null);
     }
     if (run.status === "failed" || run.status === "cancelled") {
       setAwaitingPlan(false);
       setRunOutcome("failed");
+      if (hasOpenSoftTokenGate(run.artifacts)) {
+        setTokenSpendGate("soft");
+      } else if ((run.totalTokens ?? 0) >= TOKEN_HARD_GATE) {
+        setTokenSpendGate("hard");
+      } else {
+        setTokenSpendGate(null);
+      }
+      const cancelMsg = [...(run.events ?? [])]
+        .reverse()
+        .find(
+          (e: { type?: string; payload?: { message?: string } }) =>
+            e.type === "RUN_CANCELLED" && typeof e.payload?.message === "string",
+        )?.payload?.message;
+      if (typeof cancelMsg === "string" && cancelMsg.trim()) {
+        setRunError(cancelMsg);
+      }
     }
   };
 
@@ -482,9 +530,11 @@ export function Dashboard() {
           floorBusyRef.current = true;
           setAwaitingPlan(true);
           setRunOutcome("paused");
+          setTokenSpendGate(null);
         } else if (event.runStatus === "completed") {
           floorBusyRef.current = false;
           setRunOutcome("completed");
+          setTokenSpendGate(null);
         } else if (event.runStatus === "failed" || event.runStatus === "cancelled") {
           floorBusyRef.current = false;
           setRunOutcome("failed");
@@ -717,7 +767,7 @@ export function Dashboard() {
     const prior = baseGoalFromRunGoal(ceoGoal);
     const goalForRun =
       deliverableAction === "follow-up"
-        ? `${prior}\n\nChanges I want:\n${draftText.trim()}`
+        ? `${prior}${CHANGES_I_WANT_MARKER}${draftText.trim()}`
         : draftText.trim();
     if (!draftText.trim()) {
       setDeliverableSheetError(
@@ -738,6 +788,7 @@ export function Dashboard() {
         ceoGoal: goalForRun,
         provider: runProvider,
         model: runModel,
+        ...(deliverableAction === "follow-up" && runId ? { parentRunId: runId } : {}),
       }),
     });
     const json = await res.json();
@@ -833,7 +884,7 @@ export function Dashboard() {
     void loadConversations();
   };
 
-  const resumeRun = async () => {
+  const resumeRun = async (confirmTokenSpend = false) => {
     if (!data || !runId) return;
     floorBusyRef.current = true;
     force3D();
@@ -841,6 +892,7 @@ export function Dashboard() {
     setAwaitingPlan(false);
     setRunOutcome("running");
     setRunError("");
+    setTokenSpendGate(null);
     setStreamByAgent({});
     setAgentStatuses((prev) => {
       const next = { ...prev };
@@ -853,6 +905,7 @@ export function Dashboard() {
       body: JSON.stringify({
         provider: runProvider,
         model: runModel,
+        ...(confirmTokenSpend ? { confirmTokenSpend: true } : {}),
       }),
     });
     const json = await res.json();
@@ -861,6 +914,7 @@ export function Dashboard() {
       setRunError(json.error ?? "Couldn’t resume. Check settings and try again.");
       setRunning(false);
       setRunOutcome("failed");
+      if (json.tokenGate === "soft") setTokenSpendGate("soft");
       return;
     }
     subscribeToRun(runId);
@@ -951,7 +1005,10 @@ export function Dashboard() {
       totalTokens={runStats.totalTokens}
       estCostUsd={runStats.estCostUsd}
       runId={runId ?? undefined}
-      runFinished={runOutcome === "completed"}
+      runFinished={
+        runOutcome === "completed" ||
+        (runOutcome === "failed" && hasPreviewableApp(artifacts, ceoGoal))
+      }
       ceoGoal={ceoGoal}
       tasks={tasks}
       events={events}
@@ -968,7 +1025,12 @@ export function Dashboard() {
         running={running}
         runOutcome={runOutcome}
         onCancel={cancelRun}
-        onResume={() => void resumeRun()}
+        onResume={
+          tokenSpendGate === "hard"
+            ? undefined
+            : () => void resumeRun(tokenSpendGate === "soft")
+        }
+        resumeLabel={tokenSpendGate === "soft" ? "Continue spending" : "Resume"}
         onOpenSettings={() => setSettingsOpen(true)}
         onLogout={logout}
         onSimulate={SHOW_DEV_TOOLS ? simulateRun : undefined}
@@ -1060,10 +1122,119 @@ export function Dashboard() {
                     <p className="line-clamp-2 text-sm text-zinc-100">{ceoGoal}</p>
                   </div>
                 )}
-                {runError && <Alert variant="error">{runError}</Alert>}
-                {runOutcome === "failed" && runId && !running && (
+                {runError && !(runOutcome === "failed" && !running) && (
+                  <Alert variant="error">{runError}</Alert>
+                )}
+                {runOutcome === "failed" && runId && !running && tokenSpendGate === "soft" && (
+                  <Alert variant="warning">
+                    <p className="font-medium text-amber-50">Token spend check</p>
+                    <p className="mt-1 text-sm text-amber-100/90">
+                      This chat has used about{" "}
+                      {runStats.totalTokens.toLocaleString() || TOKEN_SOFT_GATE.toLocaleString()}{" "}
+                      tokens on your API keys. Continue? Next hard stop is{" "}
+                      {TOKEN_HARD_GATE.toLocaleString()} tokens.
+                    </p>
+                    {hasPreviewableApp(artifacts, ceoGoal) && (
+                      <RunDeliverableActions
+                        runId={runId}
+                        artifacts={artifacts}
+                        ceoGoal={ceoGoal}
+                        runFinished
+                        variant="hud"
+                        onRequestChanges={startFollowUpChat}
+                        onRestart={startRedesignChat}
+                      />
+                    )}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="primary"
+                        className="!h-8 !px-3"
+                        onClick={() => void resumeRun(true)}
+                      >
+                        Continue spending
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="!h-8 !px-3"
+                        onClick={startRedesignChat}
+                      >
+                        New chat instead
+                      </Button>
+                    </div>
+                    <p className="mt-2 text-[11px] text-zinc-500">
+                      Continue stays on this chat and does not use another monthly run. Preview keeps
+                      what was already built.
+                    </p>
+                  </Alert>
+                )}
+                {runOutcome === "failed" && runId && !running && tokenSpendGate === "hard" && (
                   <Alert variant="error">
-                    <p>The team stopped.</p>
+                    <p className="font-medium">Token spend limit reached</p>
+                    <p className="mt-1 text-sm">
+                      This chat hit {TOKEN_HARD_GATE.toLocaleString()} tokens (used{" "}
+                      {runStats.totalTokens.toLocaleString()}). Remaining work was not started.
+                    </p>
+                    {hasPreviewableApp(artifacts, ceoGoal) && (
+                      <RunDeliverableActions
+                        runId={runId}
+                        artifacts={artifacts}
+                        ceoGoal={ceoGoal}
+                        runFinished
+                        variant="hud"
+                        onRequestChanges={startFollowUpChat}
+                        onRestart={startRedesignChat}
+                      />
+                    )}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="primary"
+                        className="!h-8 !px-3"
+                        onClick={startRedesignChat}
+                      >
+                        Start a new chat
+                      </Button>
+                    </div>
+                    <p className="mt-2 text-[11px] text-zinc-500">
+                      BYOK safeguard — similar to Claude Code budget caps. Narrow the goal or keep
+                      iterating in a fresh chat. Files already written stay available above.
+                    </p>
+                  </Alert>
+                )}
+                {runOutcome === "failed" && runId && !running && !tokenSpendGate && (
+                  <Alert
+                    variant={
+                      isQaReworkExhaustedMessage(runError) ||
+                      hasPreviewableApp(artifacts, ceoGoal)
+                        ? "warning"
+                        : "error"
+                    }
+                  >
+                    <p className="font-medium">
+                      {isQaReworkExhaustedMessage(runError)
+                        ? "QA did not pass — your app is still here"
+                        : hasPreviewableApp(artifacts, ceoGoal)
+                          ? "Run stopped — your files are still here"
+                          : "The team stopped"}
+                    </p>
+                    <p className="mt-1 text-sm">
+                      {runError.trim() ||
+                        "Something went wrong before the team finished."}
+                    </p>
+                    {(isQaReworkExhaustedMessage(runError) ||
+                      hasPreviewableApp(artifacts, ceoGoal)) && (
+                      <RunDeliverableActions
+                        runId={runId}
+                        artifacts={artifacts}
+                        ceoGoal={ceoGoal}
+                        runFinished
+                        variant="hud"
+                        onRequestChanges={startFollowUpChat}
+                        onRestart={startRedesignChat}
+                      />
+                    )}
                     <div className="mt-2 flex flex-wrap gap-2">
                       <Button
                         type="button"
@@ -1071,7 +1242,9 @@ export function Dashboard() {
                         className="!h-8 !px-3"
                         onClick={() => void resumeRun()}
                       >
-                        Resume
+                        {isQaReworkExhaustedMessage(runError)
+                          ? "Resume (recheck QA first)"
+                          : "Resume"}
                       </Button>
                       <Button
                         type="button"
@@ -1083,7 +1256,9 @@ export function Dashboard() {
                       </Button>
                     </div>
                     <p className="mt-2 text-[11px] text-zinc-500">
-                      Resume continues this chat. Restart opens a new brief.
+                      {isQaReworkExhaustedMessage(runError)
+                        ? "Preview keeps what was built. Resume first re-checks QA with full files (may PASS). If still FAIL, opens two more fix rounds. Restart opens a new brief."
+                        : "Resume continues this chat. Restart opens a new brief."}
                     </p>
                   </Alert>
                 )}

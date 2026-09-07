@@ -6,19 +6,19 @@ import { SiteHeader } from "@/components/layout/site-header";
 const FAQ = [
   {
     q: `What does ${PRODUCT_NAME} build in this beta?`,
-    a: "A static web app you can open in a browser preview and download as HTML or a ZIP. You watch the office plan and write files, approve the plan, then use the deliverable.",
+    a: "A static web app you can open in Preview (Open your app). ZIP download is an optional export of those same files — not a finished production product. You watch the office plan and write files, approve the plan, then use the deliverable.",
   },
   {
     q: "Is this a production / hosted app?",
-    a: "Not in this beta. There is no live deploy of the generated app yet. Hosted production apps are the roadmap. Today you get preview + ZIP only.",
+    a: "Not in this beta. There is no live deploy of the generated app yet. Hosted production apps are the roadmap. Today you get interactive Preview first; ZIP is optional. We are not Base44 or a one-click live host.",
   },
   {
     q: "Can I change an app after it finishes?",
-    a: "Yes — use Request changes on the Done banner. Your current app stays on screen until you Start; Cancel keeps it. Starting counts as a new monthly run.",
+    a: "Yes — use Request changes on the Done banner. Describe only the bug or tweak. PixelCrew copies your current files, skips the planning council, and applies a surgical patch (not a full redesign). Your current app stays on screen until you Start; Cancel keeps it. Starting opens a new chat and counts as one monthly run.",
   },
   {
     q: "What if my prompt or plan was wrong?",
-    a: "On the plan screen, choose Wrong direction — start over. After a run fails or finishes, use Restart with a new brief. Cancel keeps your current app until you Start the redesign.",
+    a: "On the plan screen, choose Wrong direction — start over. After a run fails or finishes, use Restart with a new brief. Cancel keeps your current app until you Start the redesign. Start redesign also uses one monthly run and a new chat.",
   },
   {
     q: "Is there a guide if I get stuck?",
@@ -30,7 +30,11 @@ const FAQ = [
   },
   {
     q: "How many runs do I get?",
-    a: `Free beta includes ${FREE_RUNS_PER_MONTH} new runs per calendar month. Resuming a failed or cancelled chat does not consume an extra run. New chats (including Request changes / restart) do.`,
+    a: `Free beta includes ${FREE_RUNS_PER_MONTH} new runs per calendar month. Resuming a failed or cancelled chat does not consume an extra run. New chats — including Request changes and Restart — each use one run until same-run polish ships. Separately, each chat soft-pauses around 100k tokens so you can confirm before more BYOK spend; hard stop is 256k (multi-agent + QA loops need headroom — this is BYOK, not a hidden platform bill).`,
+  },
+  {
+    q: "What if QA fails after the fix rounds?",
+    a: "You still keep the files the team wrote — Open Preview and ZIP stay available. The run is marked failed so Resume can open two more QA fix rounds on the same chat (no extra monthly run). QA is instructed to review the real shipped HTML/CSS/JS together (not invent gaps from a truncated app.js-only view). We do not throw away a build just because QA did not PASS. Starting a new chat is optional.",
   },
 ] as const;
 

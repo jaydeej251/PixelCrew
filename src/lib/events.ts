@@ -21,6 +21,10 @@ export type AgentEventPayload = {
   status?: string;
   sequence?: number;
   summary?: string;
+  /** Soft (confirm) or hard (stop) BYOK token gate — see token-spend-gate.ts. */
+  tokenGate?: "soft" | "hard";
+  /** QA round-cap exhausted but scaffold/files were persisted for Preview/ZIP. */
+  shippedDespiteQaFail?: boolean;
   x?: number;
   y?: number;
 };
