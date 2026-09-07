@@ -4,7 +4,7 @@ import { inngest } from "@/lib/inngest";
 import { ProviderType } from "@prisma/client";
 import { z } from "zod";
 import { runOrchestrator } from "@/lib/orchestrator";
-import { configureAgentsForRun, workspaceHasProvider } from "@/lib/run-setup";
+import { prepareWorkspaceBrainsForRun } from "@/lib/run-setup";
 import { normalizeNewRunGoal } from "@/lib/run-goal";
 import {
   assertWorkspaceAccess,
@@ -63,19 +63,10 @@ export async function POST(req: Request) {
     if (!workspace) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     const providerType = provider;
-    if (providerType !== "mock") {
-      const check = await workspaceHasProvider(workspaceId, providerType);
-      if (!check.ready) {
-        return NextResponse.json(
-          {
-            error: `No key for ${provider}. Add it in the sidebar or .env.local (OPENROUTER_API_KEY or OPEN_ROUTER_KEY).`,
-          },
-          { status: 400 },
-        );
-      }
+    const brains = await prepareWorkspaceBrainsForRun(workspaceId, providerType, model);
+    if (!brains.ok) {
+      return NextResponse.json({ error: brains.error }, { status: 400 });
     }
-
-    const llm = await configureAgentsForRun(workspaceId, providerType, model);
 
     await prisma.workspace.update({
       where: { id: workspaceId },
@@ -101,7 +92,11 @@ export async function POST(req: Request) {
       runOrchestrator(run.id).catch(console.error);
     }
 
-    return NextResponse.json({ runId: run.id, provider: llm.provider, model: llm.model });
+    return NextResponse.json({
+      runId: run.id,
+      provider: brains.provider,
+      model: brains.model,
+    });
   } catch (err) {
     return apiErrorResponse(err);
   }

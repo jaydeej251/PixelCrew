@@ -9,6 +9,7 @@ import type { PositionKey } from "@/lib/constants";
 import { TEAM_TEMPLATES } from "@/lib/templates";
 import { assertWorkspaceAccess, requireProductSession } from "@/lib/auth";
 import { apiErrorResponse } from "@/lib/api-error";
+import { configureAgentsForRun } from "@/lib/run-setup";
 
 const workspaceMutationSchema = z.discriminatedUnion("action", [
   z.object({
@@ -28,6 +29,11 @@ const workspaceMutationSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("update_goal"),
     ceoGoal: z.string().trim().max(20_000),
+  }).strict(),
+  z.object({
+    action: z.literal("apply_team_brain"),
+    provider: z.nativeEnum(ProviderType),
+    model: z.string().trim().min(1).max(200),
   }).strict(),
 ]);
 
@@ -83,6 +89,16 @@ export async function POST(
       data: { ceoGoal: body.ceoGoal },
     });
     return NextResponse.json({ ok: true });
+  }
+
+  if (body.action === "apply_team_brain") {
+    const llm = await configureAgentsForRun(
+      workspaceId,
+      body.provider,
+      body.model,
+      { forceAll: true },
+    );
+    return NextResponse.json({ ok: true, ...llm });
   }
 
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });

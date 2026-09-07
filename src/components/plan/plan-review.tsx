@@ -284,7 +284,7 @@ export function PlanReview({ runId, onPublished, onRestart }: PlanReviewProps) {
 
       <div
         ref={scroller}
-        className="min-h-[160px] flex-1 space-y-3 overflow-y-auto pr-1"
+        className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1"
       >
         {thread.length === 0 && !busy && (
           <div className="flex flex-col items-center justify-center gap-2 py-8 text-sm text-zinc-500">
@@ -331,13 +331,13 @@ export function PlanReview({ runId, onPublished, onRestart }: PlanReviewProps) {
 
       {hasDecisions && (
         <div
-          className={`mt-3 shrink-0 space-y-3 border-t pt-3 ${
+          className={`mt-3 flex min-h-0 max-h-[min(32vh,240px)] shrink flex-col space-y-2 border-t pt-3 ${
             decisionsPending
               ? "border-indigo-500/40 bg-indigo-500/5"
               : "border-zinc-800/80"
           }`}
         >
-          <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
             <p
               className={`text-[11px] font-medium uppercase tracking-wide ${
                 decisionsPending ? "text-indigo-300" : "text-zinc-500"
@@ -358,7 +358,7 @@ export function PlanReview({ runId, onPublished, onRestart }: PlanReviewProps) {
               </Button>
             )}
           </div>
-          <div className="max-h-[min(36vh,280px)] space-y-3 overflow-y-auto pr-1">
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1">
             {decisions.map((decision) => (
               <DecisionCard
                 key={decision.id}
@@ -386,7 +386,7 @@ export function PlanReview({ runId, onPublished, onRestart }: PlanReviewProps) {
           }}
         />
         {error && <p className="text-sm text-red-300">{error}</p>}
-        <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 pb-[max(0.25rem,env(safe-area-inset-bottom))]">
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="secondary" disabled={busy || !question.trim()} onClick={() => void send()}>
               Send

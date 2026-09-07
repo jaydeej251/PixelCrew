@@ -3,19 +3,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { Panel, PanelContent, PanelHeader, PanelTitle } from "@/components/ui/panel";
 import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Cpu, RefreshCw } from "lucide-react";
+import { Cpu } from "lucide-react";
 import {
   getOllamaDefaultModelForMode,
   getOllamaEndpointMode,
-  getOllamaSuggestedModels,
-  ollamaModelHasLocalCloudSuffix,
-  ollamaModelLooksMismatched,
   type OllamaEndpointMode,
 } from "@/lib/ollama-models";
 import { writeProviderTestOk } from "@/lib/run-readiness";
 import { readResponseJson } from "@/lib/http-json";
+import { ProviderModelSelect } from "@/components/settings/provider-model-select";
 
 type ProviderStatus = {
   provider: string;
@@ -35,10 +32,17 @@ type RunSettingsProps = {
   model: string;
   onProviderChange: (provider: string) => void;
   onModelChange: (model: string) => void;
+  /**
+   * User changed Which AI to use — apply this brain to every teammate.
+   * Per-seat overrides remain available under Your team afterward.
+   */
+  onTeamBrainChange?: (provider: string, model: string) => void | Promise<void>;
   /** Bump when credentials change so endpoint/status stay in sync. */
   credentialsRevision?: number;
   /** Fired after a successful / failed live key probe (for Start gating). */
   onProviderTestResult?: (ok: boolean) => void;
+  /** Local Ollama: one brain applies to the whole roster. */
+  sharedBrainOnly?: boolean;
 };
 
 export function RunSettings({
@@ -47,10 +51,14 @@ export function RunSettings({
   model,
   onProviderChange,
   onModelChange,
+  onTeamBrainChange,
   credentialsRevision = 0,
   onProviderTestResult,
+  sharedBrainOnly = false,
 }: RunSettingsProps) {
   const [statuses, setStatuses] = useState<ProviderStatus[]>([]);
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState("");
 
   const reload = useCallback(() => {
     fetch(`/api/providers/status?workspaceId=${workspaceId}`)
@@ -66,9 +74,23 @@ export function RunSettings({
   const current = statuses.find((s) => s.provider === provider);
   const ollamaMode =
     provider === "ollama" ? getOllamaEndpointMode(current?.activeBaseUrl) : null;
-  const cloudSuggestions = getOllamaSuggestedModels(ollamaMode === "cloud" ? "cloud" : null);
-  const mismatched =
-    provider === "ollama" && ollamaModelLooksMismatched(model, ollamaMode);
+
+  const applyTeamBrain = async (nextProvider: string, nextModel: string) => {
+    onProviderChange(nextProvider);
+    onModelChange(nextModel);
+    if (!onTeamBrainChange) return;
+    setSyncing(true);
+    setSyncError("");
+    try {
+      await onTeamBrainChange(nextProvider, nextModel);
+    } catch (err) {
+      setSyncError(
+        err instanceof Error ? err.message : "Couldn’t update the team brain.",
+      );
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   return (
     <Panel>
@@ -80,10 +102,23 @@ export function RunSettings({
       </PanelHeader>
       <PanelContent className="space-y-3">
         <p className="text-xs text-zinc-500">
-          Pick who builds with you, then which AI brain they use. For Ollama, choose{" "}
-          <span className="text-zinc-400">Use cloud</span> or{" "}
-          <span className="text-zinc-400">Use local</span> under Your API keys — most people
-          should use cloud.
+          {sharedBrainOnly ? (
+            <>
+              Local Ollama uses <span className="text-zinc-300">one brain for the whole team</span>.
+              Changing provider or model here applies to everyone on Start. Under Your API keys,
+              click <span className="text-zinc-300">Use local</span> so PixelCrew talks to the
+              Ollama app on this computer — then Start again. Leftover OpenRouter seats are
+              replaced when you Start with Ollama.
+            </>
+          ) : (
+            <>
+              This is the <span className="text-zinc-300">main team brain</span>. Changing
+              provider or model here updates every teammate. You can still override one seat
+              under Your team afterward. For Ollama, choose{" "}
+              <span className="text-zinc-400">Use cloud</span> or{" "}
+              <span className="text-zinc-400">Use local</span> under Your API keys.
+            </>
+          )}
         </p>
 
         <div className="space-y-1.5">
@@ -94,17 +129,20 @@ export function RunSettings({
             id="run-provider"
             className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm"
             value={provider}
+            disabled={syncing}
             onChange={(e) => {
               const nextId = e.target.value;
-              onProviderChange(nextId);
               const next = statuses.find((s) => s.provider === nextId);
-              if (!next) return;
-              if (nextId === "ollama") {
-                const mode = getOllamaEndpointMode(next.activeBaseUrl);
-                onModelChange(getOllamaDefaultModelForMode(mode));
-              } else {
-                onModelChange(next.defaultModel);
+              let nextModel = model;
+              if (next) {
+                if (nextId === "ollama") {
+                  const mode = getOllamaEndpointMode(next.activeBaseUrl);
+                  nextModel = getOllamaDefaultModelForMode(mode);
+                } else {
+                  nextModel = next.defaultModel;
+                }
               }
+              void applyTeamBrain(nextId, nextModel);
             }}
           >
             {statuses.map((s) => (
@@ -126,61 +164,30 @@ export function RunSettings({
 
         {provider !== "mock" && (
           <div className="space-y-1.5">
-            <div className="flex items-center justify-between gap-2">
-              <Label htmlFor="run-model" className="text-xs text-zinc-400">
-                Model
-              </Label>
-              {ollamaMode === "cloud" && (
-                <span className="text-[10px] uppercase tracking-wide text-zinc-500">
-                  Cloud catalog
-                </span>
-              )}
-              {ollamaMode === "local" && (
-                <span className="text-[10px] uppercase tracking-wide text-zinc-500">
-                  On this computer
-                </span>
-              )}
-            </div>
-            <Input
+            <Label htmlFor="run-model" className="text-xs text-zinc-400">
+              Model
+            </Label>
+            <ProviderModelSelect
               id="run-model"
-              placeholder={modelPlaceholder(provider, ollamaMode)}
-              value={model}
-              onChange={(e) => onModelChange(e.target.value)}
+              workspaceId={workspaceId}
+              provider={provider}
+              model={model}
+              onModelChange={onModelChange}
+              onUserModelChange={(next) => {
+                void applyTeamBrain(provider, next);
+              }}
+              credentialsRevision={credentialsRevision}
+              ollamaMode={ollamaMode}
+              disabled={syncing}
             />
-            {ollamaMode === "local" ? (
-              <LocalOllamaModelChips
-                key={`${workspaceId}-${credentialsRevision}`}
-                workspaceId={workspaceId}
-                model={model}
-                onModelChange={onModelChange}
-                mismatched={mismatched}
-              />
-            ) : (
-              <>
-                {cloudSuggestions.length > 0 && (
-                  <ModelChipRow
-                    names={cloudSuggestions}
-                    model={model}
-                    onModelChange={onModelChange}
-                  />
-                )}
-                {mismatched && (
-                  <p className="text-[11px] leading-snug text-amber-400/90">
-                    {ollamaMode === "cloud" && ollamaModelHasLocalCloudSuffix(model)
-                      ? "Remove the “-cloud” ending from the name when using Ollama Cloud (example: gpt-oss:20b)."
-                      : ollamaMode === "cloud"
-                        ? "That name is usually for the Ollama app on your computer. On cloud, pick one of the options above or search on ollama.com."
-                        : "That name is usually for Ollama Cloud. On this computer, pick a model you’ve already downloaded in the Ollama app."}
-                  </p>
-                )}
-                {!mismatched && ollamaMode === "cloud" && (
-                  <p className="text-[11px] leading-snug text-zinc-500">
-                    Uses your Ollama Cloud key. Tap a chip above, or type a model name from
-                    ollama.com.
-                  </p>
-                )}
-              </>
+            {syncing && (
+              <p className="text-[11px] leading-snug text-zinc-500">
+                Updating every teammate…
+              </p>
             )}
+            {syncError ? (
+              <p className="text-[11px] leading-snug text-red-300">{syncError}</p>
+            ) : null}
           </div>
         )}
 
@@ -212,27 +219,12 @@ export function RunSettings({
               </p>
             )}
             {provider === "openrouter" && current.ready && (
-              <>
-                <p className="text-[11px] leading-snug text-zinc-500">
-                  Browse models on{" "}
-                  <a
-                    href="https://openrouter.ai/models"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-zinc-300 underline-offset-2 hover:underline"
-                  >
-                    openrouter.ai/models
-                  </a>
-                  , then paste the model id here — OpenRouter is the catalog; we just need the
-                  name for this run.
-                </p>
-                <TestKeyButton
-                  workspaceId={workspaceId}
-                  provider="openrouter"
-                  credentialId={current.activeCredentialId}
-                  onResult={onProviderTestResult}
-                />
-              </>
+              <TestKeyButton
+                workspaceId={workspaceId}
+                provider="openrouter"
+                credentialId={current.activeCredentialId}
+                onResult={onProviderTestResult}
+              />
             )}
             {provider === "ollama" && current.ready && ollamaMode === "cloud" && (
               <TestKeyButton
@@ -254,201 +246,6 @@ export function RunSettings({
         )}
       </PanelContent>
     </Panel>
-  );
-}
-
-function modelPlaceholder(
-  provider: string,
-  mode: OllamaEndpointMode | null,
-): string {
-  if (provider === "ollama") {
-    if (mode === "cloud") return "e.g. gpt-oss:20b";
-    if (mode === "local") return "e.g. qwen2.5-coder:14b";
-    return "Model name";
-  }
-  if (provider === "openrouter") return "e.g. openai/gpt-4o-mini";
-  if (provider === "anthropic") return "e.g. claude-3-5-haiku-latest";
-  if (provider === "google") return "e.g. gemini-2.0-flash";
-  return "Model name";
-}
-
-function ModelChipRow({
-  names,
-  model,
-  onModelChange,
-}: {
-  names: readonly string[];
-  model: string;
-  onModelChange: (model: string) => void;
-}) {
-  return (
-    <div className="flex flex-wrap gap-1.5 pt-0.5">
-      {names.map((name) => {
-        const active = model.trim() === name;
-        return (
-          <button
-            key={name}
-            type="button"
-            onClick={() => onModelChange(name)}
-            className={`rounded-md border px-2 py-0.5 text-[11px] transition-colors ${
-              active
-                ? "border-indigo-500/60 bg-indigo-500/15 text-indigo-200"
-                : "border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200"
-            }`}
-          >
-            {name}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-type LocalModelsState =
-  | { status: "loading"; models: string[] }
-  | { status: "ready"; models: string[] }
-  | { status: "empty"; models: [] }
-  | { status: "error"; models: string[]; message: string };
-
-function LocalOllamaModelChips({
-  workspaceId,
-  model,
-  onModelChange,
-  mismatched,
-}: {
-  workspaceId: string;
-  model: string;
-  onModelChange: (model: string) => void;
-  mismatched: boolean;
-}) {
-  const starters = getOllamaSuggestedModels("local");
-  const [state, setState] = useState<LocalModelsState>({
-    status: "loading",
-    models: [],
-  });
-  const [refreshKey, setRefreshKey] = useState(0);
-
-  useEffect(() => {
-    const controller = new AbortController();
-
-    fetch(
-      `/api/providers/ollama/models?workspaceId=${encodeURIComponent(workspaceId)}`,
-      { signal: controller.signal, cache: "no-store" },
-    )
-      .then(async (res) => {
-        const json = (await res.json()) as {
-          ok?: boolean;
-          models?: string[];
-          message?: string;
-          error?: string;
-        };
-        if (controller.signal.aborted) return;
-
-        if (!res.ok || !json.ok) {
-          setState({
-            status: "error",
-            models: [],
-            message:
-              json.message ??
-              json.error ??
-              "We couldn’t load your local models right now.",
-          });
-          return;
-        }
-
-        const models = Array.isArray(json.models) ? json.models : [];
-        if (models.length === 0) {
-          setState({ status: "empty", models: [] });
-          return;
-        }
-        setState({ status: "ready", models });
-      })
-      .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
-        setState({
-          status: "error",
-          models: [],
-          message:
-            err instanceof Error
-              ? err.message
-              : "We couldn’t load your local models right now.",
-        });
-      });
-
-    return () => controller.abort();
-  }, [workspaceId, refreshKey]);
-
-  const showStarters =
-    state.status === "error" || state.status === "loading" || state.status === "empty";
-  const chipNames =
-    state.status === "ready"
-      ? state.models
-      : state.status === "loading" && state.models.length > 0
-        ? state.models
-        : showStarters
-          ? starters
-          : [];
-
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between gap-2 pt-0.5">
-        <span className="text-[11px] text-zinc-500">
-          {state.status === "ready"
-            ? `${state.models.length} model${state.models.length === 1 ? "" : "s"} on this computer`
-            : state.status === "loading"
-              ? "Looking for the Ollama app…"
-              : state.status === "empty"
-                ? "No models downloaded yet"
-                : "Ollama isn’t ready yet"}
-        </span>
-        <button
-          type="button"
-          onClick={() => {
-            setState((prev) => ({
-              status: "loading",
-              models: prev.status === "ready" ? prev.models : [],
-            }));
-            setRefreshKey((n) => n + 1);
-          }}
-          disabled={state.status === "loading"}
-          className="inline-flex items-center gap-1 text-[11px] text-indigo-400 hover:text-indigo-300 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <RefreshCw
-            size={11}
-            className={state.status === "loading" ? "animate-spin" : undefined}
-            aria-hidden
-          />
-          {state.status === "loading" ? "Refreshing…" : "Refresh"}
-        </button>
-      </div>
-
-      {chipNames.length > 0 && (
-        <ModelChipRow names={chipNames} model={model} onModelChange={onModelChange} />
-      )}
-
-      {state.status === "ready" && (
-        <p className="text-[11px] leading-snug text-zinc-500">
-          These are already on your computer — no cloud key needed. After you download a new
-          model in the Ollama app, click Refresh.
-        </p>
-      )}
-      {state.status === "empty" && (
-        <p className="text-[11px] leading-snug text-amber-400/90">
-          Ollama is open, but no models are downloaded yet. In the Ollama app, download one
-          (try <span className="text-zinc-200">qwen2.5-coder</span>), then click Refresh. The
-          chips below are suggestions until something is downloaded.
-        </p>
-      )}
-      {state.status === "error" && (
-        <p className="text-[11px] leading-snug text-amber-400/90">{state.message}</p>
-      )}
-      {mismatched && (state.status === "ready" || state.status === "empty") && (
-        <p className="text-[11px] leading-snug text-amber-400/90">
-          That name is usually for Ollama Cloud. On this computer, pick a model you’ve
-          already downloaded in the Ollama app.
-        </p>
-      )}
-    </div>
   );
 }
 

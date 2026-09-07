@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { LogOut } from "lucide-react";
 import { Drawer } from "@/components/ui/drawer";
@@ -9,6 +9,9 @@ import { OrgBuilder } from "@/components/org/org-builder";
 import { CredentialsForm } from "@/components/settings/credentials-form";
 import { RunSettings } from "@/components/settings/run-settings";
 import { TEAM_TEMPLATES } from "@/lib/templates";
+import { getOllamaEndpointMode } from "@/lib/ollama-models";
+import { allowsPerAgentBrains } from "@/lib/agent-brains";
+import type { ProviderType } from "@prisma/client";
 import type { OfficeAgent } from "@/lib/office";
 
 type SettingsDrawerProps = {
@@ -27,6 +30,11 @@ type SettingsDrawerProps = {
   onLogout?: () => void;
 };
 
+type ProviderStatusRow = {
+  provider: string;
+  activeBaseUrl?: string | null;
+};
+
 export function SettingsDrawer({
   open,
   onClose,
@@ -43,11 +51,37 @@ export function SettingsDrawer({
   onLogout,
 }: SettingsDrawerProps) {
   const [credentialsRevision, setCredentialsRevision] = useState(0);
+  const [ollamaBaseUrl, setOllamaBaseUrl] = useState<string | null>(null);
 
   const bumpCredentials = () => {
     setCredentialsRevision((n) => n + 1);
     onCredentialsChange?.();
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/providers/status?workspaceId=${encodeURIComponent(workspaceId)}`)
+      .then(async (r) => {
+        const d = (await r.json().catch(() => null)) as {
+          providers?: ProviderStatusRow[];
+        } | null;
+        if (cancelled || !r.ok) return;
+        const ollama = d?.providers?.find((p) => p.provider === "ollama");
+        setOllamaBaseUrl(ollama?.activeBaseUrl ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setOllamaBaseUrl(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId, credentialsRevision]);
+
+  const ollamaMode = getOllamaEndpointMode(ollamaBaseUrl);
+  const sharedBrainOnly = !allowsPerAgentBrains(
+    runProvider as ProviderType,
+    ollamaMode,
+  );
 
   return (
     <Drawer open={open} onClose={onClose} title="Settings">
@@ -77,32 +111,61 @@ export function SettingsDrawer({
         <OrgBuilder
           agents={agents}
           templates={TEAM_TEMPLATES}
+          defaultProvider={runProvider}
+          defaultModel={runModel}
+          workspaceId={workspaceId}
+          credentialsRevision={credentialsRevision}
+          sharedBrainOnly={sharedBrainOnly}
           onApplyTemplate={async (templateId) => {
-            await fetch(`/api/workspace/${workspaceId}`, {
+            const response = await fetch(`/api/workspace/${workspaceId}`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ action: "apply_template", templateId }),
             });
+            const body = (await response.json().catch(() => null)) as {
+              error?: string;
+            } | null;
+            if (!response.ok) {
+              throw new Error(body?.error || "Couldn’t apply that team template.");
+            }
             await onRefresh();
           }}
           onHire={async (hireData) => {
-            await fetch(`/api/workspace/${workspaceId}`, {
+            const response = await fetch(`/api/workspace/${workspaceId}`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ action: "hire", ...hireData }),
             });
+            const body = (await response.json().catch(() => null)) as {
+              error?: string;
+            } | null;
+            if (!response.ok) {
+              throw new Error(body?.error || "Couldn’t add that teammate.");
+            }
             await onRefresh();
           }}
           onUpdate={async (id, hireData) => {
-            await fetch(`/api/agents/${id}`, {
+            const response = await fetch(`/api/agents/${id}`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(hireData),
             });
+            const body = (await response.json().catch(() => null)) as {
+              error?: string;
+            } | null;
+            if (!response.ok) {
+              throw new Error(body?.error || "Couldn’t save teammate changes.");
+            }
             await onRefresh();
           }}
           onRemove={async (id) => {
-            await fetch(`/api/agents/${id}`, { method: "DELETE" });
+            const response = await fetch(`/api/agents/${id}`, { method: "DELETE" });
+            const body = (await response.json().catch(() => null)) as {
+              error?: string;
+            } | null;
+            if (!response.ok) {
+              throw new Error(body?.error || "Couldn’t remove that teammate.");
+            }
             onAgentRemoved?.(id);
             await onRefresh();
           }}
@@ -130,8 +193,29 @@ export function SettingsDrawer({
           model={runModel}
           onProviderChange={onProviderChange}
           onModelChange={onModelChange}
+          onTeamBrainChange={async (provider, model) => {
+            onProviderChange(provider);
+            onModelChange(model);
+            const response = await fetch(`/api/workspace/${workspaceId}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "apply_team_brain",
+                provider,
+                model,
+              }),
+            });
+            const body = (await response.json().catch(() => null)) as {
+              error?: string;
+            } | null;
+            if (!response.ok) {
+              throw new Error(body?.error || "Couldn’t update every teammate’s brain.");
+            }
+            await onRefresh();
+          }}
           credentialsRevision={credentialsRevision}
           onProviderTestResult={onProviderTestResult}
+          sharedBrainOnly={sharedBrainOnly}
         />
       </div>
     </Drawer>

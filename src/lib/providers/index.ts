@@ -2,36 +2,13 @@ import type { ProviderType } from "@prisma/client";
 import { resolveApiKey } from "../run-setup";
 import {
   isOllamaCloudBaseUrl,
-  isOllamaLocalBaseUrl,
-  normalizeOllamaBaseUrl,
-  OLLAMA_CLOUD_BASE_URL,
-  OLLAMA_LOCAL_BASE_URL,
+  resolveOllamaBaseUrl,
 } from "../ollama-endpoints";
 import { MockProvider } from "./mock";
 import { OllamaNativeChatProvider } from "./ollama-native";
 import { createOpenAICompatible } from "./openai-compatible";
 import type { LLMProvider, ProviderConfig } from "./types";
 export { estimateCost } from "./types";
-
-function resolveOllamaBaseUrl(
-  credentialBaseUrl: string | null | undefined,
-  hasApiKey: boolean,
-): string {
-  const fromCredential = credentialBaseUrl?.trim();
-  if (fromCredential) return normalizeOllamaBaseUrl(fromCredential);
-
-  const fromEnv = process.env.OLLAMA_BASE_URL?.trim();
-  if (fromEnv) {
-    const cleaned = normalizeOllamaBaseUrl(fromEnv);
-    // .env.example defaults to local; a cloud API key should win over that default.
-    if (hasApiKey && isOllamaLocalBaseUrl(cleaned)) {
-      return OLLAMA_CLOUD_BASE_URL;
-    }
-    return cleaned;
-  }
-
-  return hasApiKey ? OLLAMA_CLOUD_BASE_URL : OLLAMA_LOCAL_BASE_URL;
-}
 
 export function resolveProviderConfig(
   provider: ProviderType,

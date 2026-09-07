@@ -1,7 +1,12 @@
 import type { ProviderType } from "@prisma/client";
 import { decrypt } from "./crypto";
-import { isOllamaCloudBaseUrl } from "./ollama-endpoints";
+import {
+  isOllamaCloudBaseUrl,
+  resolveOllamaBaseUrl,
+} from "./ollama-endpoints";
+import { getOllamaEndpointMode, type OllamaEndpointMode } from "./ollama-models";
 import { findProviderCredential } from "./provider-credentials";
+import { shouldForceOllamaTeamBrain } from "./agent-brains";
 
 export {
   isOllamaCloudBaseUrl,
@@ -11,6 +16,11 @@ export {
   OLLAMA_LOCAL_BASE_URL,
 } from "./ollama-endpoints";
 export { findProviderCredential, setDefaultProviderCredential } from "./provider-credentials";
+export {
+  allowsPerAgentBrains,
+  shouldForceOllamaTeamBrain,
+  shouldShareBrainAcrossRoster,
+} from "./agent-brains";
 
 const ENV_ALIASES: Record<ProviderType, string[]> = {
   mock: [],
@@ -158,18 +168,137 @@ export async function workspaceHasProvider(
   return { ready: false, source: "none" };
 }
 
+/** Mock seats have no custom brain yet — they inherit the workspace run default. */
+export function shouldInheritRunBrain(provider: ProviderType): boolean {
+  return provider === "mock";
+}
+
+export function uniqueRosterProviders(
+  agents: Array<{ provider: ProviderType }>,
+): ProviderType[] {
+  return [...new Set(agents.map((a) => a.provider))];
+}
+
+/** Active Ollama endpoint mode for this workspace (credential / env / key heuristic). */
+export async function getWorkspaceOllamaMode(
+  workspaceId: string,
+): Promise<OllamaEndpointMode | null> {
+  const { prisma } = await import("./db");
+  const cred = await findProviderCredential(prisma, workspaceId, "ollama");
+  const { key } = resolveApiKey("ollama", cred);
+  const baseUrl = resolveOllamaBaseUrl(cred?.baseUrl, Boolean(key));
+  return getOllamaEndpointMode(baseUrl);
+}
+
+/**
+ * Apply the run-level brain to agents.
+ * - default: only unset (mock) seats — preserves per-teammate cloud brains
+ * - forceAll: every seat (local Ollama shared-brain mode)
+ */
 export async function configureAgentsForRun(
   workspaceId: string,
   provider: ProviderType,
   model?: string,
+  opts?: { forceAll?: boolean },
 ) {
   const { prisma } = await import("./db");
   const resolvedModel = model?.trim() || getDefaultModel(provider);
 
   await prisma.agent.updateMany({
-    where: { workspaceId },
+    where: opts?.forceAll ? { workspaceId } : { workspaceId, provider: "mock" },
     data: { provider, model: resolvedModel },
   });
 
   return { provider, model: resolvedModel };
+}
+
+/**
+ * Ensure every non-mock provider already on the roster has a ready credential.
+ * Call before configureAgentsForRun so failed Starts never leave half-updated seats.
+ */
+export async function assertRosterProvidersReady(
+  workspaceId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { prisma } = await import("./db");
+  const agents = await prisma.agent.findMany({
+    where: { workspaceId },
+    select: { name: true, provider: true },
+  });
+
+  const missing: string[] = [];
+  for (const provider of uniqueRosterProviders(agents)) {
+    if (shouldInheritRunBrain(provider)) continue;
+    const check = await workspaceHasProvider(workspaceId, provider);
+    if (check.ready) continue;
+    const names = agents
+      .filter((a) => a.provider === provider)
+      .map((a) => a.name);
+    const who = names.length > 0 ? ` (used by ${names.join(", ")})` : "";
+    missing.push(`${provider}${who}`);
+  }
+
+  if (missing.length === 0) return { ok: true };
+  return {
+    ok: false,
+    error: `Missing API keys for: ${missing.join("; ")}. Add them in Settings → Your API keys, then try again.`,
+  };
+}
+
+/**
+ * Validate keys, then apply brains for Start/resume.
+ * - Local Ollama: one choice flattens the whole roster.
+ * - Start with Ollama while seats still say OpenRouter/etc.: flatten to Ollama (CEO pick wins).
+ * - Cloud multi-provider: only fill mock seats; keep per-teammate overrides.
+ * Never mutates agents when validation fails.
+ */
+export async function prepareWorkspaceBrainsForRun(
+  workspaceId: string,
+  provider: ProviderType,
+  model?: string,
+): Promise<
+  | { ok: true; provider: ProviderType; model: string }
+  | { ok: false; error: string }
+> {
+  const { prisma } = await import("./db");
+  const ollamaMode = await getWorkspaceOllamaMode(workspaceId);
+  const roster = await prisma.agent.findMany({
+    where: { workspaceId },
+    select: { provider: true },
+  });
+  const rosterProviders = roster.map((a) => a.provider);
+
+  if (shouldForceOllamaTeamBrain({ startProvider: provider, ollamaMode, rosterProviders })) {
+    const check = await workspaceHasProvider(workspaceId, "ollama");
+    if (!check.ready) {
+      return {
+        ok: false,
+        error:
+          ollamaMode === "local"
+            ? "Local Ollama is not ready. Start the Ollama app on this machine, or switch to Use cloud under Your API keys."
+            : "Ollama is not ready. Under Your API keys, click Use local (app on this computer) or Use cloud and save a key, then try again.",
+      };
+    }
+    const llm = await configureAgentsForRun(workspaceId, provider, model, {
+      forceAll: true,
+    });
+    return { ok: true, ...llm };
+  }
+
+  const mockCount = rosterProviders.filter((p) => p === "mock").length;
+
+  if (mockCount > 0 && provider !== "mock") {
+    const check = await workspaceHasProvider(workspaceId, provider);
+    if (!check.ready) {
+      return {
+        ok: false,
+        error: `No key for ${provider}. Add it in Settings → Your API keys, then try again.`,
+      };
+    }
+  }
+
+  const ready = await assertRosterProvidersReady(workspaceId);
+  if (!ready.ok) return ready;
+
+  const llm = await configureAgentsForRun(workspaceId, provider, model);
+  return { ok: true, ...llm };
 }

@@ -20,6 +20,7 @@ import {
   PRE_PUBLISH_STAGES,
   POST_PUBLISH_STAGES,
   pickPlanTask,
+  type WorkflowStage,
 } from "./workflow";
 import {
   looksLikeHandoffOrRefusal,
@@ -66,6 +67,17 @@ import {
   settleAttempt,
   startOrResumeAttempt,
 } from "./execution-runtime";
+import {
+  INITIAL_QA_TITLE,
+  QA_MAX_REWORK_ROUNDS,
+  countQaReworkRounds,
+  isQaFixTitle,
+  isQaReviewTitle,
+  nextQaReworkRound,
+  parseQaVerdict,
+  qaFixTitle,
+  qaRecheckTitle,
+} from "./qa-verdict";
 
 type EmitFn = (type: string, payload: AgentEventPayload) => Promise<void>;
 
@@ -959,7 +971,7 @@ export async function publishAndDelegate(runId: string) {
     await prisma.task.create({
       data: {
         runId,
-        title: "QA the delegated work",
+        title: INITIAL_QA_TITLE,
         description:
           `CEO source of truth:\n${run.ceoGoal}\n\nReview the actual emitted files against every acceptance criterion in that goal. Verdict FAIL or PASS, then a punch list. Fail wrong product type/name, missing screens or controls, invented template sections, inline JS, localStorage overwrites, hidden forms, and unsafe external links. Do not invent passing results. Do not rewrite the product.`,
         position: "qa_engineer",
@@ -977,6 +989,109 @@ export async function publishAndDelegate(runId: string) {
   });
 
   await prisma.run.update({ where: { id: runId }, data: { status: "running" } });
+}
+
+type QaReworkDecision =
+  | { action: "pass" }
+  | { action: "none" }
+  | { action: "exhausted"; message: string }
+  | { action: "rework"; round: number };
+
+/**
+ * After a QA stage finishes: PASS → done; FAIL → open engineer fixes + re-QA
+ * (capped); exhausted FAIL → fail the run. UNKNOWN does not open a loop.
+ */
+async function decideAndEnqueueQaRework(
+  runId: string,
+  ceoGoal: string,
+  agents: Agent[],
+  emit: EmitFn,
+): Promise<QaReworkDecision> {
+  if (qaOnTeam(agents).length === 0) return { action: "none" };
+
+  const qaTasks = await prisma.task.findMany({
+    where: { runId, position: "qa_engineer", status: "done" },
+    orderBy: [{ completedAt: "desc" }, { updatedAt: "desc" }],
+  });
+  const latest = qaTasks.find((t) => isQaReviewTitle(t.title));
+  if (!latest) return { action: "none" };
+
+  const { verdict, punchList } = parseQaVerdict(latest.output);
+  if (verdict === "PASS") return { action: "pass" };
+  if (verdict !== "FAIL") return { action: "none" };
+
+  const allTasks = await prisma.task.findMany({
+    where: { runId },
+    select: { id: true, title: true, dependsOnIds: true, status: true },
+  });
+  const alreadyOpened = allTasks.some(
+    (t) =>
+      isQaFixTitle(t.title) &&
+      t.dependsOnIds.includes(latest.id),
+  );
+  if (alreadyOpened) return { action: "none" };
+
+  const completedRounds = countQaReworkRounds(allTasks);
+  if (completedRounds >= QA_MAX_REWORK_ROUNDS) {
+    return {
+      action: "exhausted",
+      message: `QA still FAIL after ${QA_MAX_REWORK_ROUNDS} fix rounds. Run did not complete.`,
+    };
+  }
+
+  const engineers = engineersOnTeam(agents);
+  if (engineers.length === 0) {
+    return {
+      action: "exhausted",
+      message: "QA FAIL but no engineer on the team to fix the punch list.",
+    };
+  }
+
+  const round = nextQaReworkRound(allTasks);
+  const punch =
+    punchList.trim() ||
+    "(QA did not list punch items — re-check the CEO goal against the shipped files and fix every gap.)";
+  const fixPositions = [...new Set(engineers.map((e) => e.position))];
+  const fixIds: string[] = [];
+
+  for (const position of fixPositions) {
+    const fix = await prisma.task.create({
+      data: {
+        runId,
+        title: qaFixTitle(round),
+        description: `CEO source of truth:\n${ceoGoal}\n\nQA Verdict: FAIL (round ${round}). Fix every blocker/major on this punch list by rewriting the affected files with \`\`\`file:path fences. Do not invent a new product.\n\nPunch list:\n${punch}`,
+        position,
+        priority: 85,
+        dependsOnIds: [latest.id],
+      },
+    });
+    fixIds.push(fix.id);
+  }
+
+  await prisma.task.create({
+    data: {
+      runId,
+      title: qaRecheckTitle(round),
+      description: `CEO source of truth:\n${ceoGoal}\n\nRe-check after round ${round} fixes. Review the actual emitted files against every acceptance criterion. Verdict FAIL or PASS, then a punch list. Do not invent passing results. Do not rewrite the product.`,
+      position: "qa_engineer",
+      priority: 40,
+      dependsOnIds: fixIds,
+    },
+  });
+
+  const tasks = await prisma.task.findMany({ where: { runId } });
+  await prisma.workflow.upsert({
+    where: { runId },
+    create: { runId, graph: buildWorkflowGraph(tasks) },
+    update: { graph: buildWorkflowGraph(tasks) },
+  });
+
+  await emit("TASK_STARTED", {
+    message: `QA FAIL — engineering fix round ${round}/${QA_MAX_REWORK_ROUNDS}`,
+    taskTitle: qaFixTitle(round),
+  });
+
+  return { action: "rework", round };
 }
 
 export async function runOrchestrator(runId: string) {
@@ -1043,10 +1158,7 @@ export async function runOrchestrator(runId: string) {
 
   let abortReason: string | null = null;
 
-  for (const stage of WORKFLOW_STAGES) {
-    if (PRE_PUBLISH_STAGES.has(stage.id) && published) continue;
-    if (POST_PUBLISH_STAGES.has(stage.id) && !published) continue;
-
+  const executeWorkflowStage = async (stage: WorkflowStage) => {
     agents = await loadRoster();
 
     if (!(await isRunLoopActive(runId, loopStartedAt))) return;
@@ -1054,10 +1166,10 @@ export async function runOrchestrator(runId: string) {
     const stageTasks = await prisma.task.findMany({
       where: { runId, position: { in: stage.positions } },
     });
-    if (stageTasks.length === 0) continue;
+    if (stageTasks.length === 0) return;
 
     const stageAgents = agents.filter((a) => stage.positions.includes(a.position));
-    if (stageAgents.length === 0) continue;
+    if (stageAgents.length === 0) return;
 
     const stageCap = Math.min(
       cap,
@@ -1167,6 +1279,13 @@ export async function runOrchestrator(runId: string) {
     }
 
     await waitForIdle();
+  };
+
+  for (const stage of WORKFLOW_STAGES) {
+    if (PRE_PUBLISH_STAGES.has(stage.id) && published) continue;
+    if (POST_PUBLISH_STAGES.has(stage.id) && !published) continue;
+
+    await executeWorkflowStage(stage);
     if (!(await isRunLoopActive(runId, loopStartedAt))) return;
     if (abortReason) break;
 
@@ -1220,6 +1339,31 @@ export async function runOrchestrator(runId: string) {
         data: { status: "paused" },
       });
       return;
+    }
+  }
+
+  // QA FAIL → engineer fix (each eng position) → re-QA, capped.
+  if (published && !abortReason) {
+    const buildStage = WORKFLOW_STAGES.find((s) => s.id === "build");
+    const qaStage = WORKFLOW_STAGES.find((s) => s.id === "qa");
+    while (buildStage && qaStage && !abortReason) {
+      agents = await loadRoster();
+      const decision = await decideAndEnqueueQaRework(
+        runId,
+        run.ceoGoal,
+        agents,
+        emit,
+      );
+      if (decision.action === "pass" || decision.action === "none") break;
+      if (decision.action === "exhausted") {
+        abortReason = decision.message;
+        break;
+      }
+      await executeWorkflowStage(buildStage);
+      if (!(await isRunLoopActive(runId, loopStartedAt))) return;
+      if (abortReason) break;
+      await executeWorkflowStage(qaStage);
+      if (!(await isRunLoopActive(runId, loopStartedAt))) return;
     }
   }
 
