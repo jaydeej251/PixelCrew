@@ -3,7 +3,7 @@ import type { ProviderType } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
 import { runOrchestrator } from "@/lib/orchestrator";
-import { workspaceHasProvider } from "@/lib/run-setup";
+import { prepareWorkspaceBrainsForRun } from "@/lib/run-setup";
 import { isResumable, prepareRunForResume, resumePhase } from "@/lib/run-resume";
 import { assertRunAccess, requireProductSession } from "@/lib/auth";
 import { apiErrorResponse } from "@/lib/api-error";
@@ -62,16 +62,9 @@ export async function POST(
       model = model || sample?.model;
     }
 
-    if (provider !== "mock") {
-      const check = await workspaceHasProvider(run.workspaceId, provider);
-      if (!check.ready) {
-        return NextResponse.json(
-          {
-            error: `No key for ${provider}. Add it in settings or .env.local, then resume.`,
-          },
-          { status: 400 },
-        );
-      }
+    const brains = await prepareWorkspaceBrainsForRun(run.workspaceId, provider, model);
+    if (!brains.ok) {
+      return NextResponse.json({ error: brains.error }, { status: 400 });
     }
 
     // Same run row — does not create a Run, so checkPlanLimits (runs/month) is not charged.
@@ -86,8 +79,8 @@ export async function POST(
     return NextResponse.json({
       runId,
       phase: resumePhase(run.artifacts),
-      provider,
-      model: model ?? null,
+      provider: brains.provider,
+      model: brains.model,
     });
   } catch (err) {
     return apiErrorResponse(err);

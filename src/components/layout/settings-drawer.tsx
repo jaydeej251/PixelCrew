@@ -77,32 +77,60 @@ export function SettingsDrawer({
         <OrgBuilder
           agents={agents}
           templates={TEAM_TEMPLATES}
+          defaultProvider={runProvider}
+          defaultModel={runModel}
+          workspaceId={workspaceId}
+          credentialsRevision={credentialsRevision}
           onApplyTemplate={async (templateId) => {
-            await fetch(`/api/workspace/${workspaceId}`, {
+            const response = await fetch(`/api/workspace/${workspaceId}`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ action: "apply_template", templateId }),
             });
+            const body = (await response.json().catch(() => null)) as {
+              error?: string;
+            } | null;
+            if (!response.ok) {
+              throw new Error(body?.error || "Couldn’t apply that team template.");
+            }
             await onRefresh();
           }}
           onHire={async (hireData) => {
-            await fetch(`/api/workspace/${workspaceId}`, {
+            const response = await fetch(`/api/workspace/${workspaceId}`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ action: "hire", ...hireData }),
             });
+            const body = (await response.json().catch(() => null)) as {
+              error?: string;
+            } | null;
+            if (!response.ok) {
+              throw new Error(body?.error || "Couldn’t add that teammate.");
+            }
             await onRefresh();
           }}
           onUpdate={async (id, hireData) => {
-            await fetch(`/api/agents/${id}`, {
+            const response = await fetch(`/api/agents/${id}`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(hireData),
             });
+            const body = (await response.json().catch(() => null)) as {
+              error?: string;
+            } | null;
+            if (!response.ok) {
+              throw new Error(body?.error || "Couldn’t save teammate changes.");
+            }
             await onRefresh();
           }}
           onRemove={async (id) => {
-            await fetch(`/api/agents/${id}`, { method: "DELETE" });
+            const response = await fetch(`/api/agents/${id}`, { method: "DELETE" });
+            const body = (await response.json().catch(() => null)) as {
+              error?: string;
+            } | null;
+            if (!response.ok) {
+              throw new Error(body?.error || "Couldn’t remove that teammate.");
+            }
             onAgentRemoved?.(id);
             await onRefresh();
           }}

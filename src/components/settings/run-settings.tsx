@@ -80,7 +80,8 @@ export function RunSettings({
       </PanelHeader>
       <PanelContent className="space-y-3">
         <p className="text-xs text-zinc-500">
-          Pick who builds with you, then which AI brain they use. For Ollama, choose{" "}
+          Default brain for new teammates and seats still on Mock. Teammates with a set brain keep
+          it when you Start — change a seat under Your team. For Ollama, choose{" "}
           <span className="text-zinc-400">Use cloud</span> or{" "}
           <span className="text-zinc-400">Use local</span> under Your API keys — most people
           should use cloud.

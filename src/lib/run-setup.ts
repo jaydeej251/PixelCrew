@@ -158,6 +158,22 @@ export async function workspaceHasProvider(
   return { ready: false, source: "none" };
 }
 
+/** Mock seats have no custom brain yet — they inherit the workspace run default. */
+export function shouldInheritRunBrain(provider: ProviderType): boolean {
+  return provider === "mock";
+}
+
+export function uniqueRosterProviders(
+  agents: Array<{ provider: ProviderType }>,
+): ProviderType[] {
+  return [...new Set(agents.map((a) => a.provider))];
+}
+
+/**
+ * Apply the run-level default only to unset (mock) seats.
+ * Does not overwrite teammates who already have a provider/model.
+ * Call only after credentials for the default (if needed) and the roster are validated.
+ */
 export async function configureAgentsForRun(
   workspaceId: string,
   provider: ProviderType,
@@ -167,9 +183,75 @@ export async function configureAgentsForRun(
   const resolvedModel = model?.trim() || getDefaultModel(provider);
 
   await prisma.agent.updateMany({
-    where: { workspaceId },
+    where: { workspaceId, provider: "mock" },
     data: { provider, model: resolvedModel },
   });
 
   return { provider, model: resolvedModel };
+}
+
+/**
+ * Ensure every non-mock provider already on the roster has a ready credential.
+ * Call before configureAgentsForRun so failed Starts never leave half-updated seats.
+ */
+export async function assertRosterProvidersReady(
+  workspaceId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { prisma } = await import("./db");
+  const agents = await prisma.agent.findMany({
+    where: { workspaceId },
+    select: { name: true, provider: true },
+  });
+
+  const missing: string[] = [];
+  for (const provider of uniqueRosterProviders(agents)) {
+    if (shouldInheritRunBrain(provider)) continue;
+    const check = await workspaceHasProvider(workspaceId, provider);
+    if (check.ready) continue;
+    const names = agents
+      .filter((a) => a.provider === provider)
+      .map((a) => a.name);
+    const who = names.length > 0 ? ` (used by ${names.join(", ")})` : "";
+    missing.push(`${provider}${who}`);
+  }
+
+  if (missing.length === 0) return { ok: true };
+  return {
+    ok: false,
+    error: `Missing API keys for: ${missing.join("; ")}. Add them in Settings → Your API keys, then try again.`,
+  };
+}
+
+/**
+ * Validate default + roster keys, then fill mock seats only.
+ * Never mutates agents when validation fails.
+ */
+export async function prepareWorkspaceBrainsForRun(
+  workspaceId: string,
+  provider: ProviderType,
+  model?: string,
+): Promise<
+  | { ok: true; provider: ProviderType; model: string }
+  | { ok: false; error: string }
+> {
+  const { prisma } = await import("./db");
+  const mockCount = await prisma.agent.count({
+    where: { workspaceId, provider: "mock" },
+  });
+
+  if (mockCount > 0 && provider !== "mock") {
+    const check = await workspaceHasProvider(workspaceId, provider);
+    if (!check.ready) {
+      return {
+        ok: false,
+        error: `No key for ${provider}. Add it in Settings → Your API keys, then try again.`,
+      };
+    }
+  }
+
+  const roster = await assertRosterProvidersReady(workspaceId);
+  if (!roster.ok) return roster;
+
+  const llm = await configureAgentsForRun(workspaceId, provider, model);
+  return { ok: true, ...llm };
 }
