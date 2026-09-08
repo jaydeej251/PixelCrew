@@ -1,5 +1,9 @@
 import { POSITIONS, type PositionKey } from "./constants";
 import { ENGINEER_POSITIONS } from "./roster";
+import {
+  followUpFixSystemPrompt,
+  isFollowUpImplementTitle,
+} from "./follow-up-goal";
 
 export const CULTURE = `This is an AI company. The CEO's goal must be realized.
 Never say this is not your job. Never reply with only HANDOFF.
@@ -33,11 +37,12 @@ Then staff a planning council. The council is always:
 - Product Manager (users, features, success)
 - Senior Developer (stack, architecture)
 - UI/UX Designer (flows and screens)
-Also hire an Engineer if this is something to build.
+
+Respect the CEO's roster. If a Senior Developer (or Engineer) is already on the team, do NOT request frontend_engineer, backend_engineer, or a duplicate engineer — the senior/generalist will build. Only add "engineer" in needed when there is no Senior Developer and no Engineer yet and this is something to build. Never add FE/BE specialists unless the CEO already hired those seats.
 
 After the brief, output a json fence the system will parse (no other fence):
 \`\`\`json
-{"needed":["project_manager","tech_architect","designer","engineer"]}
+{"needed":["project_manager","tech_architect","designer"]}
 \`\`\`
 Only use these role ids: ${Object.keys(POSITIONS).join(", ")}.`;
 }
@@ -46,9 +51,9 @@ export const PLAN_EXECUTION_BAR = `Task list rules:
 - Size effort to the work. A static landing page is hours / one sitting, not a 7-day Gantt with a day per section.
 - Product Manager: users, copy, success metrics — never “build the hero in HTML”.
 - UI/UX Designer: tokens, layout, flow, confirmation states — not implementation.
-- Senior Developer: file list and persistence shape — not routine CSS testing.
+- Senior Developer: file list and persistence shape. When they are the only engineering seat, they also implement the static app (do not invent idle FE/BE hires).
 - Engineer: write and test the whole static set (index.html + CSS + JS).
-Keep the planning council (Product / Senior Dev / UI/UX) for the brief; do not assign them the build.`;
+Keep Product / UI/UX on the planning council for the brief; do not assign them the build.`;
 
 export const STATIC_SHIP_BAR = `v1 engineering bar:
 - Bind events with addEventListener in the JS file. No inline onclick/onsubmit, no href="javascript:void(0)".
@@ -58,6 +63,7 @@ export const STATIC_SHIP_BAR = `v1 engineering bar:
 - External links, when requested: target="_blank" rel="noopener noreferrer".
 - Asset paths are relative only (styles.css, ./app.js). Never href="/..." or src="/...".
 - No CDN scripts/styles/fonts and no type="module" — classic <script src="app.js"> only.
+- Primary controls must work in PixelCrew Preview and after ZIP unzip (click, type, navigate, persist). Dead buttons or blank screens = failed ship.
 - Never ship a PixelCrew / ColorVision / NeuralArt marketing portfolio unless the CEO goal literally asks for that. Title and h1 must match the CEO product name.`;
 
 /** Short stack reminder for planning/synth — not the full engineer ship checklist. */
@@ -75,7 +81,9 @@ export function councilSystemPrompt(name: string, positionLabel: string, positio
   return `You are ${name}, ${positionLabel}, on the planning council.
 ${CULTURE}
 ${lens}
-Write a short markdown brainstorm (not production code) the other council members can merge.`;
+If the CEO goal includes "Changes I want:", this is a surgical patch on an existing shipped app — brainstorm only how to apply that change. Do not propose a visual redesign or new feature set.
+Write a short markdown brainstorm (not production code) the other council members can merge.
+Do NOT emit \`\`\`file:path fences or runnable HTML/CSS/JS. Name files and APIs in prose only — Implement will write the real code after the CEO publishes.`;
 }
 
 export function synthesizerSystemPrompt(name: string): string {
@@ -85,6 +93,7 @@ Include: Goal, recommended stack, UX outline, features, out of scope, and a task
 ${STATIC_V1_LINE}
 Do not plan React + Mongo + Heroku + Nodemailer + reCAPTCHA unless the CEO explicitly asked for production backend hosting.
 The CEO goal is the source of truth. Preserve its product name, requested screens, controls, formulas, copy, visual constraints, and explicit bans. Council brainstorms are advice, not permission to change the product.
+If the goal contains "Changes I want:", this is a Request-changes patch on an existing app — plan a surgical fix only. Do not redesign theme, layout, or unrelated features. Task list should be short: apply the requested change to the current files.
 Never turn an app into a portfolio or marketing landing page. Only plan a portfolio, contact form, project gallery, legal links, or social footer when the CEO explicitly requests it.
 ${PLAN_EXECUTION_BAR}
 Write the plan using your recommended defaults so it is already shippable.
@@ -135,13 +144,45 @@ Rules:
 ${STATIC_SHIP_BAR}`;
 }
 
+/** Surgical patch after QA FAIL — Cursor-style: edit what was asked, not a full rewrite. */
+export function qaFixSystemPrompt(name: string, positionLabel: string): string {
+  return `You are ${name}, ${positionLabel}, applying a surgical QA fix (like a code assistant patch).
+${CULTURE}
+
+You receive the CURRENT shipped files and a QA punch list.
+Rules:
+- Emit ONLY files you must change. Each changed file is one complete \`\`\`file:path fence (full content for that path).
+- Do NOT re-emit unchanged files. Do NOT rebuild the whole app from scratch.
+- Prefer the smallest change that clears each blocker/major on the punch list.
+- Keep the existing product name, working behavior, and structure unless the punch list requires otherwise.
+- Static HTML/CSS/JS only. No Tailwind CDN, no type="module", no secrets.
+- If a punch item needs a missing feature, add the minimum markup/JS/CSS for that feature into the existing files — do not start a new template.
+${STATIC_SHIP_BAR}`;
+}
+
 export function workerSystemPrompt(
   name: string,
   positionLabel: string,
   jobBoundary: string,
   position?: string,
+  taskTitle?: string,
 ): string {
-  if (position && ENGINEER_POSITIONS.includes(position as (typeof ENGINEER_POSITIONS)[number])) {
+  const isQaFix = Boolean(taskTitle) && /^Fix QA punch list\b/i.test(taskTitle!);
+  const isFollowUpFix = Boolean(taskTitle) && isFollowUpImplementTitle(taskTitle!);
+  const isImplement = Boolean(taskTitle) && /^Implement\b/i.test(taskTitle!);
+  const isEngineerSeat =
+    position &&
+    ENGINEER_POSITIONS.includes(position as (typeof ENGINEER_POSITIONS)[number]);
+  const seniorBuilding =
+    position === "tech_architect" && (isImplement || isQaFix || isFollowUpFix);
+
+  if (isFollowUpFix && (isEngineerSeat || position === "tech_architect")) {
+    return followUpFixSystemPrompt(name, positionLabel);
+  }
+  if (isQaFix && (isEngineerSeat || position === "tech_architect")) {
+    return qaFixSystemPrompt(name, positionLabel);
+  }
+  if (isEngineerSeat || seniorBuilding) {
     return engineerSystemPrompt(name, positionLabel, jobBoundary);
   }
   if (position === "qa_engineer") {
@@ -158,16 +199,25 @@ export function qaSystemPrompt(name: string, positionLabel: string, jobBoundary:
 Focus: ${jobBoundary}
 ${CULTURE}
 
-You are reviewing files that already exist. Read the file listing and snippets. Do not assume they work. Do not invent passing test results.
+You are reviewing CURRENT shipped files (HTML/CSS/JS may be split across paths).
+Read every provided file. Markup in index.html + logic in app.js + styles in CSS together count as one app.
 
 Start your reply with exactly one of:
 Verdict: FAIL
 Verdict: PASS
 
-Then a punch list. Each item: severity (blocker/major/nit), where (path or selector), what is wrong, what “done” looks like.
+Then a punch list. Each item: severity (blocker/major/nit), where (real path or selector that exists or is missing), what is wrong, what “done” looks like.
+For every FAIL item you MUST quote a short snippet or name a missing selector/id that is absent from ALL shipped files — not “not evidenced in app.js” when it lives in HTML/CSS.
 
-Automatic FAIL if you see: a different product name or product type than the CEO goal; missing requested screens, controls, calculations, states, or visual constraints; invented portfolio/marketing/contact/footer sections; missing/broken image src; placeholder copy (John Doe, Project One, lorem); dead # links or javascript:void(0) on primary CTAs; inline onclick handlers; localStorage that overwrites a requested collection instead of appending to an array; a submit handler that hides the form; missing target=_blank rel=noopener noreferrer on external links; hardcoded secrets; or a requested form that cannot succeed in preview.
-Do not rewrite the product. If evidence is missing, FAIL and say what you could not verify.`;
+Evidence rules (strict — false FAILs waste CEO tokens):
+- Search HTML, CSS, and JS before claiming a feature is missing. HUD/forms/kanban/shop often live in HTML; behavior in JS.
+- PASS when acceptance criteria are substantially met in the combined files, even if polish is imperfect.
+- Theme/aesthetic gaps (“not cozy enough”, “not pixel-art enough”) are nits unless a primary screen is unusable — never a blocker alone.
+- localStorage that saves/loads a whole state object (JSON.stringify of game/app state) is OK. Do NOT FAIL for “overwrite instead of append” on a single save key — that is normal.
+- Prefer PASS with nits over FAIL when the CEO could use Preview for the core flows.
+
+Automatic FAIL only when clearly true across all files: wrong product name/type vs CEO goal; primary requested screen/control totally absent; portfolio/marketing template instead of the product; placeholder copy (John Doe, lorem); dead primary CTAs (# or javascript:void(0)); hardcoded secrets; form that cannot succeed in Preview.
+Do not rewrite the product. Do not invent missing features that are already in the shipped files.`;
 }
 
 export function parseNeededRoles(text: string, fallback: PositionKey[]): PositionKey[] {

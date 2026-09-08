@@ -178,6 +178,67 @@ export function formatShipReport(report: ShipReport): string {
   return `Automated ship check: ${report.passed ? "WARN" : "FAIL"}\n${lines.join("\n")}`;
 }
 
+/**
+ * Parse-check classic script bodies. Incomplete LLM emits (cut mid-template-string)
+ * otherwise ship to Preview as Uncaught SyntaxError and kill all interactivity.
+ */
+export function javascriptSyntaxError(source: string): string | null {
+  const trimmed = source.trim();
+  if (!trimmed) return null;
+  // Soften ESM keywords so we still catch truncation; Preview prefers classic scripts.
+  const probe = trimmed
+    .replace(/\bexport\s+default\s+/g, "")
+    .replace(/\bexport\s+(?:async\s+)?function\b/g, "function")
+    .replace(/\bexport\s+(?:const|let|var|class)\b/g, (m) => m.replace(/^export\s+/, ""))
+    .replace(/^\s*import\s+[^;]+;?\s*$/gm, "");
+  try {
+    // Function body parse — catches Unexpected end of input / unexpected token.
+    // eslint-disable-next-line no-new-func -- intentional syntax probe, never executed
+    new Function(probe);
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+}
+
+export function collectJavascriptSyntaxIssues(files: ProjectFile[]): ShipIssue[] {
+  const issues: ShipIssue[] = [];
+  for (const file of files) {
+    if (!/\.m?js$/i.test(file.path)) continue;
+    const err = javascriptSyntaxError(file.content);
+    if (!err) continue;
+    issues.push({
+      severity: "fail",
+      message:
+        `${file.path} has a JavaScript syntax error (${err}). ` +
+        `The file looks truncated or incomplete — Preview will throw Uncaught SyntaxError ` +
+        `and forms/buttons will not work (CSP may also block native form posts). ` +
+        `Re-emit the COMPLETE file in one \`\`\`file:${file.path} fence.`,
+    });
+  }
+  for (const file of files) {
+    if (!/\.html?$/i.test(file.path)) continue;
+    const inline = [
+      ...file.content.matchAll(
+        /<script\b(?![^>]*\bsrc\s*=)[^>]*>([\s\S]*?)<\/script>/gi,
+      ),
+    ];
+    for (const match of inline) {
+      const body = (match[1] ?? "").trim();
+      if (!body) continue;
+      const err = javascriptSyntaxError(body);
+      if (!err) continue;
+      issues.push({
+        severity: "fail",
+        message:
+          `${file.path} has an inline <script> syntax error (${err}). ` +
+          `Finish the script or move it to a complete .js file.`,
+      });
+    }
+  }
+  return issues;
+}
+
 /** Inspect emitted project files the way a preview user would. */
 export function evalShippedProject(
   files: ProjectFile[],
@@ -197,6 +258,8 @@ export function evalShippedProject(
       message: "No index.html (or other HTML) was emitted — preview will be empty.",
     });
   }
+
+  issues.push(...collectJavascriptSyntaxIssues(files));
 
   if (!backendOnly && html.length > 0 && ceoGoal.trim()) {
     if (isMismatchedMarketingHtml(htmlBlob, ceoGoal)) {

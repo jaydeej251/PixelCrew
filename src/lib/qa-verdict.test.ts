@@ -58,3 +58,44 @@ describe("QA title helpers", () => {
     assert.equal(isQaFixTitle(qaFixTitle(2)), true);
   });
 });
+
+describe("qaReworkRoundLimit", () => {
+  it("starts at 2 and grows with extension artifacts", async () => {
+    const { QA_MAX_REWORK_ROUNDS, QA_REWORK_EXTENDED_TITLE, qaReworkRoundLimit } =
+      await import("./qa-verdict");
+    assert.equal(qaReworkRoundLimit([]), QA_MAX_REWORK_ROUNDS);
+    assert.equal(
+      qaReworkRoundLimit([
+        { title: QA_REWORK_EXTENDED_TITLE, content: JSON.stringify({ extraRounds: 2 }) },
+      ]),
+      4,
+    );
+    assert.equal(
+      qaReworkRoundLimit([
+        { title: QA_REWORK_EXTENDED_TITLE, content: "{}" },
+        { title: QA_REWORK_EXTENDED_TITLE, content: JSON.stringify({ extraRounds: 2 }) },
+      ]),
+      6,
+    );
+  });
+});
+
+describe("honest QA recheck helpers", () => {
+  it("detects and clears pending honest recheck on extension artifacts", async () => {
+    const {
+      QA_REWORK_EXTENDED_TITLE,
+      hasPendingHonestQaRecheck,
+      markHonestQaRecheckConsumed,
+      isQaReviewTitle,
+      QA_HONEST_RECHECK_TITLE,
+    } = await import("./qa-verdict");
+    assert.equal(isQaReviewTitle(QA_HONEST_RECHECK_TITLE), true);
+    const pending = {
+      title: QA_REWORK_EXTENDED_TITLE,
+      content: JSON.stringify({ honestRecheckPending: true, extraRounds: 2 }),
+    };
+    assert.equal(hasPendingHonestQaRecheck([pending]), true);
+    const cleared = markHonestQaRecheckConsumed(pending.content);
+    assert.equal(hasPendingHonestQaRecheck([{ title: QA_REWORK_EXTENDED_TITLE, content: cleared }]), false);
+  });
+});

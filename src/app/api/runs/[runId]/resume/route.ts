@@ -7,6 +7,17 @@ import { prepareWorkspaceBrainsForRun } from "@/lib/run-setup";
 import { isResumable, prepareRunForResume, resumePhase } from "@/lib/run-resume";
 import { assertRunAccess, requireProductSession } from "@/lib/auth";
 import { apiErrorResponse } from "@/lib/api-error";
+import {
+  hasOpenSoftTokenGate,
+  TOKEN_HARD_GATE,
+  TOKEN_SPEND_CONFIRMED_TITLE,
+} from "@/lib/token-spend-gate";
+import {
+  countQaReworkRounds,
+  QA_MAX_REWORK_ROUNDS,
+  QA_REWORK_EXTENDED_TITLE,
+  qaReworkRoundLimit,
+} from "@/lib/qa-verdict";
 
 export async function POST(
   req: Request,
@@ -20,8 +31,8 @@ export async function POST(
     const run = await prisma.run.findUnique({
       where: { id: runId },
       include: {
-        tasks: { select: { status: true } },
-        artifacts: { select: { title: true } },
+        tasks: { select: { status: true, title: true } },
+        artifacts: { select: { title: true, content: true } },
       },
     });
     if (!run || run.archivedAt) {
@@ -45,12 +56,25 @@ export async function POST(
 
     let provider: ProviderType | undefined;
     let model: string | undefined;
+    let confirmTokenSpend = false;
     try {
       const body = await req.json();
       if (typeof body.provider === "string") provider = body.provider as ProviderType;
       if (typeof body.model === "string") model = body.model;
+      if (body.confirmTokenSpend === true) confirmTokenSpend = true;
     } catch {
       // empty body is fine — fall back to the workspace's current agent settings
+    }
+
+    if (hasOpenSoftTokenGate(run.artifacts) && !confirmTokenSpend) {
+      return NextResponse.json(
+        {
+          error:
+            "This chat passed the soft token gate. Confirm to continue spending, or start a new chat.",
+          tokenGate: "soft",
+        },
+        { status: 400 },
+      );
     }
 
     if (!provider) {
@@ -67,6 +91,40 @@ export async function POST(
       return NextResponse.json({ error: brains.error }, { status: 400 });
     }
 
+    if (confirmTokenSpend && hasOpenSoftTokenGate(run.artifacts)) {
+      await prisma.artifact.create({
+        data: {
+          runId,
+          type: "other",
+          title: TOKEN_SPEND_CONFIRMED_TITLE,
+          content: JSON.stringify({
+            confirmedThrough: TOKEN_HARD_GATE,
+            at: new Date().toISOString(),
+            tokensAtConfirm: run.totalTokens,
+          }),
+        },
+      });
+    }
+
+    // Resume after QA exhaust = CEO wants more fix rounds (not a token issue).
+    const usedRounds = countQaReworkRounds(run.tasks);
+    const roundLimit = qaReworkRoundLimit(run.artifacts);
+    if (usedRounds >= roundLimit) {
+      await prisma.artifact.create({
+        data: {
+          runId,
+          type: "other",
+          title: QA_REWORK_EXTENDED_TITLE,
+          content: JSON.stringify({
+            extraRounds: QA_MAX_REWORK_ROUNDS,
+            previousLimit: roundLimit,
+            honestRecheckPending: true,
+            at: new Date().toISOString(),
+          }),
+        },
+      });
+    }
+
     // Same run row — does not create a Run, so checkPlanLimits (runs/month) is not charged.
     await prepareRunForResume(runId, run.workspaceId, provider, model);
 
@@ -81,6 +139,7 @@ export async function POST(
       phase: resumePhase(run.artifacts),
       provider: brains.provider,
       model: brains.model,
+      qaReworkExtended: usedRounds >= roundLimit,
     });
   } catch (err) {
     return apiErrorResponse(err);

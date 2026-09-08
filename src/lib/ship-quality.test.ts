@@ -288,4 +288,33 @@ describe("evalShippedProject", () => {
     assert.ok(report.issues.some((i) => /CDN/i.test(i.message)));
     assert.ok(report.issues.some((i) => /type="module"/i.test(i.message)));
   });
+
+  it("fails truncated JavaScript that would break Preview interactivity", async () => {
+    const { javascriptSyntaxError, collectJavascriptSyntaxIssues } = await import(
+      "./ship-quality"
+    );
+    const truncated = `
+      function showPopup(msg) { document.getElementById("popup").textContent = msg; }
+      function complete() {
+        showPopup(\`+\${reward.xp} XP, +
+    `;
+    assert.match(javascriptSyntaxError(truncated) ?? "", /Unexpected end of input|Unexpected/i);
+    const report = evalShippedProject(
+      [
+        {
+          path: "index.html",
+          content: `<!doctype html><html><body>
+            <h1>TaskQuest adventure log with enough copy for ship content rules to pass here easily.</h1>
+            <form id="quest-form"><input name="title"><button type="submit">Add</button></form>
+            <script src="app.js"></script>
+          </body></html>`,
+        },
+        { path: "app.js", content: truncated },
+      ],
+      { ceoGoal: "TaskQuest" },
+    );
+    assert.equal(report.passed, false);
+    assert.ok(report.issues.some((i) => /syntax error/i.test(i.message)));
+    assert.ok(collectJavascriptSyntaxIssues([{ path: "app.js", content: "const x = 1;" }]).length === 0);
+  });
 });
