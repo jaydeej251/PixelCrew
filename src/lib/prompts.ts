@@ -2,8 +2,14 @@ import { POSITIONS, type PositionKey } from "./constants";
 import { ENGINEER_POSITIONS } from "./roster";
 import {
   followUpFixSystemPrompt,
+  followUpQaSystemPrompt,
   isFollowUpImplementTitle,
 } from "./follow-up-goal";
+import {
+  isAppLogicTitle,
+  isUiShellTitle,
+  UI_DESIGN_BAR,
+} from "./ui-build-pipeline";
 
 export const CULTURE = `This is an AI company. The CEO's goal must be realized.
 Never say this is not your job. Never reply with only HANDOFF.
@@ -62,9 +68,46 @@ export const STATIC_SHIP_BAR = `v1 engineering bar:
 - After any submit: preventDefault and show dedicated in-page feedback. Do not hide the form. Do not use alert() as the only feedback.
 - External links, when requested: target="_blank" rel="noopener noreferrer".
 - Asset paths are relative only (styles.css, ./app.js). Never href="/..." or src="/...".
-- No CDN scripts/styles/fonts and no type="module" — classic <script src="app.js"> only.
+- No CDN scripts/styles/fonts and no type="module" — classic <script src="app.js"> only. Prefer local utilities.css (PixelCrew Tailwind-lite) over inventing a huge theme; never use cdn.tailwindcss.com.
+- Do not add SortableJS, jQuery, or other vendor libs (no sortable.min.js). Use native drag-and-drop or buttons. Emit every file that index.html links to in the same reply.
 - Primary controls must work in PixelCrew Preview and after ZIP unzip (click, type, navigate, persist). Dead buttons or blank screens = failed ship.
-- Never ship a PixelCrew / ColorVision / NeuralArt marketing portfolio unless the CEO goal literally asks for that. Title and h1 must match the CEO product name.`;
+- Never ship a PixelCrew / ColorVision / NeuralArt marketing portfolio unless the CEO goal literally asks for that. Title and h1 must match the CEO product name.
+${UI_DESIGN_BAR}`;
+
+export function uiShellSystemPrompt(name: string, positionLabel: string): string {
+  return `You are ${name}, ${positionLabel}, building the UI SHELL only (stage 1 of 2).
+${CULTURE}
+
+This pass is HTML + CSS chrome — NOT the full math/state engine.
+
+Emit:
+- index.html — full semantic layout matching the CEO product (sidebars, workspace, panels, toolbars, node cards as HTML). Link \`utilities.css\` then \`styles.css\`.
+- utilities.css — optional to re-emit; the run may already provide the local Tailwind-lite pack. Prefer using its classes.
+- styles.css — ONLY app-specific rules (keep short).
+- app.js — stub only (e.g. console.log or empty DOMContentLoaded). Logic stage fills behavior.
+
+Rules:
+- Do NOT cram graph math, persistence, or cable algorithms into this pass.
+- Nodes/tools are HTML cards with sockets — not only shapes drawn on canvas.
+- Still put <canvas id="canvas"> (or <svg>) inside #workspace / <main> for the drawable surface.
+- Link styles.css and app.js with relative paths. Emit every linked file.
+${STATIC_SHIP_BAR}`;
+}
+
+export function appLogicSystemPrompt(name: string, positionLabel: string): string {
+  return `You are ${name}, ${positionLabel}, adding APP LOGIC onto an existing UI shell (stage 2 of 2).
+${CULTURE}
+
+You receive CURRENT shipped HTML/CSS (and any stub JS). Wire real behavior without destroying the chrome.
+
+Emit ONLY changed files as complete \`\`\`file:path fences (usually app.js; update HTML/CSS only if sockets/ids must change).
+
+Rules:
+- Preserve the 3-pane / card layout from the shell. Do not replace it with a bare canvas MVP.
+- Implement interactions, state, localStorage, and canvas/SVG cables as needed.
+- Keep addEventListener bindings. No CDN. No type="module".
+${STATIC_SHIP_BAR}`;
+}
 
 /** Short stack reminder for planning/synth — not the full engineer ship checklist. */
 export const STATIC_V1_LINE =
@@ -151,13 +194,73 @@ ${CULTURE}
 
 You receive the CURRENT shipped files and a QA punch list.
 Rules:
+- Your ENTIRE reply must be one or more complete \`\`\`file:path fences. Start with a fence — not a title, stack table, or brainstorm.
+- FORBIDDEN: architecture essays, "High-Level Stack" tables, council brainstorms, re-planning the product, Markdown design docs.
 - Emit ONLY files you must change. Each changed file is one complete \`\`\`file:path fence (full content for that path).
 - Do NOT re-emit unchanged files. Do NOT rebuild the whole app from scratch.
 - Prefer the smallest change that clears each blocker/major on the punch list.
+- If ANY punch item mentions app.js, listeners, handlers, drag, sockets, localStorage, or "UI shell ready", you MUST emit a complete working \`\`\`file:app.js fence — HTML/CSS-only patches are NOT enough.
+- Do NOT leave app.js as a shell stub (e.g. only console.log("UI shell ready")). That is an automatic fail on recheck.
 - Keep the existing product name, working behavior, and structure unless the punch list requires otherwise.
 - Static HTML/CSS/JS only. No Tailwind CDN, no type="module", no secrets.
 - If a punch item needs a missing feature, add the minimum markup/JS/CSS for that feature into the existing files — do not start a new template.
 ${STATIC_SHIP_BAR}`;
+}
+
+/**
+ * When shipped app.js is a shell stub, "smallest surgical tweak" cannot clear a
+ * PixelFlow-sized punch list — force a full working script rewrite.
+ */
+export function qaFixFullAppJsSystemPrompt(name: string, positionLabel: string): string {
+  return `You are ${name}, ${positionLabel}. Shipped app.js is a UI-shell stub (or missing). Surgical CSS/HTML tweaks will NOT pass QA.
+${CULTURE}
+
+Your job this turn: emit a COMPLETE working \`\`\`file:app.js that implements the QA punch list against the CURRENT HTML ids/classes.
+Rules:
+- Start your reply with \`\`\`file:app.js — no brainstorm, no stack table, no architecture essay.
+- Wire real addEventListener handlers for every punch item (add/remove node, drag, sockets/connections, evaluation, localStorage load/save, export/copy/close modal, etc.).
+- Read the CURRENT shipped HTML in context and bind to those exact ids/classes — do not invent a new product.
+- You may also emit small HTML/CSS fixes if an id the punch list needs is missing — but app.js is mandatory and must not be a stub.
+- Static classic script only (no type="module", no CDN). Keep the file parseable and complete.
+${STATIC_SHIP_BAR}`;
+}
+
+/** Punch lists that are really about broken/missing JS behavior. */
+export function punchListRequiresAppJs(punch: string): boolean {
+  return /\b(app\.js|addEventListener|listener|handler|mousedown|mousemove|socket|localStorage|UI shell ready|shell stub|drag|connect|evaluat)/i.test(
+    punch,
+  );
+}
+
+export function isShellStubAppJs(content: string): boolean {
+  const trimmed = content.trim();
+  if (trimmed.length < 120) return true;
+  return (
+    /UI shell ready/i.test(trimmed) &&
+    !/\baddEventListener\b/.test(trimmed) &&
+    trimmed.length < 400
+  );
+}
+
+/** Task / punch text that demands a full app.js rewrite (not a one-line tweak). */
+export function qaFixRequiresFullAppJs(text: string): boolean {
+  return (
+    /CRITICAL:\s*shipped app\.js is a UI-shell stub/i.test(text) ||
+    /FULL working \`\`\`file:app\.js/i.test(text) ||
+    /rewrite app\.js fully/i.test(text)
+  );
+}
+
+/** Model burned tokens on a council-style redesign instead of file fences. */
+export function looksLikeArchitectureBrainstorm(text: string): boolean {
+  const t = text.slice(0, 2_500);
+  if (/```file:/i.test(text)) return false;
+  return (
+    /\b(High-?Level Stack|Technical Brainstorm|hand-?off to the implementation|Quick-?look for the Council)\b/i.test(
+      t,
+    ) ||
+    (/\b(Layer\s*\|\s*Tech\s*\|\s*Why)\b/i.test(t) && /\b(architecture|stack)\b/i.test(t))
+  );
 }
 
 export function workerSystemPrompt(
@@ -166,26 +269,42 @@ export function workerSystemPrompt(
   jobBoundary: string,
   position?: string,
   taskTitle?: string,
+  opts?: { followUpQa?: boolean; qaFixFullAppJs?: boolean },
 ): string {
   const isQaFix = Boolean(taskTitle) && /^Fix QA punch list\b/i.test(taskTitle!);
   const isFollowUpFix = Boolean(taskTitle) && isFollowUpImplementTitle(taskTitle!);
+  const isShell = Boolean(taskTitle) && isUiShellTitle(taskTitle!);
+  const isLogic = Boolean(taskTitle) && isAppLogicTitle(taskTitle!);
   const isImplement = Boolean(taskTitle) && /^Implement\b/i.test(taskTitle!);
   const isEngineerSeat =
     position &&
     ENGINEER_POSITIONS.includes(position as (typeof ENGINEER_POSITIONS)[number]);
   const seniorBuilding =
-    position === "tech_architect" && (isImplement || isQaFix || isFollowUpFix);
+    position === "tech_architect" &&
+    (isImplement || isQaFix || isFollowUpFix || isShell || isLogic);
 
+  if (isShell && (isEngineerSeat || position === "tech_architect")) {
+    return uiShellSystemPrompt(name, positionLabel);
+  }
+  if (isLogic && (isEngineerSeat || position === "tech_architect")) {
+    return appLogicSystemPrompt(name, positionLabel);
+  }
   if (isFollowUpFix && (isEngineerSeat || position === "tech_architect")) {
     return followUpFixSystemPrompt(name, positionLabel);
   }
   if (isQaFix && (isEngineerSeat || position === "tech_architect")) {
+    if (opts?.qaFixFullAppJs) {
+      return qaFixFullAppJsSystemPrompt(name, positionLabel);
+    }
     return qaFixSystemPrompt(name, positionLabel);
   }
   if (isEngineerSeat || seniorBuilding) {
     return engineerSystemPrompt(name, positionLabel, jobBoundary);
   }
   if (position === "qa_engineer") {
+    if (opts?.followUpQa) {
+      return followUpQaSystemPrompt(name, positionLabel);
+    }
     return qaSystemPrompt(name, positionLabel, jobBoundary);
   }
   return `You are ${name}, a ${positionLabel}.

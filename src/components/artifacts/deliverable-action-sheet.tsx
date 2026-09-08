@@ -18,6 +18,9 @@ type DeliverableActionSheetProps = {
   onStart: (goalText: string) => void;
   busy?: boolean;
   error?: string;
+  /** Empty-roster gate — Start will auto-hire with this brain. */
+  autoHireConfirm?: { providerLabel: string; model: string } | null;
+  onDismissAutoHire?: () => void;
   canStart?: boolean;
   canStartReason?: string | null;
   usageBlockedReason?: string | null;
@@ -33,6 +36,8 @@ export function DeliverableActionSheet({
   onStart,
   busy = false,
   error = "",
+  autoHireConfirm = null,
+  onDismissAutoHire,
   canStart = true,
   canStartReason = null,
   usageBlockedReason = null,
@@ -44,7 +49,11 @@ export function DeliverableActionSheet({
 
   const isFollowUp = mode === "follow-up";
   const title = isFollowUp ? "Request changes" : "Restart with a new brief";
-  const submitLabel = isFollowUp ? "Start changes" : "Start redesign";
+  const submitLabel = autoHireConfirm
+    ? "Confirm & start"
+    : isFollowUp
+      ? "Apply on this chat"
+      : "Start redesign";
   const placeholder = isFollowUp
     ? "What should change? e.g. fix inventory drawer — keep everything else the same…"
     : "Rewrite what you want to build…";
@@ -101,7 +110,7 @@ export function DeliverableActionSheet({
             </h2>
             <p className="mt-1 text-[13px] leading-relaxed text-zinc-400">
               {isFollowUp
-                ? "Your current app stays until you start. Start opens a new chat that patches only what you ask (copies your current files) and uses one monthly run."
+                ? "Patches this chat’s current app in place (like Claude Code). Does not open a new chat and does not use another monthly run."
                 : "Your current app stays until you start. Redesign opens a new chat and uses one monthly run."}
             </p>
           </div>
@@ -146,6 +155,27 @@ export function DeliverableActionSheet({
             />
           </label>
 
+          {autoHireConfirm && (
+            <div className="rounded-xl border border-amber-800/60 bg-amber-950/40 px-3 py-2">
+              <p className="text-sm font-medium text-amber-50">Confirm auto-hire</p>
+              <p className="mt-1 text-[13px] leading-relaxed text-amber-100/90">
+                Your team is empty. We’ll hire a starter crew with{" "}
+                {autoHireConfirm.providerLabel} ({autoHireConfirm.model}) — the AI from Which
+                AI to use.
+              </p>
+              {onDismissAutoHire && (
+                <button
+                  type="button"
+                  className="mt-2 text-[12px] text-amber-200/80 underline underline-offset-2 hover:text-amber-100"
+                  disabled={busy}
+                  onClick={onDismissAutoHire}
+                >
+                  Cancel confirm
+                </button>
+              )}
+            </div>
+          )}
+
           {blockedReason && (
             <p className="text-[12px] text-amber-400/90">
               {blockedReason}{" "}
@@ -161,7 +191,7 @@ export function DeliverableActionSheet({
             </p>
           )}
 
-          {error && <p className="text-[12px] text-red-300">{error}</p>}
+          {error && !autoHireConfirm && <p className="text-[12px] text-red-300">{error}</p>}
         </div>
 
         <div className="flex shrink-0 items-center justify-between gap-2 border-t border-zinc-800 px-4 py-3">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { OfficeViewport } from "@/components/office/office-viewport";
 import { InspectorDrawer } from "@/components/office/inspector-drawer";
@@ -26,6 +26,16 @@ import {
 } from "@/components/layout/welcome-panel";
 import { DashboardSkeleton } from "@/components/layout/dashboard-skeleton";
 import { ActivityFeed } from "@/components/office/activity-feed";
+import {
+  ResizableHudCard,
+  RUN_ACTIVITY_HEIGHT_KEY,
+} from "@/components/office/resizable-hud-card";
+import { ScrollHudCard } from "@/components/office/scroll-hud-card";
+import {
+  summarizeBuilt,
+  summarizeFilesUpdated,
+  summarizePrompt,
+} from "@/lib/run-completion-summary";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -58,6 +68,8 @@ import {
   type TileEdge,
 } from "@/lib/office-blueprint";
 import { CHANGES_I_WANT_MARKER } from "@/lib/follow-up-goal";
+import { providerDisplayLabel } from "@/lib/run-brain";
+import { readResponseJson } from "@/lib/http-json";
 
 /** Strip nested follow-up suffixes so Request changes stays on the original brief. */
 function baseGoalFromRunGoal(goal: string): string {
@@ -157,6 +169,11 @@ export function Dashboard() {
   const [runModel, setRunModel] = useState("mock");
   const [runError, setRunError] = useState("");
   const [tokenSpendGate, setTokenSpendGate] = useState<"soft" | "hard" | null>(null);
+  const [autoHireConfirm, setAutoHireConfirm] = useState<{
+    provider: string;
+    model: string;
+    providerLabel: string;
+  } | null>(null);
   const [awaitingPlan, setAwaitingPlan] = useState(false);
   const [runOutcome, setRunOutcome] = useState<
     "idle" | "running" | "paused" | "completed" | "failed"
@@ -178,19 +195,37 @@ export function Dashboard() {
   const hydratedLlmRef = useRef(false);
   const workspaceId = data?.workspace.id;
 
-  const persistRunLlm = (id: string, provider: string, model: string) => {
+  const promptSummary = useMemo(() => summarizePrompt(ceoGoal), [ceoGoal]);
+  const builtSummary = useMemo(
+    () => summarizeBuilt(artifacts, ceoGoal),
+    [artifacts, ceoGoal],
+  );
+  const filesUpdatedSummary = useMemo(
+    () => summarizeFilesUpdated(artifacts),
+    [artifacts],
+  );
+
+  const persistRunLlm = useCallback((id: string, provider: string, model: string) => {
     writeRunLlmPreference(id, provider, model);
-  };
+  }, []);
 
-  const handleRunProviderChange = (provider: string) => {
-    setRunProvider(provider);
-    if (workspaceId) persistRunLlm(workspaceId, provider, runModel);
-  };
+  const handleRunProviderChange = useCallback(
+    (provider: string) => {
+      setRunProvider(provider);
+      setAutoHireConfirm(null);
+      if (workspaceId) persistRunLlm(workspaceId, provider, runModel);
+    },
+    [workspaceId, runModel, persistRunLlm],
+  );
 
-  const handleRunModelChange = (model: string) => {
-    setRunModel(model);
-    if (workspaceId) persistRunLlm(workspaceId, runProvider, model);
-  };
+  const handleRunModelChange = useCallback(
+    (model: string) => {
+      setRunModel(model);
+      setAutoHireConfirm(null);
+      if (workspaceId) persistRunLlm(workspaceId, runProvider, model);
+    },
+    [workspaceId, runProvider, persistRunLlm],
+  );
 
   // Exit arrange mode when plan review opens (adjust during render — not in an effect).
   if (awaitingPlan && editingOffice) {
@@ -393,6 +428,7 @@ export function Dashboard() {
     if (deliverableSheetBusy) return;
     setDeliverableAction(null);
     setDeliverableSheetError("");
+    setAutoHireConfirm(null);
   }, [deliverableSheetBusy]);
 
   const startFollowUpChat = useCallback(() => {
@@ -648,6 +684,7 @@ export function Dashboard() {
     setDeliverableAction(null);
     setDeliverableSheetBusy(false);
     setDeliverableSheetError("");
+    setAutoHireConfirm(null);
     setRunId(createdRunId);
     setStoredActiveRunId(createdRunId);
     setMobilePane("work");
@@ -689,7 +726,7 @@ export function Dashboard() {
     }
   };
 
-  const startRun = async () => {
+  const startRun = async (confirmAutoHire = false) => {
     if (!data) return;
     if (data.usage && !data.usage.canRun) {
       setRunError(
@@ -714,6 +751,7 @@ export function Dashboard() {
     setAwaitingPlan(false);
     setRunOutcome("running");
     setRunError("");
+    if (!confirmAutoHire) setAutoHireConfirm(null);
     setEvents([]);
     setStreamByAgent({});
     seenEventIdsRef.current.clear();
@@ -725,17 +763,32 @@ export function Dashboard() {
         ceoGoal: goalForRun,
         provider: runProvider,
         model: runModel,
+        ...(confirmAutoHire ? { confirmAutoHire: true } : {}),
       }),
     });
-    const json = await res.json();
+    const json = await readResponseJson<{
+      error?: string;
+      runId?: string;
+      provider?: string;
+      model?: string;
+      needsAutoHireConfirm?: boolean;
+      autoHire?: { provider: string; model: string; providerLabel: string };
+    }>(res);
     if (!res.ok) {
       floorBusyRef.current = false;
-      setRunError(json.error ?? "Couldn’t start. Check settings and try again.");
       setRunning(false);
       setRunOutcome("idle");
+      if (json.needsAutoHireConfirm && json.autoHire) {
+        setAutoHireConfirm(json.autoHire);
+        setRunError("");
+      } else {
+        setAutoHireConfirm(null);
+        setRunError(json.error ?? "Couldn’t start. Check settings and try again.");
+      }
       void load();
       return;
     }
+    setAutoHireConfirm(null);
     if (typeof json.provider === "string" && json.provider) {
       setRunProvider(json.provider);
     }
@@ -750,8 +803,80 @@ export function Dashboard() {
     await beginCreatedRun(json.runId as string, goalForRun);
   };
 
-  const startFromDeliverableSheet = async (draftText: string) => {
+  const startFromDeliverableSheet = async (
+    draftText: string,
+    confirmAutoHire = false,
+  ) => {
     if (!data || !deliverableAction) return;
+    if (!draftText.trim()) {
+      setDeliverableSheetError(
+        deliverableAction === "follow-up"
+          ? "Describe the changes you want, then Start."
+          : "Enter what you want to build, then Start.",
+      );
+      return;
+    }
+
+    // Request changes = same chat (Claude Code style). Does NOT use a monthly run.
+    if (deliverableAction === "follow-up") {
+      if (!runId) {
+        setDeliverableSheetError("Open a finished chat first, then request changes.");
+        return;
+      }
+      if (!runReady) {
+        setDeliverableSheetError(runReadyReason ?? "Finish the checklist before starting.");
+        setSettingsOpen(true);
+        return;
+      }
+      setDeliverableSheetBusy(true);
+      setDeliverableSheetError("");
+      const res = await fetch(`/api/runs/${runId}/iterate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          changes: draftText.trim(),
+          provider: runProvider,
+          model: runModel,
+          ...(tokenSpendGate === "soft" ? { confirmTokenSpend: true } : {}),
+        }),
+      });
+      const json = await readResponseJson<{
+        error?: string;
+        runId?: string;
+        ceoGoal?: string;
+        provider?: string;
+        model?: string;
+        tokenGate?: "soft" | "hard";
+      }>(res);
+      if (!res.ok) {
+        setDeliverableSheetBusy(false);
+        if (json.tokenGate === "soft") setTokenSpendGate("soft");
+        setDeliverableSheetError(json.error ?? "Couldn’t apply changes. Try again.");
+        void load();
+        return;
+      }
+      setDeliverableAction(null);
+      setDeliverableSheetBusy(false);
+      setDeliverableSheetError("");
+      if (typeof json.ceoGoal === "string" && json.ceoGoal) setCeoGoal(json.ceoGoal);
+      if (typeof json.provider === "string" && json.provider) setRunProvider(json.provider);
+      if (typeof json.model === "string" && json.model) setRunModel(json.model);
+      floorBusyRef.current = true;
+      force3D();
+      setRunning(true);
+      setAwaitingPlan(false);
+      setRunOutcome("running");
+      setRunError("");
+      setTokenSpendGate(null);
+      setEvents([]);
+      setStreamByAgent({});
+      seenEventIdsRef.current.clear();
+      subscribeToRun(runId);
+      void load();
+      void loadConversations();
+      return;
+    }
+
     if (data.usage && !data.usage.canRun) {
       setDeliverableSheetError(
         data.usage.reason ??
@@ -764,22 +889,11 @@ export function Dashboard() {
       setSettingsOpen(true);
       return;
     }
-    const prior = baseGoalFromRunGoal(ceoGoal);
-    const goalForRun =
-      deliverableAction === "follow-up"
-        ? `${prior}${CHANGES_I_WANT_MARKER}${draftText.trim()}`
-        : draftText.trim();
-    if (!draftText.trim()) {
-      setDeliverableSheetError(
-        deliverableAction === "follow-up"
-          ? "Describe the changes you want, then Start."
-          : "Enter what you want to build, then Start.",
-      );
-      return;
-    }
+    const goalForRun = draftText.trim();
 
     setDeliverableSheetBusy(true);
     setDeliverableSheetError("");
+    if (!confirmAutoHire) setAutoHireConfirm(null);
     const res = await fetch("/api/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -788,16 +902,30 @@ export function Dashboard() {
         ceoGoal: goalForRun,
         provider: runProvider,
         model: runModel,
-        ...(deliverableAction === "follow-up" && runId ? { parentRunId: runId } : {}),
+        ...(confirmAutoHire ? { confirmAutoHire: true } : {}),
       }),
     });
-    const json = await res.json();
+    const json = await readResponseJson<{
+      error?: string;
+      runId?: string;
+      provider?: string;
+      model?: string;
+      needsAutoHireConfirm?: boolean;
+      autoHire?: { provider: string; model: string; providerLabel: string };
+    }>(res);
     if (!res.ok) {
       setDeliverableSheetBusy(false);
-      setDeliverableSheetError(json.error ?? "Couldn’t start. Check settings and try again.");
+      if (json.needsAutoHireConfirm && json.autoHire) {
+        setAutoHireConfirm(json.autoHire);
+        setDeliverableSheetError(json.error ?? "");
+      } else {
+        setAutoHireConfirm(null);
+        setDeliverableSheetError(json.error ?? "Couldn’t start. Check settings and try again.");
+      }
       void load();
       return;
     }
+    setAutoHireConfirm(null);
     if (typeof json.provider === "string" && json.provider) {
       setRunProvider(json.provider);
     }
@@ -1113,174 +1241,291 @@ export function Dashboard() {
             <div>
             {shiftBanner && <p className="office-work-banner">{shiftBanner}</p>}
             <div className="flex items-start justify-between gap-3">
-              <div className="pointer-events-auto max-w-sm space-y-2">
-                {runId && ceoGoal && runOutcome !== "completed" && runOutcome !== "failed" && (
-                  <div className="rounded-xl border border-zinc-800/80 bg-zinc-950/80 px-3 py-2 backdrop-blur-md">
-                    <p className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
-                      You asked
-                    </p>
-                    <p className="line-clamp-2 text-sm text-zinc-100">{ceoGoal}</p>
-                  </div>
-                )}
-                {runError && !(runOutcome === "failed" && !running) && (
-                  <Alert variant="error">{runError}</Alert>
-                )}
-                {runOutcome === "failed" && runId && !running && tokenSpendGate === "soft" && (
-                  <Alert variant="warning">
-                    <p className="font-medium text-amber-50">Token spend check</p>
-                    <p className="mt-1 text-sm text-amber-100/90">
-                      This chat has used about{" "}
-                      {runStats.totalTokens.toLocaleString() || TOKEN_SOFT_GATE.toLocaleString()}{" "}
-                      tokens on your API keys. Continue? Next hard stop is{" "}
-                      {TOKEN_HARD_GATE.toLocaleString()} tokens.
-                    </p>
-                    {hasPreviewableApp(artifacts, ceoGoal) && (
-                      <RunDeliverableActions
-                        runId={runId}
-                        artifacts={artifacts}
-                        ceoGoal={ceoGoal}
-                        runFinished
-                        variant="hud"
-                        onRequestChanges={startFollowUpChat}
-                        onRestart={startRedesignChat}
-                      />
-                    )}
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        variant="primary"
-                        className="!h-8 !px-3"
-                        onClick={() => void resumeRun(true)}
+              {runId ? (
+              <div className="pointer-events-auto flex max-w-sm flex-col gap-2">
+                {runOutcome === "completed" ? (
+                  <>
+                    {/* 1) Ready — primary CTA, fixed (not scroll/resize) */}
+                    <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/90 px-3 py-2 shadow-lg backdrop-blur-md">
+                      <Alert
+                        variant="success"
+                        className="overflow-visible border-0 bg-transparent p-0 ring-0"
                       >
-                        Continue spending
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        className="!h-8 !px-3"
-                        onClick={startRedesignChat}
-                      >
-                        New chat instead
-                      </Button>
+                        <p className="font-medium text-emerald-50">Your app is ready</p>
+                        <RunDeliverableActions
+                          runId={runId}
+                          artifacts={artifacts}
+                          ceoGoal={ceoGoal}
+                          runFinished
+                          variant="hud"
+                          onRequestChanges={startFollowUpChat}
+                          onRestart={startRedesignChat}
+                        />
+                      </Alert>
                     </div>
-                    <p className="mt-2 text-[11px] text-zinc-500">
-                      Continue stays on this chat and does not use another monthly run. Preview keeps
-                      what was already built.
-                    </p>
-                  </Alert>
-                )}
-                {runOutcome === "failed" && runId && !running && tokenSpendGate === "hard" && (
-                  <Alert variant="error">
-                    <p className="font-medium">Token spend limit reached</p>
-                    <p className="mt-1 text-sm">
-                      This chat hit {TOKEN_HARD_GATE.toLocaleString()} tokens (used{" "}
-                      {runStats.totalTokens.toLocaleString()}). Remaining work was not started.
-                    </p>
-                    {hasPreviewableApp(artifacts, ceoGoal) && (
-                      <RunDeliverableActions
-                        runId={runId}
-                        artifacts={artifacts}
-                        ceoGoal={ceoGoal}
-                        runFinished
-                        variant="hud"
-                        onRequestChanges={startFollowUpChat}
-                        onRestart={startRedesignChat}
-                      />
+
+                    {/* 2) Prompt — scrollable, not resizable */}
+                    <ScrollHudCard title="Your prompt" maxHeightCss="min(28vh, 240px)">
+                      <p className="text-sm text-zinc-100 whitespace-pre-wrap">
+                        {promptSummary.body}
+                      </p>
+                      {promptSummary.isFollowUp && promptSummary.changes ? (
+                        <div className="mt-2 border-t border-zinc-800 pt-2">
+                          <p className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+                            Changes you asked for
+                          </p>
+                          <p className="mt-0.5 whitespace-pre-wrap text-sm text-zinc-300">
+                            {promptSummary.changes}
+                          </p>
+                        </div>
+                      ) : null}
+                    </ScrollHudCard>
+
+                    {/* 3) Ask vs built checklist — scrollable, not resizable */}
+                    <ScrollHudCard title="What was built" maxHeightCss="min(36vh, 320px)">
+                      <p className="text-sm font-medium text-zinc-100">
+                        {builtSummary.headline}
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-zinc-500">
+                        {builtSummary.confirmedByQa
+                          ? "Confirmed by QA against the shipped files"
+                          : "Checked against your prompt in the shipped app"}
+                      </p>
+                      {promptSummary.isFollowUp ? (
+                        <div className="mt-2 rounded-md border border-zinc-800 bg-zinc-950/50 px-2 py-1.5">
+                          <p className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+                            Files updated this Request changes
+                          </p>
+                          {filesUpdatedSummary.empty ? (
+                            <p className="mt-0.5 text-sm text-amber-200/90">
+                              No files updated.
+                            </p>
+                          ) : (
+                            <ul className="mt-0.5 list-inside list-disc text-sm text-zinc-300">
+                              {filesUpdatedSummary.paths.map((path) => (
+                                <li key={path} className="font-mono text-xs">
+                                  {path}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      ) : null}
+                      {builtSummary.items.length === 0 ? (
+                        <p className="mt-2 text-sm text-zinc-400">
+                          No clear requirements to check yet.
+                        </p>
+                      ) : (
+                        <ul className="mt-2 space-y-2">
+                          {builtSummary.items.map((item) => {
+                            const mark =
+                              item.status === "met"
+                                ? {
+                                    icon: "✓",
+                                    tone: "text-emerald-400",
+                                    label: "Confirmed",
+                                  }
+                                : item.status === "missing"
+                                  ? {
+                                      icon: "✗",
+                                      tone: "text-rose-400",
+                                      label: "Not confirmed",
+                                    }
+                                  : {
+                                      icon: "✗",
+                                      tone: "text-rose-400",
+                                      label: "Not confirmed",
+                                    };
+                            return (
+                              <li
+                                key={item.id}
+                                className="flex gap-2 text-sm leading-snug text-zinc-200"
+                              >
+                                <span
+                                  className={`mt-0.5 w-4 shrink-0 text-center font-semibold ${mark.tone}`}
+                                  title={mark.label}
+                                  aria-label={mark.label}
+                                >
+                                  {mark.icon}
+                                </span>
+                                <span>{item.label}</span>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </ScrollHudCard>
+                  </>
+                ) : (
+                  <>
+                    {ceoGoal && runOutcome !== "failed" && (
+                      <ScrollHudCard title="You asked" maxHeightCss="min(22vh, 180px)">
+                        <p className="whitespace-pre-wrap text-sm text-zinc-100">{ceoGoal}</p>
+                      </ScrollHudCard>
                     )}
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        variant="primary"
-                        className="!h-8 !px-3"
-                        onClick={startRedesignChat}
-                      >
-                        Start a new chat
-                      </Button>
-                    </div>
-                    <p className="mt-2 text-[11px] text-zinc-500">
-                      BYOK safeguard — similar to Claude Code budget caps. Narrow the goal or keep
-                      iterating in a fresh chat. Files already written stay available above.
-                    </p>
-                  </Alert>
-                )}
-                {runOutcome === "failed" && runId && !running && !tokenSpendGate && (
-                  <Alert
-                    variant={
-                      isQaReworkExhaustedMessage(runError) ||
-                      hasPreviewableApp(artifacts, ceoGoal)
-                        ? "warning"
-                        : "error"
-                    }
-                  >
-                    <p className="font-medium">
-                      {isQaReworkExhaustedMessage(runError)
-                        ? "QA did not pass — your app is still here"
-                        : hasPreviewableApp(artifacts, ceoGoal)
-                          ? "Run stopped — your files are still here"
-                          : "The team stopped"}
-                    </p>
-                    <p className="mt-1 text-sm">
-                      {runError.trim() ||
-                        "Something went wrong before the team finished."}
-                    </p>
-                    {(isQaReworkExhaustedMessage(runError) ||
-                      hasPreviewableApp(artifacts, ceoGoal)) && (
-                      <RunDeliverableActions
-                        runId={runId}
-                        artifacts={artifacts}
-                        ceoGoal={ceoGoal}
-                        runFinished
-                        variant="hud"
-                        onRequestChanges={startFollowUpChat}
-                        onRestart={startRedesignChat}
-                      />
+
+                    {runError && !(runOutcome === "failed" && !running) && (
+                      <Alert variant="error">{runError}</Alert>
                     )}
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        variant="primary"
-                        className="!h-8 !px-3"
-                        onClick={() => void resumeRun()}
+                    {runOutcome === "failed" && !running && tokenSpendGate === "soft" && (
+                      <Alert variant="warning">
+                        <p className="font-medium text-amber-50">Token spend check</p>
+                        <p className="mt-1 text-sm text-amber-100/90">
+                          This chat has used about{" "}
+                          {runStats.totalTokens.toLocaleString() ||
+                            TOKEN_SOFT_GATE.toLocaleString()}{" "}
+                          tokens on your API keys. Continue? Next hard stop is{" "}
+                          {TOKEN_HARD_GATE.toLocaleString()} tokens.
+                        </p>
+                        {hasPreviewableApp(artifacts, ceoGoal) && (
+                          <RunDeliverableActions
+                            runId={runId}
+                            artifacts={artifacts}
+                            ceoGoal={ceoGoal}
+                            runFinished
+                            variant="hud"
+                            onRequestChanges={startFollowUpChat}
+                            onRestart={startRedesignChat}
+                          />
+                        )}
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            variant="primary"
+                            className="!h-8 !px-3"
+                            onClick={() => void resumeRun(true)}
+                          >
+                            Continue spending
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="!h-8 !px-3"
+                            onClick={startRedesignChat}
+                          >
+                            New chat instead
+                          </Button>
+                        </div>
+                        <p className="mt-2 text-[11px] text-zinc-500">
+                          Continue stays on this chat and does not use another monthly run. Preview
+                          keeps what was already built.
+                        </p>
+                      </Alert>
+                    )}
+                    {runOutcome === "failed" && !running && tokenSpendGate === "hard" && (
+                      <Alert variant="error">
+                        <p className="font-medium">Token spend limit reached</p>
+                        <p className="mt-1 text-sm">
+                          This chat hit {TOKEN_HARD_GATE.toLocaleString()} tokens (used{" "}
+                          {runStats.totalTokens.toLocaleString()}). Remaining work was not started.
+                        </p>
+                        {hasPreviewableApp(artifacts, ceoGoal) && (
+                          <RunDeliverableActions
+                            runId={runId}
+                            artifacts={artifacts}
+                            ceoGoal={ceoGoal}
+                            runFinished
+                            variant="hud"
+                            onRequestChanges={startFollowUpChat}
+                            onRestart={startRedesignChat}
+                          />
+                        )}
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            variant="primary"
+                            className="!h-8 !px-3"
+                            onClick={startRedesignChat}
+                          >
+                            Start a new chat
+                          </Button>
+                        </div>
+                        <p className="mt-2 text-[11px] text-zinc-500">
+                          BYOK safeguard — similar to Claude Code budget caps. Narrow the goal or keep
+                          iterating in a fresh chat. Files already written stay available above.
+                        </p>
+                      </Alert>
+                    )}
+                    {runOutcome === "failed" && !running && !tokenSpendGate && (
+                      <Alert
+                        variant={
+                          isQaReworkExhaustedMessage(runError) ||
+                          hasPreviewableApp(artifacts, ceoGoal)
+                            ? "warning"
+                            : "error"
+                        }
                       >
-                        {isQaReworkExhaustedMessage(runError)
-                          ? "Resume (recheck QA first)"
-                          : "Resume"}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        className="!h-8 !px-3"
-                        onClick={startRedesignChat}
-                      >
-                        Restart
-                      </Button>
-                    </div>
-                    <p className="mt-2 text-[11px] text-zinc-500">
-                      {isQaReworkExhaustedMessage(runError)
-                        ? "Preview keeps what was built. Resume first re-checks QA with full files (may PASS). If still FAIL, opens two more fix rounds. Restart opens a new brief."
-                        : "Resume continues this chat. Restart opens a new brief."}
-                    </p>
-                  </Alert>
+                        <p className="font-medium">
+                          {isQaReworkExhaustedMessage(runError)
+                            ? "QA did not pass — your app is still here"
+                            : hasPreviewableApp(artifacts, ceoGoal)
+                              ? "Run stopped — your files are still here"
+                              : "The team stopped"}
+                        </p>
+                        <p className="mt-1 text-sm">
+                          {runError.trim() ||
+                            "Something went wrong before the team finished."}
+                        </p>
+                        {(isQaReworkExhaustedMessage(runError) ||
+                          hasPreviewableApp(artifacts, ceoGoal)) && (
+                          <RunDeliverableActions
+                            runId={runId}
+                            artifacts={artifacts}
+                            ceoGoal={ceoGoal}
+                            runFinished
+                            variant="hud"
+                            onRequestChanges={startFollowUpChat}
+                            onRestart={startRedesignChat}
+                          />
+                        )}
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            variant="primary"
+                            className="!h-8 !px-3"
+                            onClick={() => void resumeRun()}
+                          >
+                            {isQaReworkExhaustedMessage(runError)
+                              ? "Resume (recheck QA first)"
+                              : "Resume"}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="!h-8 !px-3"
+                            onClick={startRedesignChat}
+                          >
+                            Restart
+                          </Button>
+                        </div>
+                        <p className="mt-2 text-[11px] text-zinc-500">
+                          {isQaReworkExhaustedMessage(runError)
+                            ? "Preview keeps what was built. Resume first re-checks QA with full files (may PASS). If still FAIL, opens two more fix rounds. Restart opens a new brief."
+                            : "Resume continues this chat. Restart opens a new brief."}
+                        </p>
+                      </Alert>
+                    )}
+
+                    <ResizableHudCard
+                      storageKey={RUN_ACTIVITY_HEIGHT_KEY}
+                      defaultMode="full"
+                      minHeightPx={160}
+                      resizeLabel="Resize What’s happening. Double-click to restore full height."
+                    >
+                      <ActivityFeed
+                        events={events}
+                        fill
+                        className="border-0 bg-transparent p-0"
+                      />
+                    </ResizableHudCard>
+                  </>
                 )}
-                {runOutcome === "completed" && runId && (
-                  <Alert
-                    variant="success"
-                    className="overflow-visible bg-emerald-950/95 ring-1 ring-emerald-800/50"
-                  >
-                    <p className="font-medium text-emerald-50">Your app is ready</p>
-                    <RunDeliverableActions
-                      runId={runId}
-                      artifacts={artifacts}
-                      ceoGoal={ceoGoal}
-                      runFinished
-                      variant="hud"
-                      onRequestChanges={startFollowUpChat}
-                      onRestart={startRedesignChat}
-                    />
-                  </Alert>
-                )}
-                {runOutcome !== "completed" && <ActivityFeed events={events} />}
               </div>
+              ) : (
+              <div className="pointer-events-auto max-w-sm space-y-2">
+                {runError && <Alert variant="error">{runError}</Alert>}
+              </div>
+              )}
 
               <div className="pointer-events-auto flex flex-col items-end gap-3">
                 <div className="flex rounded-full border border-zinc-700/80 bg-zinc-950/80 p-0.5 backdrop-blur-md">
@@ -1447,10 +1692,51 @@ export function Dashboard() {
                 </div>
 
                 <div className="shrink-0">
+                  {!runId && data.agents.length === 0 && !autoHireConfirm && (
+                    <Alert variant="warning" className="mb-2">
+                      <p className="font-medium text-amber-50">Team is empty</p>
+                      <p className="mt-1 text-sm text-amber-100/90">
+                        Start will auto-hire a starter crew using{" "}
+                        {providerDisplayLabel(runProvider)} ({runModel}). You’ll confirm before
+                        we use a monthly run.
+                      </p>
+                    </Alert>
+                  )}
+                  {autoHireConfirm && !deliverableAction && (
+                    <Alert variant="warning" className="mb-2">
+                      <p className="font-medium text-amber-50">Confirm auto-hire</p>
+                      <p className="mt-1 text-sm text-amber-100/90">
+                        Your team is empty. We’ll hire a starter crew with{" "}
+                        {autoHireConfirm.providerLabel} ({autoHireConfirm.model}) — the AI you
+                        picked under Which AI to use.
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant="primary"
+                          className="!h-8 !px-3"
+                          onClick={() => void startRun(true)}
+                        >
+                          Confirm & start
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="!h-8 !px-3"
+                          onClick={() => setAutoHireConfirm(null)}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                      <p className="mt-2 text-[11px] text-zinc-500">
+                        Or hire teammates in settings first if you want a custom roster.
+                      </p>
+                    </Alert>
+                  )}
                   <GoalComposer
                     value={ceoGoal}
                     onChange={setCeoGoal}
-                    onSubmit={() => void startRun()}
+                    onSubmit={() => void startRun(Boolean(autoHireConfirm))}
                     disabled={!runReady || Boolean(data.usage && !data.usage.canRun)}
                     submitting={running}
                     showExamples={
@@ -1459,7 +1745,7 @@ export function Dashboard() {
                     }
                     compact
                     placeholder="What should we build?"
-                    submitLabel="Start"
+                    submitLabel={autoHireConfirm ? "Confirm & start" : "Start"}
                   />
                   {data.usage && !data.usage.canRun && (
                     <p className="mt-2 text-center text-[11px] text-amber-400/90">
@@ -1530,13 +1816,27 @@ export function Dashboard() {
             deliverableAction === "follow-up" ? "" : baseGoalFromRunGoal(ceoGoal)
           }
           onClose={closeDeliverableSheet}
-          onStart={(goalText) => void startFromDeliverableSheet(goalText)}
+          onStart={(goalText) =>
+            void startFromDeliverableSheet(goalText, Boolean(autoHireConfirm))
+          }
           busy={deliverableSheetBusy}
           error={deliverableSheetError}
+          autoHireConfirm={
+            autoHireConfirm
+              ? {
+                  providerLabel: autoHireConfirm.providerLabel,
+                  model: autoHireConfirm.model,
+                }
+              : null
+          }
+          onDismissAutoHire={() => {
+            setAutoHireConfirm(null);
+            setDeliverableSheetError("");
+          }}
           canStart={runReady}
           canStartReason={runReadyReason}
           usageBlockedReason={
-            data.usage && !data.usage.canRun
+            deliverableAction !== "follow-up" && data.usage && !data.usage.canRun
               ? (data.usage.reason ??
                 `Free beta limit reached (${data.usage.used}/${data.usage.limit} runs this month).`)
               : null

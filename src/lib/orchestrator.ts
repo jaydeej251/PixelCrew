@@ -38,23 +38,49 @@ import {
   workerSystemPrompt,
   parseNeededRoles,
   councilThreadFromTasks,
+  isShellStubAppJs,
+  looksLikeArchitectureBrainstorm,
+  punchListRequiresAppJs,
+  qaFixRequiresFullAppJs,
   STATIC_SHIP_BAR,
 } from "./prompts";
 import {
   hasUnclosedFence,
   leftoverProse,
+  mergeProjectFiles,
   parseFileFences,
   scaffoldGaps,
+  toFileFences,
 } from "./project-files";
+import { utilitiesCssFile, ensureHtmlLinksUtilitiesCss, ensureHtmlWorkspaceShellClass } from "./pixel-utilities-css";
 import {
+  changesAskForUi,
   FOLLOW_UP_IMPLEMENT_TITLE,
   isFollowUpGoal,
   isFollowUpImplementTitle,
   parseFollowUpGoal,
+  REQUEST_CHANGES_FILES_TITLE,
   surgicalFollowUpPlan,
 } from "./follow-up-goal";
-import { evalShippedProject, formatShipReport, javascriptSyntaxError } from "./ship-quality";
-import { evalPlanQuality, formatPlanReport } from "./plan-quality";
+import {
+  ASK_CONFIRMATION_TITLE,
+  parseAskConfirmationChecklist,
+} from "./run-completion-summary";
+import {
+  IMPLEMENT_APP_LOGIC_TITLE,
+  IMPLEMENT_UI_SHELL_TITLE,
+  isAppLogicTitle,
+  isUiShellTitle,
+  needsStagedUiBuild,
+  UI_DESIGN_BAR,
+} from "./ui-build-pipeline";
+import {
+  augmentProjectFilesForShipEval,
+  evalShippedProject,
+  formatShipReport,
+  javascriptSyntaxError,
+} from "./ship-quality";
+import { evalPlanQuality, ensurePlanPassesRoleAssignments, formatPlanReport } from "./plan-quality";
 import {
   parsePlanDecisions,
   stripDecisionFence,
@@ -73,6 +99,11 @@ import {
 } from "./roster";
 import { ensureRole, isPositionKey } from "./hire";
 import { configureAgentsForRun, getDefaultModel, workspaceHasProvider } from "./run-setup";
+import {
+  parseRunBrain,
+  resolveAutoHireBrain,
+  RUN_BRAIN_TITLE,
+} from "./run-brain";
 import { planningStageModelOverride } from "./stage-models";
 import { findProviderCredential } from "./provider-credentials";
 import type { PositionKey } from "./constants";
@@ -244,6 +275,18 @@ async function loadShippedCodeSnapshot(runId: string): Promise<string> {
   return parts.join("\n\n");
 }
 
+async function loadShippedProjectFiles(
+  runId: string,
+): Promise<Array<{ path: string; content: string }>> {
+  const code = await prisma.artifact.findMany({
+    where: { runId, type: "code", filePath: { not: null } },
+    select: { filePath: true, content: true },
+  });
+  return code
+    .filter((a) => a.filePath)
+    .map((a) => ({ path: a.filePath!, content: a.content }));
+}
+
 function planningKind(title: string): "dispatch" | "council" | "synth" | "legacy" | null {
   if (title === DISPATCH_TITLE) return "dispatch";
   if (
@@ -303,13 +346,22 @@ export async function executeAgentTask(
   );
   const isQaFixTask = isQaFixTitle(task.title);
   const isFollowUpTask = isFollowUpImplementTitle(task.title);
-  const isSurgicalPatch = isQaFixTask || isFollowUpTask;
+  const isShellTask = isUiShellTitle(task.title);
+  const isLogicTask = isAppLogicTitle(task.title);
+  const isSurgicalPatch = isQaFixTask || isFollowUpTask || isLogicTask;
   const seniorBuilding =
     agent.position === "tech_architect" &&
-    (/^Implement\b/i.test(task.title) || isSurgicalPatch);
+    (/^Implement\b/i.test(task.title) || isSurgicalPatch || isShellTask);
   if (kind === "dispatch" || kind === "synth" || kind === "legacy") config.maxTokens = 2200;
   else if (kind === "council") config.maxTokens = 1200;
-  else if (isSurgicalPatch && (isEngineer || seniorBuilding)) config.maxTokens = 3500;
+  else if (isShellTask && (isEngineer || seniorBuilding)) config.maxTokens = 4500;
+  else if (
+    isQaFixTask &&
+    qaFixRequiresFullAppJs(task.description ?? "") &&
+    (isEngineer || seniorBuilding)
+  )
+    config.maxTokens = 8000;
+  else if (isSurgicalPatch && (isEngineer || seniorBuilding)) config.maxTokens = 4500;
   else if (isEngineer || seniorBuilding) config.maxTokens = 5000;
   else if (agent.position === "qa_engineer") config.maxTokens = 2200;
   else config.maxTokens = 1500;
@@ -349,9 +401,11 @@ export async function executeAgentTask(
     );
   }
 
-  // Fix agents, follow-up patches, and QA reviewers need real artifacts.
+  // Fix agents, follow-up patches, logic stage, and QA reviewers need real artifacts.
   const shippedSnapshot =
-    isSurgicalPatch || isQaReview ? await loadShippedCodeSnapshot(runId) : "";
+    isSurgicalPatch || isQaReview || isLogicTask
+      ? await loadShippedCodeSnapshot(runId)
+      : "";
 
   const systemPrompt =
     kind === "dispatch"
@@ -368,6 +422,12 @@ export async function executeAgentTask(
                 agent.jobBoundary,
                 agent.position,
                 task.title,
+                {
+                  followUpQa:
+                    agent.position === "qa_engineer" && isFollowUpGoal(ceoGoal),
+                  qaFixFullAppJs:
+                    isQaFixTask && qaFixRequiresFullAppJs(task.description ?? ""),
+                },
               );
 
   const goalAlreadyInDescription =
@@ -393,20 +453,29 @@ export async function executeAgentTask(
           isFollowUpTask
             ? (() => {
                 const { baseGoal, changes } = parseFollowUpGoal(ceoGoal);
+                const wantsUi = changesAskForUi(changes);
                 return [
-                  `Original product (keep this — do not redesign):\n${baseGoal}`,
-                  `Changes I want (ONLY these):\n${changes || ceoGoal}`,
+                  wantsUi
+                    ? `Original product (keep the same product — UI refresh IS in scope):\n${baseGoal}`
+                    : `Original product (keep this — patch only, no gratuitous redesign):\n${baseGoal}`,
+                  `Changes I want / must-fix (ALL of these — do not drop older items):\n${changes || ceoGoal}`,
                 ].join("\n\n");
               })()
-            : ceoBlock,
+            : isQaFixTask
+              ? `Product under fix (do NOT re-plan the stack):\n${(parseFollowUpGoal(ceoGoal).baseGoal || ceoGoal).slice(0, 600)}`
+              : ceoBlock,
           prior ? `QA punch list / upstream:\n${prior}` : "",
           `Your task: ${task.title}\n${goalAlreadyInDescription ? "" : task.description ?? ""}`.trim(),
           shippedSnapshot
             ? `CURRENT shipped files (edit these — emit only paths you change):\n${shippedSnapshot}`
             : "No shipped files found yet — emit only the minimum files needed for the requested change.",
           isFollowUpTask
-            ? "Surgical Request-changes patch only: emit changed files as complete file fences. Do not redesign theme, layout, or unrelated features."
-            : "Surgical fix only: emit changed files as complete file fences. Do not rewrite the whole app.",
+            ? "Request-changes patch: emit changed files as complete file fences. Satisfy every must-fix item (bugs and UI asks). Do not reply with only prose."
+            : isLogicTask
+              ? "Logic stage: emit changed files (usually app.js). Preserve the UI shell chrome — do not replace it with a bare canvas MVP."
+              : isQaFixTask
+                ? "OUTPUT RULE: Reply with ```file:path fences ONLY. No stack tables, no Technical Brainstorm, no architecture essay. Patch the punch list — usually app.js."
+                : "Surgical fix only: emit changed files as complete file fences. Do not rewrite the whole app.",
         ]
           .filter(Boolean)
           .join("\n\n")
@@ -546,11 +615,16 @@ export async function executeAgentTask(
     await flushThinking(true);
   }
 
-  // First Implement may rewrite for ship bar. QA-fix / Request-changes are surgical —
-  // do not force a second full-app rewrite. Exception: invalid/truncated JS must be repaired.
+  // First Implement / UI shell may rewrite for ship bar. QA-fix / Request-changes / logic
+  // stage are surgical — do not force a second full-app rewrite (except invalid JS / thin UI).
   if ((isEngineer || seniorBuilding) && !isSurgicalPatch) {
     const firstFiles = parseFileFences(fullOutput);
-    const ship = evalShippedProject(firstFiles, { role: agent.position, ceoGoal });
+    const shipStage = isShellTask ? "shell" : "full";
+    const ship = evalShippedProject(firstFiles, {
+      role: agent.position,
+      ceoGoal,
+      stage: shipStage,
+    });
     if (!ship.passed) {
       const previous = fullOutput;
       fullOutput = "";
@@ -562,17 +636,34 @@ export async function executeAgentTask(
           { role: "assistant", content: previous },
           {
             role: "user",
-            content: `${formatShipReport(ship)}\n\nDo NOT rebuild the whole app. Emit ONLY the files that fail the checks above as complete \`\`\`file:path fences. Keep working files unchanged. Static HTML/CSS/JS only. Every .js file must be complete and parseable.`,
+            content:
+              `${formatShipReport(ship)}\n\n` +
+              `Do NOT rebuild the whole app from scratch. Emit ONLY the files that fail the checks above ` +
+              `as complete \`\`\`file:path fences (full contents). Keep working files unchanged — they will be merged.\n` +
+              `If the FAIL is a stripped canvas-only MVP or missing sidebars/panels, upgrade the HTML/CSS chrome ` +
+              `(3-pane layout, node cards) — do not answer with a tinier canvas demo.\n` +
+              `If the FAIL is missing <canvas>/<svg>, insert <canvas id="canvas"> inside #workspace/<main> — keep sidebars.\n` +
+              `If the FAIL is missing linked assets, emit those CSS/JS files — do NOT replace a working index.html with a stub.\n` +
+              `Only re-emit index.html if the FAIL was about that page's content/placeholders/CDN/UI chrome.\n` +
+              `Do NOT add SortableJS/jQuery/CDN libs (sortable.min.js). Use native drag-and-drop or buttons.\n` +
+              `Static HTML/CSS/JS only. Every .js file must be complete and parseable.`,
           },
         ],
         onChunk,
       );
       fullOutput = fullOutput || result.content;
       await flushThinking(true);
-      if (parseFileFences(fullOutput).length === 0) fullOutput = previous;
+      const rewriteFiles = parseFileFences(fullOutput);
+      if (rewriteFiles.length === 0) {
+        fullOutput = previous;
+      } else {
+        const merged = mergeProjectFiles(firstFiles, rewriteFiles);
+        fullOutput = toFileFences(merged);
+      }
       const rewritten = evalShippedProject(parseFileFences(fullOutput), {
         role: agent.position,
         ceoGoal,
+        stage: shipStage,
       });
       if (!rewritten.passed) {
         throw new RunAbortedError(
@@ -580,7 +671,144 @@ export async function executeAgentTask(
         );
       }
     }
+    // Materialize utilities.css + stub CSS/JS the model linked but forgot — eval already
+    // treats them as present; persist/Preview must get the same set.
+    if (agent.position !== "backend_engineer") {
+      const shipped = parseFileFences(fullOutput);
+      if (shipped.length > 0) {
+        fullOutput = toFileFences(
+          augmentProjectFilesForShipEval(shipped, {
+            ceoGoal,
+            stage: shipStage,
+          }),
+        );
+      }
+    }
   } else if ((isEngineer || seniorBuilding) && isSurgicalPatch) {
+    // Request-changes / logic / QA-fix with zero file fences = the CEO's app never updates.
+    if (
+      (isFollowUpTask || isLogicTask || isQaFixTask) &&
+      parseFileFences(fullOutput).length === 0
+    ) {
+      const previous = fullOutput;
+      fullOutput = "";
+      thinkBuf = "";
+      result = await provider.stream(
+        [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+          { role: "assistant", content: previous || "(no file fences)" },
+          {
+            role: "user",
+            content:
+              "You did not emit any ```file:path fences. The CEO's Preview will not change. " +
+              "Re-read CURRENT shipped files and your task. Emit the complete updated file(s) now " +
+              "as ```file:path fences (full contents). Do not reply with only explanations.",
+          },
+        ],
+        onChunk,
+      );
+      fullOutput = fullOutput || result.content;
+      await flushThinking(true);
+      if (parseFileFences(fullOutput).length === 0) {
+        await prisma.artifact.create({
+          data: {
+            runId,
+            type: "other",
+            title: REQUEST_CHANGES_FILES_TITLE,
+            content: JSON.stringify({
+              paths: [],
+              taskTitle: task.title,
+              at: new Date().toISOString(),
+              note: "Engineer finished with zero file fences after retry.",
+            }),
+          },
+        });
+        throw new RunAbortedError(
+          isLogicTask
+            ? "App logic stage finished without updating any files. Try Resume."
+            : isQaFixTask
+              ? "QA fix round finished without updating any files. The punch list was not applied."
+              : "Request changes finished without updating any files. Try again with a clearer change list (e.g. one bug per line).",
+        );
+      }
+    }
+
+    // QA punch lists about listeners/stub app.js cannot be cleared by HTML/CSS alone.
+    if (isQaFixTask && punchListRequiresAppJs(task.description ?? "")) {
+      const emitted = parseFileFences(fullOutput);
+      const appJs = emitted.find((f) => /^app\.js$/i.test(f.path.replace(/^\.\//, "")));
+      if (!appJs || isShellStubAppJs(appJs.content)) {
+        const previous = fullOutput;
+        fullOutput = "";
+        thinkBuf = "";
+        result = await provider.stream(
+          [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+            { role: "assistant", content: previous },
+            {
+              role: "user",
+              content:
+                "The QA punch list requires real JavaScript behavior, but you did not emit a working app.js " +
+                "(missing, or still a UI-shell stub with only console.log). " +
+                "Emit a complete ```file:app.js fence with addEventListener handlers that address every " +
+                "listener/handler/drag/socket/localStorage item on the punch list. HTML/CSS-only is not enough.",
+            },
+          ],
+          onChunk,
+        );
+        fullOutput = fullOutput || result.content;
+        await flushThinking(true);
+        const retry = parseFileFences(fullOutput);
+        const retryApp = retry.find((f) => /^app\.js$/i.test(f.path.replace(/^\.\//, "")));
+        if (!retryApp || isShellStubAppJs(retryApp.content)) {
+          throw new RunAbortedError(
+            "QA fix round did not ship a working app.js (still missing or a UI-shell stub). " +
+              "Punch-list items about listeners/handlers were not fixed.",
+          );
+        }
+      }
+    }
+
+    // Senior often burns the token budget on a council-style stack brainstorm mid QA-fix.
+    if (
+      isQaFixTask &&
+      (looksLikeArchitectureBrainstorm(fullOutput) ||
+        (parseFileFences(fullOutput).length === 0 &&
+          /stack|architecture|brainstorm/i.test(fullOutput.slice(0, 800))))
+    ) {
+      const previous = fullOutput;
+      fullOutput = "";
+      thinkBuf = "";
+      result = await provider.stream(
+        [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+          { role: "assistant", content: previous.slice(0, 1_500) },
+          {
+            role: "user",
+            content:
+              "STOP. That was a Technical Brainstorm / architecture essay — not a QA fix. " +
+              "Do NOT continue the stack redesign. Emit ONLY ```file:path fences that patch the punch list " +
+              "(almost certainly a complete working app.js). No markdown tables. No council hand-off.",
+          },
+        ],
+        onChunk,
+      );
+      fullOutput = fullOutput || result.content;
+      await flushThinking(true);
+      if (
+        looksLikeArchitectureBrainstorm(fullOutput) ||
+        parseFileFences(fullOutput).length === 0
+      ) {
+        throw new RunAbortedError(
+          "QA fix round wrote an architecture brainstorm instead of file patches. " +
+            "Punch-list items were not applied — try Resume.",
+        );
+      }
+    }
+
     const fixFiles = parseFileFences(fullOutput);
     const jsFails = fixFiles.filter(
       (f) => /\.m?js$/i.test(f.path) && javascriptSyntaxError(f.content),
@@ -625,36 +853,108 @@ export async function executeAgentTask(
         );
       }
     }
+
+    if (isLogicTask) {
+      const emitted = parseFileFences(fullOutput);
+      const shippedFiles = await loadShippedProjectFiles(runId);
+      const merged = mergeProjectFiles(shippedFiles, emitted);
+      let ship = evalShippedProject(merged, {
+        role: agent.position,
+        ceoGoal,
+        stage: "full",
+      });
+      if (!ship.passed) {
+        fullOutput = "";
+        thinkBuf = "";
+        result = await provider.stream(
+          [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+            { role: "assistant", content: toFileFences(emitted) || "(no file fences)" },
+            {
+              role: "user",
+              content:
+                `${formatShipReport(ship)}\n\n` +
+                `Upgrade against the FAIL list. Preserve the UI shell chrome. ` +
+                `Emit only changed files as complete fences. ` +
+                `If chrome is missing, restore sidebars/panels/node cards — no bare-canvas MVP.`,
+            },
+          ],
+          onChunk,
+        );
+        fullOutput = fullOutput || result.content;
+        await flushThinking(true);
+        const retryEmit = parseFileFences(fullOutput);
+        if (retryEmit.length === 0) {
+          throw new RunAbortedError(
+            `App logic still failed acceptance after rewrite.\n${formatShipReport(ship)}`,
+          );
+        }
+        ship = evalShippedProject(mergeProjectFiles(merged, retryEmit), {
+          role: agent.position,
+          ceoGoal,
+          stage: "full",
+        });
+        if (!ship.passed) {
+          throw new RunAbortedError(
+            `App logic still failed acceptance after rewrite.\n${formatShipReport(ship)}`,
+          );
+        }
+        fullOutput = toFileFences(
+          augmentProjectFilesForShipEval(mergeProjectFiles(merged, retryEmit), {
+            ceoGoal,
+            stage: "full",
+          }),
+        );
+      }
+    }
   }
 
   let pendingDecisions: PlanDecision[] = [];
   if (kind === "synth" || kind === "legacy") {
     const firstDecisions = parsePlanDecisions(fullOutput);
-    const quality = evalPlanQuality(stripDecisionFence(fullOutput), { ceoGoal });
+    let quality = evalPlanQuality(stripDecisionFence(fullOutput), { ceoGoal });
     if (!quality.passed) {
-      const previous = fullOutput;
-      fullOutput = "";
-      thinkBuf = "";
-      result = await provider.stream(
-        [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-          { role: "assistant", content: previous },
-          {
-            role: "user",
-            content: `${formatPlanReport(quality)}\n\nRewrite the combined plan and fix every FAIL. Keep Goal, stack, UX, features, out of scope, and a role-correct task list. Static HTML/CSS/JS. Size the timeline to hours for a one-pager — Engineer builds the files, not Product. Keep any decisions json fence at the end.`,
-          },
-        ],
-        onChunk,
-      );
-      fullOutput = fullOutput || result.content;
-      await flushThinking(true);
-      if (!fullOutput.trim()) fullOutput = previous;
-      const rewritten = evalPlanQuality(stripDecisionFence(fullOutput), { ceoGoal });
-      if (!rewritten.passed) {
-        throw new RunAbortedError(
-          `Combined plan still drifted from the CEO goal after rewrite.\n${formatPlanReport(rewritten)}`,
+      // Cheap deterministic fix for Product-builds-HTML / Senior-does-CSS slips.
+      const roleFix = ensurePlanPassesRoleAssignments(stripDecisionFence(fullOutput), {
+        ceoGoal,
+      });
+      if (roleFix.report.passed) {
+        fullOutput = roleFix.plan;
+        quality = roleFix.report;
+      } else {
+        const previous = fullOutput;
+        fullOutput = "";
+        thinkBuf = "";
+        result = await provider.stream(
+          [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+            { role: "assistant", content: previous },
+            {
+              role: "user",
+              content: `${formatPlanReport(quality)}\n\nRewrite the combined plan and fix every FAIL. Keep Goal, stack, UX, features, out of scope, and a role-correct task list. Static HTML/CSS/JS. Size the timeline to hours for a one-pager — Engineer builds the files, not Product. Product may own hero/footer *copy* but must not write HTML/CSS/JS. Keep any decisions json fence at the end.`,
+            },
+          ],
+          onChunk,
         );
+        fullOutput = fullOutput || result.content;
+        await flushThinking(true);
+        if (!fullOutput.trim()) fullOutput = previous;
+        quality = evalPlanQuality(stripDecisionFence(fullOutput), { ceoGoal });
+        if (!quality.passed) {
+          const again = ensurePlanPassesRoleAssignments(stripDecisionFence(fullOutput), {
+            ceoGoal,
+          });
+          if (again.report.passed) {
+            fullOutput = again.plan;
+            quality = again.report;
+          } else {
+            throw new RunAbortedError(
+              `Combined plan still drifted from the CEO goal after rewrite.\n${formatPlanReport(again.report)}`,
+            );
+          }
+        }
       }
     }
     pendingDecisions = parsePlanDecisions(fullOutput);
@@ -693,6 +993,24 @@ export async function executeAgentTask(
     data: { status: "done", output: fullOutput, completedAt: new Date() },
   });
   await prisma.agent.update({ where: { id: agent.id }, data: { status: "idle" } });
+
+  if (isQaReview) {
+    const checklist = parseAskConfirmationChecklist(fullOutput);
+    if (checklist.length > 0) {
+      await prisma.artifact.create({
+        data: {
+          runId,
+          type: "other",
+          title: ASK_CONFIRMATION_TITLE,
+          content: JSON.stringify({
+            items: checklist.map(({ label, status }) => ({ label, status })),
+            taskTitle: task.title,
+            at: new Date().toISOString(),
+          }),
+        },
+      });
+    }
+  }
 
   if (pendingDecisions.length > 0) {
     await persistPlanDecisions(runId, pendingDecisions);
@@ -744,11 +1062,12 @@ export async function executeAgentTask(
   // dumps fences that look like "coding" — persisting them causes a full rewrite later.
   const mayShipCode =
     isSurgicalPatch ||
+    isShellTask ||
     /^Implement\b/i.test(task.title) ||
     isFollowUpImplementTitle(task.title);
   if (files.length > 0 && mayShipCode) {
     // Never overwrite a working app.js with a truncated emit (Preview SyntaxError + dead UI).
-    const persistable = files.filter((file) => {
+    const syntaxOk = files.filter((file) => {
       if (!/\.m?js$/i.test(file.path)) return true;
       const err = javascriptSyntaxError(file.content);
       if (!err) return true;
@@ -757,8 +1076,61 @@ export async function executeAgentTask(
       );
       return false;
     });
+    // Request-changes / logic often emit HTML+CSS without a real app.js. Augmenting
+    // that emit alone used to invent a stub app.js and wipe the working script on disk.
+    const shipped =
+      isSurgicalPatch || isFollowUpTask || isLogicTask
+        ? await loadShippedProjectFiles(runId)
+        : [];
+    const mergedForPersist =
+      shipped.length > 0 ? mergeProjectFiles(shipped, syntaxOk) : syntaxOk;
+    const persistable =
+      agent.position === "backend_engineer"
+        ? syntaxOk
+        : augmentProjectFilesForShipEval(mergedForPersist, {
+            ceoGoal,
+            stage: isShellTask ? "shell" : "full",
+          }).filter((file) => {
+            if (!/\.m?js$/i.test(file.path)) return true;
+            return !javascriptSyntaxError(file.content);
+          });
     if (persistable.length > 0) {
       await persistProjectFiles(runId, persistable);
+      if (isFollowUpTask) {
+        const changedPaths = persistable
+          .filter((f) => {
+            const before = shipped.find((s) => s.path === f.path)?.content;
+            return before !== f.content;
+          })
+          .map((f) => f.path);
+        await prisma.artifact.create({
+          data: {
+            runId,
+            type: "other",
+            title: REQUEST_CHANGES_FILES_TITLE,
+            content: JSON.stringify({
+              paths: changedPaths.length > 0 ? changedPaths : persistable.map((f) => f.path),
+              taskTitle: task.title,
+              at: new Date().toISOString(),
+            }),
+          },
+        });
+      }
+    } else if (isFollowUpTask && files.length > 0) {
+      await prisma.artifact.create({
+        data: {
+          runId,
+          type: "other",
+          title: REQUEST_CHANGES_FILES_TITLE,
+          content: JSON.stringify({
+            paths: [],
+            rejected: files.map((f) => f.path),
+            taskTitle: task.title,
+            at: new Date().toISOString(),
+            note: "Engineer emitted fences but none were persistable (e.g. invalid JS).",
+          }),
+        },
+      });
     }
     const notes = leftoverProse(fullOutput, files);
     if (notes.length > 40) {
@@ -856,6 +1228,49 @@ async function persistProjectFiles(
           content: file.content,
           filePath: file.path,
         },
+      });
+    }
+  }
+  await ensureUtilitiesCssArtifact(runId);
+}
+
+/** Local Tailwind-lite pack — Preview CSP forbids CDN Tailwind. */
+async function ensureUtilitiesCssArtifact(runId: string) {
+  const util = utilitiesCssFile();
+  const existing = await prisma.artifact.findFirst({
+    where: { runId, filePath: util.path },
+  });
+  if (!existing) {
+    const code = await prisma.artifact.findMany({
+      where: { runId, type: "code", filePath: { not: null } },
+      select: { filePath: true },
+      take: 50,
+    });
+    if (code.some((a) => a.filePath && /\.html?$/i.test(a.filePath))) {
+      await prisma.artifact.create({
+        data: {
+          runId,
+          type: "code",
+          title: util.path,
+          content: util.content,
+          filePath: util.path,
+        },
+      });
+    }
+  }
+
+  // Link utilities.css (+ shell class) into every HTML page — file alone does not style Preview.
+  const htmlArts = await prisma.artifact.findMany({
+    where: { runId, type: "code", filePath: { not: null } },
+  });
+  for (const art of htmlArts) {
+    if (!art.filePath || !/\.html?$/i.test(art.filePath)) continue;
+    let next = ensureHtmlLinksUtilitiesCss(art.content);
+    next = ensureHtmlWorkspaceShellClass(next);
+    if (next !== art.content) {
+      await prisma.artifact.update({
+        where: { id: art.id },
+        data: { content: next },
       });
     }
   }
@@ -1068,23 +1483,44 @@ export async function publishAndDelegate(runId: string) {
   }
 
   const planTask = pickPlanTask(run.tasks);
-  const planText =
+  let planText =
     planTask?.output || run.artifacts.find((a) => a.type === "prd")?.content || "";
   if (!planText.trim()) {
     throw new Error("No combined plan to publish");
   }
-  const publishQuality = evalPlanQuality(planText, {
-    ceoGoal: isFollowUpGoal(run.ceoGoal)
-      ? parseFollowUpGoal(run.ceoGoal).baseGoal || run.ceoGoal
-      : run.ceoGoal,
-  });
+  const goalForPlan = isFollowUpGoal(run.ceoGoal)
+    ? parseFollowUpGoal(run.ceoGoal).baseGoal || run.ceoGoal
+    : run.ceoGoal;
+  let publishQuality = evalPlanQuality(planText, { ceoGoal: goalForPlan });
   if (!publishQuality.passed) {
-    throw new Error(
-      `This plan no longer matches the CEO goal and cannot be published.\n${formatPlanReport(publishQuality)}`,
-    );
+    const fixed = ensurePlanPassesRoleAssignments(planText, { ceoGoal: goalForPlan });
+    if (fixed.report.passed) {
+      planText = fixed.plan;
+      publishQuality = fixed.report;
+      if (planTask) {
+        await prisma.task.update({
+          where: { id: planTask.id },
+          data: { output: planText },
+        });
+      }
+    } else {
+      throw new Error(
+        `This plan no longer matches the CEO goal and cannot be published.\n${formatPlanReport(fixed.report)}`,
+      );
+    }
   }
   let agents = run.workspace.agents;
   const sample = agents[0];
+  const runBrainArt = await prisma.artifact.findFirst({
+    where: { runId, title: RUN_BRAIN_TITLE },
+    select: { content: true },
+  });
+  const hireBrain = resolveAutoHireBrain({
+    runBrain: parseRunBrain(runBrainArt?.content),
+    sample: sample
+      ? { provider: sample.provider, model: sample.model }
+      : null,
+  });
   let assignment = engineeringAssignment(agents);
 
   // Only auto-hire a generalist engineer when nobody can build (no senior, no eng seats).
@@ -1092,14 +1528,36 @@ export async function publishAndDelegate(runId: string) {
     await ensureRole({
       workspaceId: run.workspaceId,
       position: "engineer",
-      provider: sample?.provider ?? "mock",
-      model: sample?.model ?? "mock",
+      provider: hireBrain.provider,
+      model: hireBrain.model,
     });
-    if (sample) {
-      await configureAgentsForRun(run.workspaceId, sample.provider, sample.model);
+    if (hireBrain.provider !== "mock") {
+      await configureAgentsForRun(
+        run.workspaceId,
+        hireBrain.provider,
+        hireBrain.model,
+      );
     }
     agents = await prisma.agent.findMany({ where: { workspaceId: run.workspaceId } });
     assignment = engineeringAssignment(agents);
+  }
+
+  // Product policy: QA is mandatory on every publish — never ship without a reviewer seat.
+  if (qaOnTeam(agents).length === 0) {
+    await ensureRole({
+      workspaceId: run.workspaceId,
+      position: "qa_engineer",
+      provider: hireBrain.provider,
+      model: hireBrain.model,
+    });
+    if (hireBrain.provider !== "mock") {
+      await configureAgentsForRun(
+        run.workspaceId,
+        hireBrain.provider,
+        hireBrain.model,
+      );
+    }
+    agents = await prisma.agent.findMany({ where: { workspaceId: run.workspaceId } });
   }
 
   await prisma.artifact.create({
@@ -1139,9 +1597,10 @@ export async function publishAndDelegate(runId: string) {
   const buildIds: string[] = [];
   const surgicalDesc =
     `CEO Request-changes (surgical):\n${followUpChanges || run.ceoGoal}\n\n` +
-    `CURRENT app files are already on this run. Apply ONLY the requested change. ` +
-    `Emit ONLY changed files as complete \`\`\`file:path fences. ` +
-    `Do NOT redesign theme, layout, copy, or unrelated features. Keep everything else identical.\n` +
+    `CURRENT app files are already on this run. Apply every requested change so it works in Preview. ` +
+    `If the CEO asked for a UI overhaul / modern refresh, update CSS/HTML (and JS if needed). ` +
+    `Satisfy ALL open Changes I want items (including older ones still listed). ` +
+    `Emit ONLY changed files as complete \`\`\`file:path fences. Keep the same product.\n` +
     STATIC_SHIP_BAR;
 
   if (assignment.mode === "none") {
@@ -1176,7 +1635,7 @@ export async function publishAndDelegate(runId: string) {
         runId,
         title: "Implement frontend from the plan",
         description:
-          `CEO source of truth:\n${run.ceoGoal}\n\nEmit a complete demo UI (index.html, CSS, JS) using \`\`\`file:path fences. Implement every named screen, control, state, formula, and visual constraint. Specific copy from the CEO goal — not John Doe / Project One. CSS or inline SVG for visuals (no missing assets). Do not overwrite data.js.\n${STATIC_SHIP_BAR}`,
+          `CEO source of truth:\n${run.ceoGoal}\n\nEmit a complete demo UI (index.html, CSS, JS) using \`\`\`file:path fences. Implement every named screen, control, state, formula, and visual constraint. Specific copy from the CEO goal — not John Doe / Project One. CSS or inline SVG for visuals (no missing assets). Do not overwrite data.js.\n${UI_DESIGN_BAR}\n${STATIC_SHIP_BAR}`,
         position: "frontend_engineer",
         priority: 80,
         dependsOnIds: dependsOn,
@@ -1194,6 +1653,43 @@ export async function publishAndDelegate(runId: string) {
       },
     });
     buildIds.push(fe.id, be.id);
+  } else if (needsStagedUiBuild(run.ceoGoal)) {
+    // Complex workspace/editor goals: UI shell first, then logic (avoids single-shot overload).
+    const pos = assignment.soloPosition!;
+    const capacity = isSoloSeniorBuild(assignment)
+      ? "You are the only engineering capacity (Senior Developer)."
+      : `You are the only engineering capacity (${pos}).`;
+    const shell = await prisma.task.create({
+      data: {
+        runId,
+        title: IMPLEMENT_UI_SHELL_TITLE,
+        description:
+          `CEO source of truth:\n${run.ceoGoal}\n\n${capacity}\n` +
+          `STAGE 1 — UI SHELL ONLY. Emit index.html + styles.css + a stub app.js.\n` +
+          `Build the full visual chrome (3-pane when this is an editor/workspace): sidebars, toolbars, HTML node cards, properties panel. Dark theme CSS.\n` +
+          `Do NOT implement graph math, persistence, or cable algorithms yet.\n` +
+          `${UI_DESIGN_BAR}\n${STATIC_SHIP_BAR}`,
+        position: pos,
+        priority: 85,
+        dependsOnIds: dependsOn,
+      },
+    });
+    const logic = await prisma.task.create({
+      data: {
+        runId,
+        title: IMPLEMENT_APP_LOGIC_TITLE,
+        description:
+          `CEO source of truth:\n${run.ceoGoal}\n\n${capacity}\n` +
+          `STAGE 2 — APP LOGIC. CURRENT UI shell is already shipped on this run.\n` +
+          `Wire interactions, state, localStorage, and canvas/SVG cables. Preserve the shell — do not replace with a bare canvas MVP.\n` +
+          `Emit ONLY changed files as complete \`\`\`file:path fences (usually app.js).\n` +
+          `${UI_DESIGN_BAR}\n${STATIC_SHIP_BAR}`,
+        position: pos,
+        priority: 80,
+        dependsOnIds: [shell.id],
+      },
+    });
+    buildIds.push(shell.id, logic.id);
   } else {
     const pos = assignment.soloPosition!;
     const work = await prisma.task.create({
@@ -1201,8 +1697,8 @@ export async function publishAndDelegate(runId: string) {
         runId,
         title: "Implement product work from the plan",
         description: isSoloSeniorBuild(assignment)
-          ? `CEO source of truth:\n${run.ceoGoal}\n\nYou are the only engineering capacity (Senior Developer). One engineer is building — not parallel FE/BE. Emit a complete runnable static app (index.html + CSS + JS) using \`\`\`file:path fences. Implement every named screen, control, state, formula, and visual constraint. Specific copy from the CEO goal, CSS/SVG visuals — no missing images, no John Doe placeholders.\n${STATIC_SHIP_BAR}`
-          : `CEO source of truth:\n${run.ceoGoal}\n\nYou are the only engineering capacity (${pos}). Emit a complete runnable static app (index.html + CSS + JS) using \`\`\`file:path fences. Implement every named screen, control, state, formula, and visual constraint. Specific copy from the CEO goal, CSS/SVG visuals — no missing images, no John Doe placeholders.\n${STATIC_SHIP_BAR}`,
+          ? `CEO source of truth:\n${run.ceoGoal}\n\nYou are the only engineering capacity (Senior Developer). One engineer is building — not parallel FE/BE. Emit a complete runnable static app (index.html + CSS + JS) using \`\`\`file:path fences. Implement every named screen, control, state, formula, and visual constraint. Specific copy from the CEO goal, CSS/SVG visuals — no missing images, no John Doe placeholders.\n${UI_DESIGN_BAR}\n${STATIC_SHIP_BAR}`
+          : `CEO source of truth:\n${run.ceoGoal}\n\nYou are the only engineering capacity (${pos}). Emit a complete runnable static app (index.html + CSS + JS) using \`\`\`file:path fences. Implement every named screen, control, state, formula, and visual constraint. Specific copy from the CEO goal, CSS/SVG visuals — no missing images, no John Doe placeholders.\n${UI_DESIGN_BAR}\n${STATIC_SHIP_BAR}`,
         position: pos,
         priority: 80,
         dependsOnIds: dependsOn,
@@ -1211,14 +1707,23 @@ export async function publishAndDelegate(runId: string) {
     buildIds.push(work.id);
   }
 
-  if (qaOnTeam(agents).length > 0 && buildIds.length > 0) {
+  if (buildIds.length > 0) {
+    if (qaOnTeam(agents).length === 0) {
+      await ensureRole({
+        workspaceId: run.workspaceId,
+        position: "qa_engineer",
+        provider: hireBrain.provider,
+        model: hireBrain.model,
+      });
+      agents = await prisma.agent.findMany({ where: { workspaceId: run.workspaceId } });
+    }
     await prisma.task.create({
       data: {
         runId,
         title: INITIAL_QA_TITLE,
         description: followUp
-          ? `CEO Request-changes to verify:\n${followUpChanges || run.ceoGoal}\n\nReview CURRENT shipped files. PASS if the requested change works. Do NOT FAIL for unrelated polish or demand a redesign. Prefer PASS with nits. Verdict FAIL or PASS, then a punch list only about the requested change.`
-          : `CEO source of truth:\n${run.ceoGoal}\n\nReview the actual emitted files against every acceptance criterion in that goal. Verdict FAIL or PASS, then a punch list. Fail wrong product type/name, missing screens or controls, invented template sections, inline JS, localStorage overwrites, hidden forms, and unsafe external links. Do not invent passing results. Do not rewrite the product.`,
+          ? `CEO Request-changes to verify:\n${followUpChanges || run.ceoGoal}\n\nReview CURRENT shipped files against EACH asked change.\nFAIL if a requested bug is still broken or a requested UI overhaul has no meaningful CSS/HTML change.\nFAIL if previously working primary controls clearly regressed or app.js looks like a shell stub / truncated script.\nDo NOT PASS just because the old product still loads.\nReply: Verdict FAIL or PASS, then one - [MET] / - [MISSING] line per asked change. PASS only if every item is [MET].`
+          : `CEO source of truth:\n${run.ceoGoal}\n\nReview the actual emitted files against every acceptance criterion in that goal. Verdict FAIL or PASS, then a punch list. Fail wrong product type/name, missing screens or controls, invented template sections, inline JS, truncated/stub scripts, localStorage overwrites, hidden forms, and unsafe external links. Do not invent passing results. Do not rewrite the product.`,
         position: "qa_engineer",
         priority: 40,
         dependsOnIds: buildIds,
@@ -1266,8 +1771,18 @@ async function decideAndEnqueueQaRework(
   if (!latest) return { action: "none" };
 
   const { verdict, punchList } = parseQaVerdict(latest.output);
-  if (verdict === "PASS") return { action: "pass" };
-  if (verdict !== "FAIL") return { action: "none" };
+  const checklist = parseAskConfirmationChecklist(latest.output);
+  // Client truth: cannot PASS while any ask is still [MISSING].
+  const missingAsks = checklist.filter((i) => i.status === "missing");
+  const effectiveVerdict =
+    verdict === "PASS" && missingAsks.length > 0 ? "FAIL" : verdict;
+  const effectivePunch =
+    effectiveVerdict === "FAIL" && missingAsks.length > 0 && !punchList.trim()
+      ? missingAsks.map((i) => `MISSING: ${i.label}`).join("\n")
+      : punchList;
+
+  if (effectiveVerdict === "PASS") return { action: "pass" };
+  if (effectiveVerdict !== "FAIL") return { action: "none" };
 
   const allTasks = await prisma.task.findMany({
     where: { runId },
@@ -1339,15 +1854,38 @@ async function decideAndEnqueueQaRework(
 
   const round = nextQaReworkRound(allTasks);
   const punch =
-    punchList.trim() ||
+    effectivePunch.trim() ||
     "(QA did not list punch items — re-check the CEO goal against the shipped files and fix every gap.)";
   // One fix owner — FE+BE both applying the same punch list doubled tokens.
+  // Keep the task body punch-focused — full CEO novels make Senior re-brainstorm the stack.
   const fixOwner = buildersOnTeam(agents)[0]!;
+  const productHint = (
+    isFollowUpGoal(ceoGoal)
+      ? parseFollowUpGoal(ceoGoal).baseGoal || ceoGoal
+      : ceoGoal
+  ).slice(0, 500);
+  const shippedFiles = await loadShippedProjectFiles(runId);
+  const shippedAppJs = shippedFiles.find((f) => /(?:^|\/)app\.js$/i.test(f.path));
+  const needsFullAppJs =
+    punchListRequiresAppJs(punch) &&
+    (!shippedAppJs || isShellStubAppJs(shippedAppJs.content));
   const fix = await prisma.task.create({
     data: {
       runId,
       title: qaFixTitle(round),
-      description: `CEO source of truth:\n${ceoGoal}\n\nQA Verdict: FAIL (round ${round}). Apply a surgical fix for every blocker/major on this punch list. Emit ONLY changed files as complete \`\`\`file:path fences — do not rewrite the whole app. Do not invent a new product.\n\nPunch list:\n${punch}`,
+      description: needsFullAppJs
+        ? `Product: ${productHint}\n\n` +
+          `CRITICAL: shipped app.js is a UI-shell stub or missing. Surgical HTML/CSS tweaks will NOT pass QA.\n` +
+          `You MUST rewrite app.js fully — emit a COMPLETE working \`\`\`file:app.js that implements EVERY punch item below ` +
+          `(add/remove node, drag, sockets/connections, evaluation, localStorage, export/copy/close modal as listed).\n` +
+          `OUTPUT: start with \`\`\`file:app.js — no stack tables, no Technical Brainstorm.\n\n` +
+          `Punch list:\n${punch}`
+        : `Product: ${productHint}\n\n` +
+          `QA Verdict: FAIL (round ${round}). Patch ONLY the punch list below.\n` +
+          `OUTPUT: \`\`\`file:path fences only — no stack tables, no Technical Brainstorm, no architecture essay.\n` +
+          `If the punch list mentions listeners/handlers/app.js/"UI shell ready", you MUST emit a complete working \`\`\`file:app.js.\n` +
+          `HTML/CSS-only patches will FAIL recheck.\n\n` +
+          `Punch list:\n${punch}`,
       position: fixOwner.position,
       priority: 85,
       dependsOnIds: [latest.id],
@@ -1358,7 +1896,7 @@ async function decideAndEnqueueQaRework(
     data: {
       runId,
       title: qaRecheckTitle(round),
-      description: `CEO source of truth:\n${ceoGoal}\n\nRe-check AFTER round ${round} surgical fixes. Verify ONLY the prior punch list below — do not re-litigate the entire product or demand a redesign. PASS if those items are cleared (nits OK). Verdict FAIL or PASS, then a short punch list.\n\nPrior punch list:\n${punch}`,
+      description: `CEO source of truth:\n${ceoGoal}\n\nRe-check AFTER round ${round} surgical fixes. Verify ONLY the prior punch list below — do not re-litigate the entire product or demand a redesign.\nReply with Verdict PASS or FAIL, then [MET]/[MISSING] lines for each prior item.\nPASS only if every prior item is [MET].\n\nPrior punch list:\n${punch}`,
       position: "qa_engineer",
       priority: 40,
       dependsOnIds: [fix.id],
@@ -1415,13 +1953,34 @@ export async function runOrchestrator(runId: string) {
     prisma.agent.findMany({ where: { workspaceId: run.workspaceId } });
   let agents = await loadRoster();
   const sample = agents[0];
-  let llmProvider = sample?.provider ?? "mock";
-  let llmModel = sample?.model ?? "mock";
-  if (!sample) {
-    const or = await workspaceHasProvider(run.workspaceId, "openrouter");
-    if (or.ready) {
-      llmProvider = "openrouter";
-      llmModel = getDefaultModel("openrouter");
+  const runBrainArt = await prisma.artifact.findFirst({
+    where: { runId, title: RUN_BRAIN_TITLE },
+    select: { content: true },
+  });
+  const brain = resolveAutoHireBrain({
+    runBrain: parseRunBrain(runBrainArt?.content),
+    sample: sample
+      ? { provider: sample.provider, model: sample.model }
+      : null,
+  });
+  let llmProvider = brain.provider;
+  let llmModel = brain.model;
+  // Legacy runs with no Run brain artifact + empty roster: pick first ready
+  // provider (Ollama before OpenRouter). New runs always store Run brain at Start.
+  if (!sample && !parseRunBrain(runBrainArt?.content) && llmProvider === "mock") {
+    const candidates: Array<"ollama" | "anthropic" | "google" | "openrouter"> = [
+      "ollama",
+      "anthropic",
+      "google",
+      "openrouter",
+    ];
+    for (const p of candidates) {
+      const check = await workspaceHasProvider(run.workspaceId, p);
+      if (check.ready) {
+        llmProvider = p;
+        llmModel = getDefaultModel(p);
+        break;
+      }
     }
   }
 
@@ -1665,7 +2224,7 @@ export async function runOrchestrator(runId: string) {
       const needed = parseNeededRoles(dispatchTask?.output ?? "", DEFAULT_COUNCIL);
       await staffRoles(
         run.workspaceId,
-        [...DEFAULT_COUNCIL, ...needed],
+        [...DEFAULT_COUNCIL, ...needed, "qa_engineer"],
         emit,
         llmProvider,
         llmModel,

@@ -25,6 +25,8 @@ const DESK_CODERS = new Set([
   "frontend_engineer",
   "backend_engineer",
   "qa_engineer",
+  // Solo Senior Developer implements after plan publish — codes at desk, not forever in planning.
+  "tech_architect",
 ]);
 
 export type LifeState = {
@@ -80,6 +82,27 @@ export function isMeetingRole(position: string) {
   return MEETING_ROLES.has(position);
 }
 
+/** True when this seat codes at a desk (includes Senior Dev after plan publish). */
+export function worksAtCodingDesk(position: string) {
+  return DESK_CODERS.has(position);
+}
+
+/**
+ * Planning-table roles. Senior Dev (`tech_architect`) only joins while the plan
+ * is open — once published they Implement at a coding desk (HUD says "is coding").
+ */
+export function shouldJoinPlanningMeeting(
+  position: string,
+  status: AgentStatus | string,
+  inPlanning: boolean,
+  heldWork = false,
+): boolean {
+  if (!MEETING_ROLES.has(position)) return false;
+  if (inPlanning) return true;
+  if (position === "tech_architect") return false;
+  return status === "working" || status === "walking" || heldWork;
+}
+
 export function meetingSeatIndex(agentId: string, meetingIds: string[]) {
   const sorted = [...meetingIds].sort();
   const i = sorted.indexOf(agentId);
@@ -101,7 +124,7 @@ export function atPlanningSeat(
 }
 
 function codesAtDesk(agent: OfficeAgent) {
-  return DESK_CODERS.has(agent.position);
+  return worksAtCodingDesk(agent.position);
 }
 
 function shouldMeet(
@@ -110,9 +133,7 @@ function shouldMeet(
   inPlanning: boolean,
   heldWork: boolean,
 ) {
-  if (!MEETING_ROLES.has(agent.position)) return false;
-  if (inPlanning) return true;
-  return st === "working" || st === "walking" || heldWork;
+  return shouldJoinPlanningMeeting(agent.position, st, inPlanning, heldWork);
 }
 
 function toWorld(grid: { x: number; y: number }) {

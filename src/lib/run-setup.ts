@@ -285,8 +285,11 @@ export async function prepareWorkspaceBrainsForRun(
   }
 
   const mockCount = rosterProviders.filter((p) => p === "mock").length;
+  const emptyRoster = rosterProviders.length === 0;
 
-  if (mockCount > 0 && provider !== "mock") {
+  // Empty roster (CEO fired everyone) still must validate the Start picker —
+  // otherwise auto-hire later invents OpenRouter because nothing was configured.
+  if ((mockCount > 0 || emptyRoster) && provider !== "mock") {
     const check = await workspaceHasProvider(workspaceId, provider);
     if (!check.ready) {
       return {

@@ -61,7 +61,7 @@ describe("stage-slim system prompts", () => {
     assert.doesNotMatch(prompt, /surgical QA fix/);
   });
 
-  it("uses surgical follow-up prompt for Apply requested changes", () => {
+  it("uses follow-up patch prompt for Apply requested changes", () => {
     const prompt = workerSystemPrompt(
       "Sam",
       "Senior Developer",
@@ -69,8 +69,9 @@ describe("stage-slim system prompts", () => {
       "tech_architect",
       "Apply requested changes",
     );
-    assert.match(prompt, /NOT a redesign/i);
-    assert.match(prompt, /ONLY what they asked/);
+    assert.match(prompt, /Request-changes patch/i);
+    assert.match(prompt, /at least one complete/);
+    assert.match(prompt, /UI refresh/i);
   });
 
   it("uses surgical qa-fix prompt for Fix QA punch list", () => {
@@ -85,6 +86,34 @@ describe("stage-slim system prompts", () => {
     assert.match(viaWorker, /surgical QA fix/);
     assert.match(viaWorker, /Do NOT re-emit unchanged files/);
     assert.match(direct, /Do NOT rebuild the whole app/);
+    assert.match(direct, /MUST emit a complete working/);
+    assert.match(direct, /UI shell ready/);
+    assert.match(direct, /FORBIDDEN: architecture essays|Technical Brainstorm/i);
+  });
+
+  it("detects architecture brainstorms that waste QA-fix tokens", async () => {
+    const { looksLikeArchitectureBrainstorm, qaFixRequiresFullAppJs, qaFixFullAppJsSystemPrompt } =
+      await import("./prompts");
+    assert.equal(
+      looksLikeArchitectureBrainstorm(
+        "PixelFlow – Senior-Dev Technical Brainstorm\n\n1. High-Level Stack\n| Layer | Tech | Why |",
+      ),
+      true,
+    );
+    assert.equal(
+      looksLikeArchitectureBrainstorm("```file:app.js\nconsole.log(1);\n```"),
+      false,
+    );
+    assert.equal(
+      qaFixRequiresFullAppJs(
+        "CRITICAL: shipped app.js is a UI-shell stub or missing. rewrite app.js fully",
+      ),
+      true,
+    );
+    assert.match(
+      qaFixFullAppJsSystemPrompt("Sam", "Senior Developer"),
+      /UI-shell stub/,
+    );
   });
 
   it("keeps council-style worker prompt for senior review tasks", () => {
@@ -96,6 +125,19 @@ describe("stage-slim system prompts", () => {
       "Review published plan and delegate",
     );
     assert.doesNotMatch(prompt, /addEventListener/);
+  });
+
+  it("uses stricter follow-up QA prompt when Request-changes is in play", () => {
+    const prompt = workerSystemPrompt(
+      "Taylor",
+      "QA Engineer",
+      "Review",
+      "qa_engineer",
+      "QA review of shipped product",
+      { followUpQa: true },
+    );
+    assert.match(prompt, /Prefer FAIL with a short punch list|honest \[MISSING\]/i);
+    assert.doesNotMatch(prompt, /Prefer PASS with nits/);
   });
 
   it("mentions Preview and ZIP working controls in ship bar", () => {

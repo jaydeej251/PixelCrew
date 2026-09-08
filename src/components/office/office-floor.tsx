@@ -7,9 +7,10 @@ import { depth, TILE_H, TILE_W, toIso } from "./iso";
 import { cn } from "@/lib/utils";
 import { edgeFromOffset, floorColorAt } from "@/lib/office-blueprint";
 import {
-  isMeetingRole,
   meetingSeatIndex,
   planningSeatGrid,
+  shouldJoinPlanningMeeting,
+  worksAtCodingDesk,
 } from "./office-life";
 import {
   FRONT_DOOR,
@@ -105,7 +106,7 @@ export function OfficeFloor({
   const meetingIds = agents
     .filter((a) => {
       const st = agentStatuses[a.id] ?? a.status;
-      return isMeetingRole(a.position) && (inPlanning || st === "working" || st === "walking");
+      return shouldJoinPlanningMeeting(a.position, st, inPlanning);
     })
     .map((a) => a.id);
 
@@ -215,7 +216,7 @@ export function OfficeFloor({
           const working = Boolean(
             agent &&
               (agentStatuses[agent.id] ?? agent.status) === "working" &&
-              !isMeetingRole(agent.position),
+              worksAtCodingDesk(agent.position),
           );
           return (
             <div
@@ -248,9 +249,7 @@ export function OfficeFloor({
 
         {agents.map((agent) => {
           const status = agentStatuses[agent.id] ?? agent.status;
-          const meet =
-            isMeetingRole(agent.position) &&
-            (inPlanning || status === "working" || status === "walking");
+          const meet = shouldJoinPlanningMeeting(agent.position, status, inPlanning);
           const at = meet
             ? planningSeatGrid(meetingSeatIndex(agent.id, meetingIds))
             : status === "working" || status === "walking"

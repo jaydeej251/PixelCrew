@@ -1,7 +1,14 @@
 import {
   missingProductHints,
+  productHintsFromGoal,
   violatedForbiddenTerms,
 } from "./goal-fidelity";
+import { needsStagedUiBuild } from "./ui-build-pipeline";
+import {
+  ensureHtmlLinksUtilitiesCss,
+  ensureHtmlWorkspaceShellClass,
+  utilitiesCssFile,
+} from "./pixel-utilities-css";
 
 export type ProjectFile = {
   path: string;
@@ -34,6 +41,28 @@ const SECRETISH = [
   /pass:\s*['"][^'"]+['"]/,
 ];
 
+const STUB_STYLES_CSS =
+  "/* App-specific overrides. Theme tokens live in utilities.css (PixelCrew Tailwind-lite). */\n";
+const STUB_APP_JS = `document.addEventListener("DOMContentLoaded", () => {
+  console.log("UI shell ready");
+});
+`;
+
+const PALETTE_STUB = `<aside id="palette" class="sidebar">
+  <h2>Node palette</h2>
+  <p class="empty-hint">Drag tools onto the workspace.</p>
+  <button type="button" class="node-card"><span class="node-header">Number</span><span class="socket"></span></button>
+</aside>`;
+
+const PROPERTIES_STUB = `<aside id="properties" class="inspector">
+  <h2>Properties</h2>
+  <p class="empty-hint">Select a node to inspect it.</p>
+  <label>Value <input id="prop-value" type="text"></label>
+</aside>`;
+
+const WORKSPACE_MAIN_OPEN = `<main id="workspace" class="workspace">`;
+const WORKSPACE_MAIN_CLOSE = `</main>`;
+
 function fileMap(files: ProjectFile[]): Map<string, string> {
   const map = new Map<string, string>();
   for (const file of files) {
@@ -62,6 +91,250 @@ function localAssetRefs(html: string): string[] {
   return refs;
 }
 
+/** Preview + zip need relative asset paths; strip a leading slash. */
+export function rewriteRootAbsoluteAssets(html: string): string {
+  return html.replace(
+    /((?:src|href)\s*=\s*["'])\/(?!\/)([^"']+)(["'])/gi,
+    (_m, pre: string, path: string, quote: string) => `${pre}${path}${quote}`,
+  );
+}
+
+const WORKSPACE_CANVAS_STUB =
+  `<div class="canvas-wrap"><canvas id="canvas" width="1200" height="800" aria-label="Workspace canvas"></canvas></div>`;
+
+/** Insert a workspace <canvas> when the goal needs one but the model only emitted HTML chrome. */
+export function ensureWorkspaceCanvas(html: string): string {
+  if (/<(canvas|svg)\b/i.test(html)) return html;
+
+  if (/<\/main>/i.test(html)) {
+    return html.replace(/<\/main>/i, `${WORKSPACE_CANVAS_STUB}</main>`);
+  }
+  if (/id\s*=\s*["'][^"']*(workspace|stage|board|graph)[^"']*["']/i.test(html)) {
+    return html.replace(
+      /(<[^>]+\bid\s*=\s*["'][^"']*(?:workspace|stage|board|graph)[^"']*["'][^>]*>)/i,
+      `$1${WORKSPACE_CANVAS_STUB}`,
+    );
+  }
+  if (/class\s*=\s*["'][^"']*(workspace|canvas-wrap)[^"']*["']/i.test(html)) {
+    return html.replace(
+      /(<[^>]+\bclass\s*=\s*["'][^"']*(?:workspace|canvas-wrap)[^"']*["'][^>]*>)/i,
+      `$1${WORKSPACE_CANVAS_STUB}`,
+    );
+  }
+  if (/<\/body>/i.test(html)) {
+    return html.replace(/<\/body>/i, `${WORKSPACE_CANVAS_STUB}</body>`);
+  }
+  return `${html}\n${WORKSPACE_CANVAS_STUB}`;
+}
+
+/**
+ * Fill missing 3-pane chrome for staged editor goals so ship eval does not abort
+ * on "sidebar / inspector / node-card" when the model emitted a thin vertical mock.
+ */
+export function ensureMinimalWorkspaceChrome(html: string): string {
+  let out = html;
+  const hasSidebar =
+    /<(aside|nav)\b/i.test(out) ||
+    /\bid\s*=\s*["'][^"']*(sidebar|palette|tools|toolbar)[^"']*["']/i.test(out) ||
+    /\bclass\s*=\s*["'][^"']*(sidebar|palette|toolbar)[^"']*["']/i.test(out);
+  const hasProperties =
+    /\bid\s*=\s*["'][^"']*(properties|inspector|details|settings)[^"']*["']/i.test(out) ||
+    /\bclass\s*=\s*["'][^"']*(properties|inspector)[^"']*["']/i.test(out) ||
+    /<(aside|section)\b[^>]*(properties|inspector)/i.test(out);
+  const hasNodeCards =
+    /\b(node-card|graph-node|flow-node|socket|port)\b/i.test(out) ||
+    (out.match(/<div\b[^>]*class\s*=\s*["'][^"']*node/gi)?.length ?? 0) >= 1;
+  const hasMain =
+    /<(main)\b/i.test(out) ||
+    /\bid\s*=\s*["'][^"']*(canvas|workspace|stage|board|graph)[^"']*["']/i.test(out);
+
+  if (!hasMain && /<body\b[^>]*>/i.test(out) && /<\/body>/i.test(out)) {
+    out = out.replace(/<body\b([^>]*)>/i, `<body$1>\n${WORKSPACE_MAIN_OPEN}`);
+    out = out.replace(/<\/body>/i, `${WORKSPACE_MAIN_CLOSE}\n</body>`);
+  }
+
+  if (!hasSidebar) {
+    if (/<body\b[^>]*>/i.test(out)) {
+      out = out.replace(/<body\b([^>]*)>/i, `<body$1>\n${PALETTE_STUB}`);
+    } else {
+      out = `${PALETTE_STUB}\n${out}`;
+    }
+  } else if (!hasNodeCards) {
+    out = out.replace(
+      /(<(?:aside|nav)\b[^>]*(?:sidebar|palette|tools|toolbar)[^>]*>)/i,
+      `$1\n<button type="button" class="node-card"><span class="node-header">Node</span><span class="socket"></span></button>`,
+    );
+    if (!/\b(node-card|socket)\b/i.test(out)) {
+      out = out.replace(
+        /<(aside|nav)\b([^>]*)>/i,
+        `<$1$2>\n<button type="button" class="node-card"><span class="node-header">Node</span><span class="socket"></span></button>`,
+      );
+    }
+  }
+
+  if (!hasProperties) {
+    if (/<\/body>/i.test(out)) {
+      out = out.replace(/<\/body>/i, `${PROPERTIES_STUB}\n</body>`);
+    } else {
+      out = `${out}\n${PROPERTIES_STUB}`;
+    }
+  }
+
+  return out;
+}
+
+function goalWantsCanvas(ceoGoal: string): boolean {
+  return /\b(canvas|bezier|node[- ]?based|flow editor|visual flow|blueprint)\b/i.test(
+    ceoGoal,
+  );
+}
+
+/**
+ * Ensure the CEO product name appears in HTML (title / heading) so fidelity
+ * checks do not abort when the model shipped a generic "Editor" shell.
+ */
+export function ensureProductMention(html: string, ceoGoal: string): string {
+  const hints = productHintsFromGoal(ceoGoal);
+  if (hints.length === 0) return html;
+  const lower = html.toLowerCase();
+  if (hints.some((h) => lower.includes(h.toLowerCase()))) return html;
+
+  const primary =
+    hints.find((h) => /(?:Flow|Board|App|Tracker|Hub|Kit|Lab|Desk|Pad|Pulse|Ledger)$/i.test(h)) ??
+    hints[0]!;
+  let out = html;
+  if (/<title\b[^>]*>[\s\S]*?<\/title>/i.test(out)) {
+    out = out.replace(/<title\b[^>]*>[\s\S]*?<\/title>/i, `<title>${primary}</title>`);
+  } else if (/<head\b[^>]*>/i.test(out)) {
+    out = out.replace(/<head\b[^>]*>/i, (m) => `${m}\n<title>${primary}</title>`);
+  }
+  if (!/<h1\b/i.test(out) && /<body\b[^>]*>/i.test(out)) {
+    out = out.replace(/<body\b([^>]*)>/i, `<body$1>\n<h1>${primary}</h1>`);
+  } else if (/<h1\b[^>]*>[\s\S]*?<\/h1>/i.test(out)) {
+    out = out.replace(/<h1\b[^>]*>[\s\S]*?<\/h1>/i, `<h1>${primary}</h1>`);
+  } else if (/id\s*=\s*["']workspace["']/i.test(out)) {
+    out = out.replace(
+      /(<[^>]+\bid\s*=\s*["']workspace["'][^>]*>)/i,
+      `$1\n<h1>${primary}</h1>`,
+    );
+  } else if (/<\/body>/i.test(out)) {
+    out = out.replace(/<\/body>/i, `<h1>${primary}</h1>\n</body>`);
+  } else {
+    out = `${out}\n<h1>${primary}</h1>`;
+  }
+  return out;
+}
+
+function utilitiesLooksComplete(content: string): boolean {
+  return content.length > 400 && /--pc-bg\s*:/i.test(content);
+}
+
+/**
+ * Fill Preview-critical gaps the model forgot in the same turn — BEFORE ship eval
+ * (must match post-persist Preview hardening, or runs abort on gaps Preview would fix).
+ */
+export function augmentProjectFilesForShipEval(
+  files: ProjectFile[],
+  opts: { ceoGoal?: string; stage?: "shell" | "full" } = {},
+): ProjectFile[] {
+  const map = new Map<string, string>();
+  for (const f of files) {
+    map.set(f.path.replace(/^\.\//, ""), f.content);
+  }
+
+  const ceoGoal = opts.ceoGoal ?? "";
+  const staged = needsStagedUiBuild(ceoGoal);
+  const wantsCanvas = goalWantsCanvas(ceoGoal);
+
+  for (const [path, content] of [...map.entries()]) {
+    if (!/\.html?$/i.test(path)) continue;
+    let html = rewriteRootAbsoluteAssets(content);
+    if (staged) {
+      html = ensureMinimalWorkspaceChrome(html);
+    }
+    if (wantsCanvas) {
+      html = ensureWorkspaceCanvas(html);
+    }
+    html = ensureProductMention(html, ceoGoal);
+    if (staged || /utilities\.css/i.test(html)) {
+      html = ensureHtmlLinksUtilitiesCss(html);
+      html = ensureHtmlWorkspaceShellClass(html);
+    }
+    map.set(path, html);
+  }
+
+  const htmlBlob = [...map.entries()]
+    .filter(([p]) => /\.html?$/i.test(p))
+    .map(([, c]) => c)
+    .join("\n");
+
+  const wantsUtils = /utilities\.css/i.test(htmlBlob) || staged;
+  const util = utilitiesCssFile();
+
+  // Always prefer the real Tailwind-lite pack — models often emit a 1-line stub
+  // named utilities.css that would otherwise block dark-theme evidence.
+  if (wantsUtils) {
+    const existing = map.get(util.path) ?? map.get("utilities.css");
+    if (!existing || !utilitiesLooksComplete(existing)) {
+      map.set(util.path, util.content);
+    }
+  }
+
+  // Default styles.css / app.js links for staged shells that forgot them.
+  if (staged) {
+    for (const [path, content] of [...map.entries()]) {
+      if (!/\.html?$/i.test(path)) continue;
+      let html = content;
+      if (!/\bstyles\.css\b/i.test(html) && /utilities\.css/i.test(html)) {
+        html = html.replace(
+          /(<link\b[^>]*utilities\.css[^>]*>)/i,
+          `$1\n    <link rel="stylesheet" href="styles.css">`,
+        );
+      }
+      if (!/\bapp\.js\b/i.test(html) && /<\/body>/i.test(html)) {
+        html = html.replace(/<\/body>/i, `<script src="app.js"></script>\n</body>`);
+      }
+      map.set(path, html);
+    }
+  }
+
+  const htmlAfter = [...map.entries()]
+    .filter(([p]) => /\.html?$/i.test(p))
+    .map(([, c]) => c)
+    .join("\n");
+
+  for (const content of htmlAfter ? [htmlAfter] : []) {
+    for (const rawRef of localAssetRefs(content)) {
+      const path = rawRef.replace(/^\.\//, "");
+      if (map.has(path)) continue;
+      if (/utilities\.css$/i.test(path)) {
+        map.set(path, util.content);
+        continue;
+      }
+      if (/\.css$/i.test(path)) {
+        map.set(path, STUB_STYLES_CSS);
+        continue;
+      }
+      if (/\.m?js$/i.test(path)) {
+        map.set(path, STUB_APP_JS);
+      }
+    }
+  }
+
+  for (const [path, content] of [...map.entries()]) {
+    if (!/\.html?$/i.test(path)) continue;
+    for (const rawRef of localAssetRefs(content)) {
+      const ref = rawRef.replace(/^\.\//, "");
+      if (map.has(ref)) continue;
+      if (/utilities\.css$/i.test(ref)) map.set(ref, util.content);
+      else if (/\.css$/i.test(ref)) map.set(ref, STUB_STYLES_CSS);
+      else if (/\.m?js$/i.test(ref)) map.set(ref, STUB_APP_JS);
+    }
+  }
+
+  return [...map.entries()].map(([path, content]) => ({ path, content }));
+}
+
 function rootAbsoluteAssetRefs(html: string): string[] {
   const refs: string[] = [];
   const re = /(?:src|href)\s*=\s*["'](\/(?!\/)[^"']+)["']/gi;
@@ -79,6 +352,127 @@ const CDN_HOST =
 function hasRealContent(html: string): boolean {
   const text = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
   return text.length > 80;
+}
+
+/** Workspace/editor apps must not ship a bare-canvas MVP or unstyled document. */
+export function collectUiRichnessIssues(
+  files: ProjectFile[],
+  ceoGoal: string,
+): ShipIssue[] {
+  if (!needsStagedUiBuild(ceoGoal)) return [];
+
+  const issues: ShipIssue[] = [];
+  const html = htmlFiles(files)
+    .map((f) => f.content)
+    .join("\n");
+  const css = files
+    .filter((f) => /\.css$/i.test(f.path))
+    .map((f) => f.content)
+    .join("\n");
+  const blob = `${html}\n${css}`.toLowerCase();
+  const wantsCanvas = goalWantsCanvas(ceoGoal);
+
+  const hasSidebar =
+    /<(aside|nav)\b/i.test(html) ||
+    /\bid\s*=\s*["'][^"']*(sidebar|palette|tools|toolbar)[^"']*["']/i.test(html) ||
+    /\bclass\s*=\s*["'][^"']*(sidebar|palette|toolbar)[^"']*["']/i.test(html);
+  const hasCanvasOrSvg = /<(canvas|svg)\b/i.test(html);
+  const hasMainWorkspace =
+    hasCanvasOrSvg ||
+    /\bid\s*=\s*["'][^"']*(canvas|workspace|stage|board|graph)[^"']*["']/i.test(html) ||
+    (/<(main)\b/i.test(html) && !wantsCanvas);
+  const hasProperties =
+    /\bid\s*=\s*["'][^"']*(properties|inspector|details|settings)[^"']*["']/i.test(html) ||
+    /\bclass\s*=\s*["'][^"']*(properties|inspector)[^"']*["']/i.test(html) ||
+    /<(aside|section)\b[^>]*(properties|inspector)/i.test(html);
+  const hasNodeCards =
+    /\b(node-card|graph-node|flow-node|socket|port)\b/i.test(blob) ||
+    (html.match(/<div\b[^>]*class\s*=\s*["'][^"']*node/gi)?.length ?? 0) >= 1;
+  const canvasHeavy =
+    /<canvas\b/i.test(html) &&
+    !hasSidebar &&
+    (html.replace(/<canvas[\s\S]*?<\/canvas>/gi, "").replace(/<[^>]+>/g, " ").trim().length <
+      120);
+  const linksStylesheet =
+    /<link\b[^>]*\brel\s*=\s*["'][^"']*stylesheet[^"']*["'][^>]*>/i.test(html) ||
+    /<style\b/i.test(html);
+  const linksUtilities = /utilities\.css/i.test(html);
+  const hasUtilitiesFile = files.some(
+    (f) => /utilities\.css$/i.test(f.path) && f.content.length > 400,
+  );
+  const hasChromeLayout =
+    /\b(app-shell|layout-3pane)\b/i.test(html) ||
+    /grid-template-columns\s*:\s*[^;]{0,80}(1fr|minmax)/i.test(css);
+  const hasDarkTheme =
+    /--pc-bg\s*:/i.test(css) ||
+    /color-scheme\s*:\s*dark/i.test(css) ||
+    /background(?:-color)?\s*:\s*#0[0-9a-f]{2,5}\b/i.test(css) ||
+    (linksUtilities && hasUtilitiesFile);
+
+  if (!linksStylesheet) {
+    issues.push({
+      severity: "fail",
+      message:
+        "index.html does not link any stylesheet. Link utilities.css (local Tailwind-lite) so Preview is not an unstyled white document.",
+    });
+  }
+  if (hasUtilitiesFile && !linksUtilities && !/<style\b/i.test(html)) {
+    issues.push({
+      severity: "fail",
+      message:
+        "utilities.css exists but index.html does not link it. Add <link rel=\"stylesheet\" href=\"utilities.css\"> or Preview stays unstyled.",
+    });
+  }
+  if (!hasChromeLayout) {
+    issues.push({
+      severity: "fail",
+      message:
+        "Missing 3-pane workspace layout (class=\"app-shell\" / \"layout-3pane\" from utilities.css, or CSS grid with sidebars + main). Do not ship a vertical stack of headings.",
+    });
+  }
+  if (!hasDarkTheme) {
+    issues.push({
+      severity: "fail",
+      message:
+        "Missing dark-mode theme evidence (:root/--pc-bg or linked utilities.css). PixelFlow-style editors must not ship default white browser chrome.",
+    });
+  }
+  if (!hasSidebar) {
+    issues.push({
+      severity: "fail",
+      message:
+        "Workspace UI is missing a tool/palette sidebar (aside/nav or #sidebar/#palette). Do not ship a bare canvas — add HTML chrome.",
+    });
+  }
+  if (wantsCanvas && !hasCanvasOrSvg) {
+    issues.push({
+      severity: "fail",
+      message:
+        "Goal asks for an interactive canvas/SVG workspace, but no <canvas> or <svg> was emitted.",
+    });
+  }
+  if (!hasMainWorkspace) {
+    issues.push({
+      severity: "fail",
+      message:
+        "Workspace UI is missing a main canvas/workspace region (#canvas, #workspace, <main>, or <canvas>).",
+    });
+  }
+  if (!hasProperties && !hasNodeCards) {
+    issues.push({
+      severity: "fail",
+      message:
+        "Workspace UI needs either a properties/inspector panel or HTML node cards with sockets — not only shapes drawn on canvas.",
+    });
+  }
+  if (canvasHeavy) {
+    issues.push({
+      severity: "fail",
+      message:
+        "Output looks like a stripped canvas-only MVP. Rebuild with HTML sidebars, toolbars, and styled node cards; use canvas/SVG for grid/cables only.",
+    });
+  }
+  return issues;
 }
 
 function combinedScripts(files: ProjectFile[]): string {
@@ -242,14 +636,19 @@ export function collectJavascriptSyntaxIssues(files: ProjectFile[]): ShipIssue[]
 /** Inspect emitted project files the way a preview user would. */
 export function evalShippedProject(
   files: ProjectFile[],
-  opts: { role?: string; ceoGoal?: string } = {},
+  opts: { role?: string; ceoGoal?: string; stage?: "shell" | "full" } = {},
 ): ShipReport {
   const issues: ShipIssue[] = [];
   const role = opts.role ?? "";
   const ceoGoal = opts.ceoGoal ?? "";
+  const stage = opts.stage ?? "full";
   const backendOnly = role === "backend_engineer";
-  const map = fileMap(files);
-  const html = htmlFiles(files);
+  // Auto-fill utilities.css + stub linked CSS/JS the model linked but forgot to emit.
+  const working = backendOnly
+    ? files
+    : augmentProjectFilesForShipEval(files, { ceoGoal, stage });
+  const map = fileMap(working);
+  const html = htmlFiles(working);
   const htmlBlob = html.map((p) => p.content).join("\n");
 
   if (!backendOnly && html.length === 0) {
@@ -259,7 +658,7 @@ export function evalShippedProject(
     });
   }
 
-  issues.push(...collectJavascriptSyntaxIssues(files));
+  issues.push(...collectJavascriptSyntaxIssues(working));
 
   if (!backendOnly && html.length > 0 && ceoGoal.trim()) {
     if (isMismatchedMarketingHtml(htmlBlob, ceoGoal)) {
@@ -270,7 +669,7 @@ export function evalShippedProject(
       });
     }
 
-    const blob = `${htmlBlob}\n${files.map((f) => f.content).join("\n")}`;
+    const blob = `${htmlBlob}\n${working.map((f) => f.content).join("\n")}`;
     const missingHints = missingProductHints(blob, ceoGoal);
     if (missingHints.length > 0) {
       issues.push({
@@ -286,6 +685,8 @@ export function evalShippedProject(
         message: `Shipped UI violates explicit CEO bans (${forbidden.join(", ")}). Remove unrequested template sections and follow the goal literally.`,
       });
     }
+
+    issues.push(...collectUiRichnessIssues(working, ceoGoal));
   }
 
   for (const page of html) {
@@ -350,10 +751,16 @@ export function evalShippedProject(
       });
     }
 
-    if (/javascript:\s*void/i.test(content) || /href\s*=\s*["']#["']/.test(content)) {
+    if (/javascript:\s*void/i.test(content)) {
       issues.push({
         severity: "fail",
-        message: `${page.path} has a dead CTA (javascript:void(0) or href="#"). Use href="#contact" (or another real section id).`,
+        message: `${page.path} has a dead CTA (javascript:void(0)). Use a real button or href="#section-id".`,
+      });
+    } else if (/href\s*=\s*["']#["']/.test(content)) {
+      // Common in editor chrome; Preview still works. Prefer real ids but do not abort.
+      issues.push({
+        severity: "warn",
+        message: `${page.path} has href="#" placeholders. Prefer real section ids or <button type="button">.`,
       });
     }
     if (/\son(?:click|submit|load)\s*=/i.test(content)) {
@@ -375,8 +782,8 @@ export function evalShippedProject(
     }
   }
 
-  const js = combinedScripts(files);
-  if (!backendOnly && hasContactForm(htmlBlob)) {
+  const js = combinedScripts(working);
+  if (!backendOnly && stage !== "shell" && hasContactForm(htmlBlob)) {
     if (!/localStorage\.setItem/.test(js)) {
       issues.push({
         severity: "fail",
@@ -406,7 +813,7 @@ export function evalShippedProject(
     }
   }
 
-  for (const file of files) {
+  for (const file of working) {
     for (const pattern of SECRETISH) {
       if (pattern.test(file.content)) {
         issues.push({

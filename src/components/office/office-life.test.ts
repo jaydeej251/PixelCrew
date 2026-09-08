@@ -172,6 +172,36 @@ describe("simulateOfficeLife", () => {
     assert.equal(life.activity, "meet");
     assert.notEqual(life.activity, "work");
   });
+
+  it("seats Senior Developer at a coding desk when working after plan publish", () => {
+    const jordan = seniorDev("j1");
+    const map = new Map<string, LifeState>();
+    ensureLife(map, jordan, 0);
+    const desk = atDesk(jordan);
+    const life = map.get("j1")!;
+    life.x = desk.x + 2;
+    life.z = desk.z + 2;
+
+    for (let i = 0; i < 90; i++) {
+      simulateOfficeLife(map, [jordan], { j1: "working" }, i * 0.05, 0.05, false);
+    }
+
+    assert.equal(life.activity, "work");
+    assert.ok(Math.hypot(life.x - desk.x, life.z - desk.z) < 0.15);
+  });
+
+  it("keeps Senior Developer in planning while the plan is open", () => {
+    const jordan = seniorDev("j1");
+    const map = new Map<string, LifeState>();
+    ensureLife(map, jordan, 0);
+    const life = map.get("j1")!;
+
+    for (let i = 0; i < 90; i++) {
+      simulateOfficeLife(map, [jordan], { j1: "working" }, i * 0.05, 0.05, true);
+    }
+
+    assert.equal(life.activity, "meet");
+  });
 });
 
 describe("activity labels", () => {
@@ -193,5 +223,18 @@ function planner(id: string): OfficeAgent {
     status: "idle",
     avatarColor: "#f59e0b",
     desk: { x: 1, y: 5, label: "CEO Desk", room: "Executive" },
+  };
+}
+
+function seniorDev(id: string): OfficeAgent {
+  return {
+    id,
+    name: "Jordan Lee",
+    position: "tech_architect",
+    positionLabel: "Senior Developer",
+    jobBoundary: "",
+    status: "idle",
+    avatarColor: "#22c55e",
+    desk: { x: 6, y: 4, label: "Arch Desk", room: "Engineering" },
   };
 }

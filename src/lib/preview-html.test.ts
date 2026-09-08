@@ -59,6 +59,25 @@ describe("preparePreviewHtml", () => {
     assert.match(out, /<script>[\s\S]*localStorage[\s\S]*<\/script>/);
     assert.match(out, /makeStore/);
   });
+
+  it("auto-links and inlines utilities.css when HTML forgot the stylesheet", () => {
+    const files = new Map([
+      [
+        "index.html",
+        `<!DOCTYPE html><html><head><title>PixelFlow</title></head><body><h1>PixelFlow</h1></body></html>`,
+      ],
+      ["utilities.css", ":root { --pc-bg: #0b1220; } body { background: var(--pc-bg); color: #fff; }"],
+    ]);
+    const out = preparePreviewHtml(
+      files.get("index.html")!,
+      "run1",
+      "index.html",
+      "/api/previews/tok/",
+      files,
+    );
+    assert.match(out, /--pc-bg/);
+    assert.match(out, /data-inlined-from="utilities\.css"/);
+  });
 });
 
 describe("preparePreviewAsset", () => {

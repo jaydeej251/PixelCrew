@@ -11,6 +11,11 @@ import {
   isFollowUpGoal,
 } from "@/lib/follow-up-goal";
 import {
+  RUN_BRAIN_TITLE,
+  buildAutoHireConfirmPayload,
+  serializeRunBrain,
+} from "@/lib/run-brain";
+import {
   assertRunAccess,
   assertWorkspaceAccess,
   checkPlanLimits,
@@ -28,6 +33,8 @@ const createRunSchema = z
     model: z.string().trim().min(1).max(200).optional(),
     /** Prior chat when Request changes — copy code artifacts so patches are surgical. */
     parentRunId: z.string().min(1).optional(),
+    /** Required when the roster is empty — auto-hire uses the Start brain. */
+    confirmAutoHire: z.boolean().optional(),
   })
   .strict();
 
@@ -49,7 +56,7 @@ export async function POST(req: Request) {
         { status: 400 },
       );
     }
-    const { workspaceId, provider, model, parentRunId } = parsed.data;
+    const { workspaceId, provider, model, parentRunId, confirmAutoHire } = parsed.data;
     const goal = normalizeNewRunGoal(parsed.data.ceoGoal);
     if (!goal) {
       return NextResponse.json(
@@ -88,6 +95,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: brains.error }, { status: 400 });
     }
 
+    // Empty roster → auto-hire uses Start brain. Require explicit confirm so the CEO
+    // sees provider/model (e.g. Ollama Cloud) before we spend a monthly run.
+    const rosterCount = await prisma.agent.count({ where: { workspaceId } });
+    if (rosterCount === 0 && confirmAutoHire !== true) {
+      return NextResponse.json(buildAutoHireConfirmPayload(brains), { status: 400 });
+    }
+
     await prisma.workspace.update({
       where: { id: workspaceId },
       data: { concurrencyCap: 2 },
@@ -103,6 +117,19 @@ export async function POST(req: Request) {
         ceoGoal: goal,
         title: deriveRunTitle(goal),
         status: "pending",
+      },
+    });
+
+    // Persist Start picker so empty-roster auto-hire uses Ollama/etc., not OpenRouter.
+    await prisma.artifact.create({
+      data: {
+        runId: run.id,
+        type: "other",
+        title: RUN_BRAIN_TITLE,
+        content: serializeRunBrain({
+          provider: brains.provider,
+          model: brains.model,
+        }),
       },
     });
 
