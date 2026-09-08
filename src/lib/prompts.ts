@@ -151,13 +151,65 @@ ${CULTURE}
 
 You receive the CURRENT shipped files and a QA punch list.
 Rules:
+- Your ENTIRE reply must be one or more complete \`\`\`file:path fences. Start with a fence — not a title or essay.
+- FORBIDDEN: architecture essays, "High-Level Stack" tables, council brainstorms, re-planning the product.
 - Emit ONLY files you must change. Each changed file is one complete \`\`\`file:path fence (full content for that path).
-- Do NOT re-emit unchanged files. Do NOT rebuild the whole app from scratch.
-- Prefer the smallest change that clears each blocker/major on the punch list.
+- Do NOT re-emit unchanged files. Do NOT rebuild HTML/CSS from scratch unless the punch list requires it.
+- Prefer the smallest HTML/CSS change that clears each blocker. For app.js: if the punch list mentions listeners, handlers, drag, sockets, localStorage, or "UI shell ready", emit a COMPLETE working \`\`\`file:app.js — HTML/CSS-only is NOT enough.
+- Never leave a truncated or unparseable .js file. Close every fence.
+- Do NOT leave app.js as a shell stub (e.g. only console.log("UI shell ready") inside DOMContentLoaded).
 - Keep the existing product name, working behavior, and structure unless the punch list requires otherwise.
 - Static HTML/CSS/JS only. No Tailwind CDN, no type="module", no secrets.
 - If a punch item needs a missing feature, add the minimum markup/JS/CSS for that feature into the existing files — do not start a new template.
 ${STATIC_SHIP_BAR}`;
+}
+
+/**
+ * When shipped app.js is a shell stub, surgical CSS/HTML cannot clear a punch list —
+ * force a full working script rewrite (from park/pixelflow QA-fix P0).
+ */
+export function qaFixFullAppJsSystemPrompt(name: string, positionLabel: string): string {
+  return `You are ${name}, ${positionLabel}. Shipped app.js is a UI-shell stub (or missing). Surgical CSS/HTML tweaks will NOT pass QA.
+${CULTURE}
+
+Your job this turn: emit a COMPLETE working \`\`\`file:app.js that implements the QA punch list against the CURRENT HTML ids/classes.
+Rules:
+- Start your reply with \`\`\`file:app.js — no brainstorm, no stack table, no architecture essay.
+- Wire real addEventListener handlers for every punch item (add/remove node, drag, sockets/connections, evaluation, localStorage load/save, export/copy/close modal, etc.).
+- Read the CURRENT shipped HTML in context and bind to those exact ids/classes — do not invent a new product.
+- You may also emit small HTML/CSS fixes if an id the punch list needs is missing — but app.js is mandatory and must not be a stub.
+- Static classic script only (no type="module", no CDN). Keep the file parseable and complete — never truncate.
+${STATIC_SHIP_BAR}`;
+}
+
+/** Punch lists that are really about broken/missing JS behavior. */
+export function punchListRequiresAppJs(punch: string): boolean {
+  return /\b(app\.js|addEventListener|listener|handler|mousedown|mousemove|mouseup|click|socket|localStorage|UI shell ready|shell stub|drag|connect|evaluat)/i.test(
+    punch,
+  );
+}
+
+export { countInteractiveListeners, isShellStubAppJs } from "./js-stub";
+
+/** Task / punch text that demands a full app.js rewrite (not a one-line tweak). */
+export function qaFixRequiresFullAppJs(text: string): boolean {
+  return (
+    /CRITICAL:\s*shipped app\.js is a UI-shell stub/i.test(text) ||
+    /FULL working \`\`\`file:app\.js/i.test(text) ||
+    /rewrite app\.js fully/i.test(text)
+  );
+}
+
+/** Model burned tokens on a council-style redesign instead of file fences. */
+export function looksLikeArchitectureBrainstorm(text: string): boolean {
+  const t = text.slice(0, 2_500);
+  if (/```file:/i.test(text)) return false;
+  return (
+    /\b(High-?Level Stack|Technical Brainstorm|hand-?off to the implementation|Quick-?look for the Council)\b/i.test(
+      t,
+    ) ||
+    (/\b(Layer\s*\|\s*Tech\s*\|\s*Why)\b/i.test(t) && /\b(architecture|stack)\b/i.test(t))
+  );
 }
 
 export function workerSystemPrompt(
@@ -166,6 +218,7 @@ export function workerSystemPrompt(
   jobBoundary: string,
   position?: string,
   taskTitle?: string,
+  opts?: { followUpQa?: boolean; qaFixFullAppJs?: boolean },
 ): string {
   const isQaFix = Boolean(taskTitle) && /^Fix QA punch list\b/i.test(taskTitle!);
   const isFollowUpFix = Boolean(taskTitle) && isFollowUpImplementTitle(taskTitle!);
@@ -180,6 +233,9 @@ export function workerSystemPrompt(
     return followUpFixSystemPrompt(name, positionLabel);
   }
   if (isQaFix && (isEngineerSeat || position === "tech_architect")) {
+    if (opts?.qaFixFullAppJs) {
+      return qaFixFullAppJsSystemPrompt(name, positionLabel);
+    }
     return qaFixSystemPrompt(name, positionLabel);
   }
   if (isEngineerSeat || seniorBuilding) {

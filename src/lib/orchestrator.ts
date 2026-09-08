@@ -39,6 +39,11 @@ import {
   parseNeededRoles,
   councilThreadFromTasks,
   STATIC_SHIP_BAR,
+  isShellStubAppJs,
+  looksLikeArchitectureBrainstorm,
+  punchListRequiresAppJs,
+  qaFixFullAppJsSystemPrompt,
+  qaFixRequiresFullAppJs,
 } from "./prompts";
 import {
   hasUnclosedFence,
@@ -204,7 +209,10 @@ function summarizeOutput(output: string): string {
 }
 
 /** Current shipped code for surgical QA fixes and honest QA review. */
-async function loadShippedCodeSnapshot(runId: string): Promise<string> {
+async function loadShippedCodeSnapshot(
+  runId: string,
+  opts?: { surgical?: boolean },
+): Promise<string> {
   const code = await prisma.artifact.findMany({
     where: { runId, type: "code", filePath: { not: null } },
     select: { filePath: true, content: true },
@@ -215,9 +223,10 @@ async function loadShippedCodeSnapshot(runId: string): Promise<string> {
   // Prefer HTML/CSS/JS product files first so QA sees markup before large READMEs.
   const rank = (path: string) => {
     if (/\.html?$/i.test(path)) return 0;
-    if (/\.css$/i.test(path)) return 1;
-    if (/\.jsx?$/i.test(path) || /\.tsx?$/i.test(path)) return 2;
-    return 3;
+    if (/\.m?jsx?$/i.test(path) || /\.tsx?$/i.test(path)) return 1;
+    if (/utilities\.css$/i.test(path)) return 3; // known pack — deprioritize vs app CSS
+    if (/\.css$/i.test(path)) return 2;
+    return 4;
   };
   const sorted = [...code].sort(
     (a, b) => rank(a.filePath!) - rank(b.filePath!) || a.filePath!.localeCompare(b.filePath!),
@@ -225,17 +234,19 @@ async function loadShippedCodeSnapshot(runId: string): Promise<string> {
 
   const parts: string[] = [];
   let used = 0;
-  // Budget must fit a full static app (HTML+CSS+JS). An 8k/file cut mid-init() made QA
-  // FAIL shops/listeners that existed past the truncation — false punch lists forever.
-  const TOTAL_BUDGET = 48_000;
+  // Full audit needs room for a static app. Surgical continue/QA-fix must stay lean —
+  // 48k × (Eng+QA) × several rounds is how continue chats hit 100k by round 3.
+  const TOTAL_BUDGET = opts?.surgical ? 18_000 : 48_000;
+  const PER_FILE_CAP = opts?.surgical ? 8_000 : 48_000;
   for (const artifact of sorted) {
     const path = artifact.filePath!;
     const remaining = TOTAL_BUDGET - used;
     if (remaining < 200) break;
     const raw = artifact.content;
+    const fileCap = Math.min(remaining, PER_FILE_CAP);
     const content =
-      raw.length > remaining
-        ? `${raw.slice(0, remaining)}\n/* …truncated for prompt — prefer smaller files */`
+      raw.length > fileCap
+        ? `${raw.slice(0, fileCap)}\n/* …truncated for prompt — prefer smaller files */`
         : raw;
     const block = `\`\`\`file:${path}\n${content}\n\`\`\``;
     parts.push(block);
@@ -307,11 +318,25 @@ export async function executeAgentTask(
   const seniorBuilding =
     agent.position === "tech_architect" &&
     (/^Implement\b/i.test(task.title) || isSurgicalPatch);
+
+  const runMeta = await prisma.run.findUnique({
+    where: { id: runId },
+    select: { ceoGoal: true },
+  });
+  const ceoGoal = runMeta?.ceoGoal ?? "";
+  const followUpRun = isFollowUpGoal(ceoGoal);
+
   if (kind === "dispatch" || kind === "synth" || kind === "legacy") config.maxTokens = 2200;
   else if (kind === "council") config.maxTokens = 1200;
-  else if (isSurgicalPatch && (isEngineer || seniorBuilding)) config.maxTokens = 3500;
+  else if (
+    isQaFixTask &&
+    qaFixRequiresFullAppJs(task.description ?? "") &&
+    (isEngineer || seniorBuilding)
+  )
+    config.maxTokens = 8000;
+  else if (isSurgicalPatch && (isEngineer || seniorBuilding)) config.maxTokens = 5000;
   else if (isEngineer || seniorBuilding) config.maxTokens = 5000;
-  else if (agent.position === "qa_engineer") config.maxTokens = 2200;
+  else if (agent.position === "qa_engineer") config.maxTokens = followUpRun ? 1600 : 2200;
   else config.maxTokens = 1500;
 
   if (config.provider !== "mock" && config.provider !== "ollama") {
@@ -324,11 +349,6 @@ export async function executeAgentTask(
     );
   }
 
-  const runMeta = await prisma.run.findUnique({
-    where: { id: runId },
-    select: { ceoGoal: true },
-  });
-  const ceoGoal = runMeta?.ceoGoal ?? "";
   const provider = createProvider(config, agent.position, task.title, ceoGoal);
   const prior = await loadPriorContext(runId, task);
   let shipContext = "";
@@ -351,7 +371,11 @@ export async function executeAgentTask(
 
   // Fix agents, follow-up patches, and QA reviewers need real artifacts.
   const shippedSnapshot =
-    isSurgicalPatch || isQaReview ? await loadShippedCodeSnapshot(runId) : "";
+    isSurgicalPatch || isQaReview
+      ? await loadShippedCodeSnapshot(runId, {
+          surgical: isSurgicalPatch || followUpRun,
+        })
+      : "";
 
   const systemPrompt =
     kind === "dispatch"
@@ -368,6 +392,10 @@ export async function executeAgentTask(
                 agent.jobBoundary,
                 agent.position,
                 task.title,
+                {
+                  qaFixFullAppJs:
+                    isQaFixTask && qaFixRequiresFullAppJs(task.description ?? ""),
+                },
               );
 
   const goalAlreadyInDescription =
@@ -530,20 +558,47 @@ export async function executeAgentTask(
         (f) => /\.m?js$/i.test(f.path) && javascriptSyntaxError(f.content),
       ))
   ) {
+    const truncated = fullOutput;
+    // Do NOT append a mid-word continuation onto a cut fence — that yields unparseable
+    // JS which we refuse to persist, so QA sees the same punch forever while the HUD
+    // still shows "Engineering wrote something."
+    fullOutput = "";
+    thinkBuf = "";
     result = await provider.stream(
       [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
-        { role: "assistant", content: fullOutput },
+        { role: "assistant", content: truncated.slice(0, 4_000) },
         {
           role: "user",
           content:
-            "You were cut off or left incomplete JavaScript. Continue exactly from the last word. Finish every remaining section and close every file fence. Every .js file must be complete and parseable.",
+            "STOP — that reply was CUT OFF or left an unclosed ``` fence / broken JavaScript. " +
+            "Do NOT continue mid-word. Re-emit each incomplete file as a COMPLETE ```file:path fence from the start. " +
+            "Close every fence. Every .js file must be full and parseable. " +
+            (isSurgicalPatch
+              ? "For QA-fix / Request-changes: prefer a complete working app.js if listeners/handlers are on the punch list."
+              : ""),
         },
       ],
       onChunk,
     );
+    fullOutput = fullOutput || result.content;
     await flushThinking(true);
+    if (
+      (isEngineer || seniorBuilding) &&
+      (result.finishReason === "length" ||
+        hasUnclosedFence(fullOutput) ||
+        parseFileFences(fullOutput).some(
+          (f) => /\.m?js$/i.test(f.path) && javascriptSyntaxError(f.content),
+        ))
+    ) {
+      throw new RunAbortedError(
+        isSurgicalPatch
+          ? "Engineering fix was truncated twice (incomplete file fences / broken JavaScript). " +
+            "Nothing safe was saved — try Resume or Continue with a narrower punch list."
+          : "Engineering output was truncated twice. Try Resume with a narrower goal.",
+      );
+    }
   }
 
   // First Implement may rewrite for ship bar. QA-fix / Request-changes are surgical —
@@ -582,7 +637,34 @@ export async function executeAgentTask(
     }
   } else if ((isEngineer || seniorBuilding) && isSurgicalPatch) {
     const fixFiles = parseFileFences(fullOutput);
-    const jsFails = fixFiles.filter(
+    // QA-fix / Request-changes with zero fences = model wrote prose only; force a fence retry.
+    if (fixFiles.length === 0 && (isQaFixTask || isFollowUpTask)) {
+      const previous = fullOutput;
+      fullOutput = "";
+      thinkBuf = "";
+      result = await provider.stream(
+        [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+          { role: "assistant", content: previous.slice(0, 1_500) },
+          {
+            role: "user",
+            content:
+              "That reply had NO ```file:path fences — so nothing was saved and QA will FAIL again. " +
+              "Emit the fix NOW as complete file fences (almost certainly ```file:app.js). No essay.",
+          },
+        ],
+        onChunk,
+      );
+      fullOutput = fullOutput || result.content;
+      await flushThinking(true);
+      if (parseFileFences(fullOutput).length === 0) {
+        throw new RunAbortedError(
+          "QA fix / Request-changes finished without updating any files. The punch list was not applied.",
+        );
+      }
+    }
+    const jsFails = parseFileFences(fullOutput).filter(
       (f) => /\.m?js$/i.test(f.path) && javascriptSyntaxError(f.content),
     );
     if (jsFails.length > 0) {
@@ -596,7 +678,7 @@ export async function executeAgentTask(
         [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
-          { role: "assistant", content: previous },
+          { role: "assistant", content: previous.slice(0, 3_000) },
           {
             role: "user",
             content:
@@ -618,10 +700,95 @@ export async function executeAgentTask(
         (f) => /\.m?js$/i.test(f.path) && javascriptSyntaxError(f.content),
       );
       if (stillBad.length > 0) {
-        console.warn(
-          `[PixelCrew] QA-fix still emitted invalid JS (${stillBad
+        throw new RunAbortedError(
+          `Engineering fix shipped unparseable JavaScript (${stillBad
             .map((f) => f.path)
-            .join(", ")}); broken scripts will not be persisted.`,
+            .join(", ")}). ` +
+            `Broken scripts were NOT saved — Preview still has the prior files. Try Resume.`,
+        );
+      }
+    }
+
+    // Punch lists about listeners/stub app.js cannot be cleared by HTML/CSS alone.
+    if (isQaFixTask && punchListRequiresAppJs(task.description ?? "")) {
+      const emitted = parseFileFences(fullOutput);
+      const appJs = emitted.find((f) => /^app\.js$/i.test(f.path.replace(/^\.\//, "")));
+      if (!appJs || isShellStubAppJs(appJs.content)) {
+        const previous = fullOutput;
+        fullOutput = "";
+        thinkBuf = "";
+        const escalateSystem = qaFixFullAppJsSystemPrompt(
+          agent.name,
+          agent.positionLabel,
+        );
+        config.maxTokens = Math.max(config.maxTokens ?? 0, 8000);
+        const escalateProvider = createProvider(
+          config,
+          agent.position,
+          task.title,
+          ceoGoal,
+        );
+        result = await escalateProvider.stream(
+          [
+            { role: "system", content: escalateSystem },
+            { role: "user", content: userPrompt },
+            { role: "assistant", content: previous.slice(0, 2_000) },
+            {
+              role: "user",
+              content:
+                "CRITICAL RETRY: prior reply did not ship a working app.js " +
+                "(missing, or still a UI-shell stub — DOMContentLoaded + console.log does NOT count). " +
+                "Start with ```file:app.js and implement EVERY listener/handler/drag/socket/localStorage " +
+                "item on the punch list. HTML/CSS-only is not enough. No Technical Brainstorm.",
+            },
+          ],
+          onChunk,
+        );
+        fullOutput = fullOutput || result.content;
+        await flushThinking(true);
+        const retryApp = parseFileFences(fullOutput).find((f) =>
+          /^app\.js$/i.test(f.path.replace(/^\.\//, "")),
+        );
+        if (!retryApp || isShellStubAppJs(retryApp.content)) {
+          throw new RunAbortedError(
+            "QA fix round did not ship a working app.js (still missing or a UI-shell stub). " +
+              "Punch-list items about listeners/handlers were not fixed.",
+          );
+        }
+      }
+    }
+
+    if (
+      isQaFixTask &&
+      (looksLikeArchitectureBrainstorm(fullOutput) ||
+        (parseFileFences(fullOutput).length === 0 &&
+          /stack|architecture|brainstorm/i.test(fullOutput.slice(0, 800))))
+    ) {
+      const previous = fullOutput;
+      fullOutput = "";
+      thinkBuf = "";
+      result = await provider.stream(
+        [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+          { role: "assistant", content: previous.slice(0, 1_500) },
+          {
+            role: "user",
+            content:
+              "STOP. That was a Technical Brainstorm / architecture essay — not a QA fix. " +
+              "Emit ONLY ```file:path fences that patch the punch list (almost certainly a complete working app.js).",
+          },
+        ],
+        onChunk,
+      );
+      fullOutput = fullOutput || result.content;
+      await flushThinking(true);
+      if (
+        looksLikeArchitectureBrainstorm(fullOutput) ||
+        parseFileFences(fullOutput).length === 0
+      ) {
+        throw new RunAbortedError(
+          "QA fix round wrote an architecture brainstorm instead of file patches. Try Resume.",
         );
       }
     }
@@ -1284,7 +1451,9 @@ async function decideAndEnqueueQaRework(
     where: { runId },
     select: { id: true, title: true, content: true },
   });
-  const roundLimit = qaReworkRoundLimit(gateArts);
+  const roundLimit = qaReworkRoundLimit(gateArts, {
+    followUp: isFollowUpGoal(ceoGoal),
+  });
   const completedRounds = countQaReworkRounds(allTasks);
   if (completedRounds >= roundLimit) {
     return {
@@ -1342,12 +1511,47 @@ async function decideAndEnqueueQaRework(
     punchList.trim() ||
     "(QA did not list punch items — re-check the CEO goal against the shipped files and fix every gap.)";
   // One fix owner — FE+BE both applying the same punch list doubled tokens.
+  // Keep fix prompts punch-focused — pasting the full CEO goal (incl. carry summary) every
+  // round is a major token sink on continue chats.
   const fixOwner = buildersOnTeam(agents)[0]!;
+  const followUp = isFollowUpGoal(ceoGoal);
+  const { changes: followUpChanges, baseGoal } = parseFollowUpGoal(ceoGoal);
+  const productHint = (followUp ? baseGoal || ceoGoal : ceoGoal).slice(0, 400);
+  const changeHint = followUp
+    ? (followUpChanges || "requested changes").slice(0, 900)
+    : "";
+  const shippedCode = await prisma.artifact.findMany({
+    where: { runId, type: "code", filePath: { not: null } },
+    select: { filePath: true, content: true },
+  });
+  const shippedAppJs = shippedCode.find((a) =>
+    /(?:^|\/)app\.js$/i.test(a.filePath ?? ""),
+  );
+  const needsFullAppJs =
+    punchListRequiresAppJs(punch) &&
+    (!shippedAppJs || isShellStubAppJs(shippedAppJs.content));
   const fix = await prisma.task.create({
     data: {
       runId,
       title: qaFixTitle(round),
-      description: `CEO source of truth:\n${ceoGoal}\n\nQA Verdict: FAIL (round ${round}). Apply a surgical fix for every blocker/major on this punch list. Emit ONLY changed files as complete \`\`\`file:path fences — do not rewrite the whole app. Do not invent a new product.\n\nPunch list:\n${punch}`,
+      description: needsFullAppJs
+        ? `Product:\n${productHint}\n\n` +
+          (followUp ? `Changes I want:\n${changeHint}\n\n` : "") +
+          `CRITICAL: shipped app.js is a UI-shell stub or missing. Surgical HTML/CSS tweaks will NOT pass QA.\n` +
+          `You MUST rewrite app.js fully — emit a COMPLETE working \`\`\`file:app.js that implements EVERY punch item below.\n` +
+          `OUTPUT: start with \`\`\`file:app.js — no stack tables, no Technical Brainstorm.\n\n` +
+          `Punch list:\n${punch}`
+        : followUp
+          ? `Product (keep as-is):\n${productHint}\n\n` +
+            `Changes I want:\n${changeHint}\n\n` +
+            `QA FAIL (round ${round}/${roundLimit}). Surgical fix ONLY this punch list. ` +
+            `Emit ONLY changed \`\`\`file:path fences — do not rewrite the whole app.\n\n` +
+            `Punch list:\n${punch}`
+          : `Product:\n${productHint}\n\n` +
+            `QA Verdict: FAIL (round ${round}). Apply a surgical fix for every blocker/major on this punch list. ` +
+            `Emit ONLY changed files as complete \`\`\`file:path fences — do not rewrite the whole app.\n` +
+            `If the punch list mentions listeners/handlers/app.js, you MUST emit a complete working \`\`\`file:app.js.\n\n` +
+            `Punch list:\n${punch}`,
       position: fixOwner.position,
       priority: 85,
       dependsOnIds: [latest.id],
@@ -1358,7 +1562,10 @@ async function decideAndEnqueueQaRework(
     data: {
       runId,
       title: qaRecheckTitle(round),
-      description: `CEO source of truth:\n${ceoGoal}\n\nRe-check AFTER round ${round} surgical fixes. Verify ONLY the prior punch list below — do not re-litigate the entire product or demand a redesign. PASS if those items are cleared (nits OK). Verdict FAIL or PASS, then a short punch list.\n\nPrior punch list:\n${punch}`,
+      description: followUp
+        ? `Re-check AFTER round ${round} surgical fixes. Verify ONLY the prior punch list — do not re-litigate the product.\n` +
+          `PASS if those items are cleared (nits OK). Verdict FAIL or PASS.\n\nPrior punch list:\n${punch}`
+        : `Re-check AFTER round ${round} surgical fixes. Verify ONLY the prior punch list below — do not re-litigate the entire product or demand a redesign. PASS if those items are cleared (nits OK). Verdict FAIL or PASS, then a short punch list.\n\nPrior punch list:\n${punch}`,
       position: "qa_engineer",
       priority: 40,
       dependsOnIds: [fix.id],

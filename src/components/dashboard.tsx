@@ -58,6 +58,11 @@ import {
   type TileEdge,
 } from "@/lib/office-blueprint";
 import { CHANGES_I_WANT_MARKER } from "@/lib/follow-up-goal";
+import {
+  buildCarryForwardSummary,
+  buildContinueCarryGoal,
+  defaultContinueChangesDraft,
+} from "@/lib/run-continue";
 
 /** Strip nested follow-up suffixes so Request changes stays on the original brief. */
 function baseGoalFromRunGoal(goal: string): string {
@@ -767,7 +772,19 @@ export function Dashboard() {
     const prior = baseGoalFromRunGoal(ceoGoal);
     const goalForRun =
       deliverableAction === "follow-up"
-        ? `${prior}${CHANGES_I_WANT_MARKER}${draftText.trim()}`
+        ? buildContinueCarryGoal({
+            baseGoal: prior,
+            changes: draftText.trim(),
+            summary: buildCarryForwardSummary({
+              artifacts,
+              tasks,
+              runError:
+                runError.trim() ||
+                (tokenSpendGate === "hard"
+                  ? `Token spend limit reached (${TOKEN_HARD_GATE.toLocaleString()} tokens).`
+                  : null),
+            }),
+          })
         : draftText.trim();
     if (!draftText.trim()) {
       setDeliverableSheetError(
@@ -1174,7 +1191,9 @@ export function Dashboard() {
                     <p className="font-medium">Token spend limit reached</p>
                     <p className="mt-1 text-sm">
                       This chat hit {TOKEN_HARD_GATE.toLocaleString()} tokens (used{" "}
-                      {runStats.totalTokens.toLocaleString()}). Remaining work was not started.
+                      {runStats.totalTokens.toLocaleString()}). You can keep going in a{" "}
+                      <strong className="font-medium text-zinc-200">new chat</strong> that
+                      copies this app — fresh token budget, no redesign from scratch.
                     </p>
                     {hasPreviewableApp(artifacts, ceoGoal) && (
                       <RunDeliverableActions
@@ -1188,18 +1207,40 @@ export function Dashboard() {
                       />
                     )}
                     <div className="mt-2 flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        variant="primary"
-                        className="!h-8 !px-3"
-                        onClick={startRedesignChat}
-                      >
-                        Start a new chat
-                      </Button>
+                      {hasPreviewableApp(artifacts, ceoGoal) ? (
+                        <>
+                          <Button
+                            type="button"
+                            variant="primary"
+                            className="!h-8 !px-3"
+                            onClick={startFollowUpChat}
+                          >
+                            Continue with this app
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="!h-8 !px-3"
+                            onClick={startRedesignChat}
+                          >
+                            Start over with a new brief
+                          </Button>
+                        </>
+                      ) : (
+                        <Button
+                          type="button"
+                          variant="primary"
+                          className="!h-8 !px-3"
+                          onClick={startRedesignChat}
+                        >
+                          Start a new chat
+                        </Button>
+                      )}
                     </div>
                     <p className="mt-2 text-[11px] text-zinc-500">
-                      BYOK safeguard — similar to Claude Code budget caps. Narrow the goal or keep
-                      iterating in a fresh chat. Files already written stay available above.
+                      Continue copies your current files into a new chat (uses one monthly run).
+                      Preview / ZIP on this chat stay available. BYOK hard cap — similar to
+                      Claude Code budget limits.
                     </p>
                   </Alert>
                 )}
@@ -1527,7 +1568,19 @@ export function Dashboard() {
           mode={deliverableAction}
           priorBrief={baseGoalFromRunGoal(ceoGoal)}
           initialDraft={
-            deliverableAction === "follow-up" ? "" : baseGoalFromRunGoal(ceoGoal)
+            deliverableAction === "follow-up"
+              ? tokenSpendGate === "hard" || isQaReworkExhaustedMessage(runError)
+                ? defaultContinueChangesDraft({
+                    artifacts,
+                    tasks,
+                    runError:
+                      runError.trim() ||
+                      (tokenSpendGate === "hard"
+                        ? `Token spend limit reached (${TOKEN_HARD_GATE.toLocaleString()} tokens).`
+                        : null),
+                  })
+                : ""
+              : baseGoalFromRunGoal(ceoGoal)
           }
           onClose={closeDeliverableSheet}
           onStart={(goalText) => void startFromDeliverableSheet(goalText)}

@@ -130,13 +130,17 @@ export function ProviderModelSelect({
     });
   }, [provider, ollamaMode, fetched]);
 
-  // Snap invalid/typo models onto the catalog during render (no effect setState).
-  if (provider === "mock") {
-    if (model !== "mock") onModelChange("mock");
-  } else if (choices.length > 0) {
+  // Coerce invalid/typo models onto the catalog in an effect — never call parent
+  // onModelChange during render (that updates Dashboard while we are still rendering).
+  useEffect(() => {
+    if (provider === "mock") {
+      if (model !== "mock") onModelChange("mock");
+      return;
+    }
+    if (choices.length === 0) return;
     const next = coerceModelToChoices(model, choices);
     if (next !== model) onModelChange(next);
-  }
+  }, [provider, model, choices, onModelChange]);
 
   if (provider === "mock") return null;
 

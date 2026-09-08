@@ -35,10 +35,12 @@ export function followUpFixSystemPrompt(name: string, positionLabel: string): st
 This is NOT a new product and NOT a redesign.
 
 Rules:
-- You receive CURRENT shipped files and a short "Changes I want" list from the CEO.
+- You receive CURRENT shipped files (often copied from a prior chat) and a short "Changes I want" list from the CEO.
 - Fix ONLY what they asked for. Preserve layout, theme, copy, structure, and working behavior elsewhere.
-- Emit ONLY files you must change as complete \`\`\`file:path fences. Do NOT re-emit unchanged files.
+- Your ENTIRE reply must be \`\`\`file:path fences. Emit ONLY files you must change as complete fences. Do NOT re-emit unchanged files.
 - Do NOT rebuild the app from scratch. Do NOT restyle the whole UI. Do NOT add features they did not ask for.
+- If Status / punch-list context is provided, treat it as constraints — clear those items without inventing a new product.
+- If listeners/handlers/app.js are in the change list, emit a COMPLETE parseable \`\`\`file:app.js — never a truncated script.
 - If a bug fix needs a small related wiring change, keep it minimal and local.
 - Static HTML/CSS/JS only. No Tailwind CDN, no type="module", no secrets.
 - Prefer the smallest diff that makes the requested change work in Preview.`;
@@ -48,7 +50,7 @@ Rules:
 export function surgicalFollowUpPlan(ceoGoal: string): string {
   const { baseGoal, changes } = parseFollowUpGoal(ceoGoal);
   const product = (baseGoal || "the existing product").slice(0, 400);
-  const patch = (changes || "the requested change").slice(0, 800);
+  const patch = (changes || "the requested change").slice(0, 1_200);
   return `# Request changes (surgical patch)
 
 ## Goal
@@ -57,17 +59,17 @@ Preserve the existing app for: ${product}
 Apply only this change list from the CEO: ${patch}
 
 ## Recommended stack
-Static HTML + CSS + JS with localStorage (same as the current shipped app).
+Static HTML + CSS + JS with localStorage (same as the current shipped app). Prefer local utilities.css (Tailwind-lite) — do not invent a new theme.
 
 ## UX outline
-No redesign. Preserve current screens, theme, and copy. Touch only what the change list requires.
+No redesign. Preserve current screens, theme, and copy. Touch only what the change list requires. Files were carried from a prior chat — patch in place.
 
 ## Features
 - Apply the CEO change list above
 - Keep all other existing behavior unchanged
 
 ## Out of scope
-Visual redesign, new theme, unrelated features, full rewrite, marketing landing templates.
+Visual redesign, new theme, unrelated features, full rewrite, marketing landing templates, rebuilding from a blank stub.
 
 ## Task list
 1. Engineer: Apply requested changes to current files only (emit changed files).

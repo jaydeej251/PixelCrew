@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
-import { ProviderType } from "@prisma/client";
+import { ArtifactType, ProviderType } from "@prisma/client";
 import { z } from "zod";
 import { runOrchestrator } from "@/lib/orchestrator";
 import { prepareWorkspaceBrainsForRun } from "@/lib/run-setup";
@@ -11,6 +11,11 @@ import {
   isFollowUpGoal,
 } from "@/lib/follow-up-goal";
 import {
+  CARRY_FORWARD_SUMMARY_TITLE,
+  buildCarryForwardSummary,
+  seedCarryForwardArtifacts,
+} from "@/lib/run-continue";
+import {
   assertRunAccess,
   assertWorkspaceAccess,
   checkPlanLimits,
@@ -19,6 +24,7 @@ import {
 } from "@/lib/auth";
 import { apiErrorResponse } from "@/lib/api-error";
 import { consumeRateLimit, rateLimitResponse } from "@/lib/rate-limit";
+import { isQaReviewTitle } from "@/lib/qa-verdict";
 
 const createRunSchema = z
   .object({
@@ -26,7 +32,7 @@ const createRunSchema = z
     ceoGoal: z.string().trim().min(1).max(20_000),
     provider: z.nativeEnum(ProviderType).default("mock"),
     model: z.string().trim().min(1).max(200).optional(),
-    /** Prior chat when Request changes — copy code artifacts so patches are surgical. */
+    /** Prior chat when Request changes / continue-carry — copy code artifacts so patches are surgical. */
     parentRunId: z.string().min(1).optional(),
   })
   .strict();
@@ -80,6 +86,21 @@ export async function POST(req: Request) {
           { status: 400 },
         );
       }
+      // Fail before creating a run so continue-without-files does not burn a monthly run.
+      if (isFollowUpGoal(goal)) {
+        const priorCount = await prisma.artifact.count({
+          where: { runId: parentRunId, type: "code", filePath: { not: null } },
+        });
+        if (priorCount === 0) {
+          return NextResponse.json(
+            {
+              error:
+                "This chat has no shipped app files to continue. Use Restart with a new brief instead.",
+            },
+            { status: 400 },
+          );
+        }
+      }
     }
 
     const providerType = provider;
@@ -106,23 +127,44 @@ export async function POST(req: Request) {
       },
     });
 
-    // Request changes: seed the prior app so engineers patch instead of redesigning.
+    // Request changes / continue-carry: seed the prior app so engineers patch instead of redesigning.
     if (parentRunId && isFollowUpGoal(goal)) {
       const priorCode = await prisma.artifact.findMany({
         where: { runId: parentRunId, type: "code", filePath: { not: null } },
         select: { type: true, title: true, content: true, filePath: true },
       });
-      if (priorCode.length > 0) {
-        await prisma.artifact.createMany({
-          data: priorCode.map((a) => ({
-            runId: run.id,
-            type: a.type,
-            title: a.title,
-            content: a.content,
-            filePath: a.filePath,
-          })),
-        });
-      }
+      const parentTasks = await prisma.task.findMany({
+        where: { runId: parentRunId },
+        select: { title: true, output: true, status: true },
+        orderBy: { createdAt: "asc" },
+      });
+      const cancelEvent = await prisma.runEvent.findFirst({
+        where: { runId: parentRunId, type: "RUN_CANCELLED" },
+        orderBy: { createdAt: "desc" },
+        select: { payload: true },
+      });
+      const cancelPayload = cancelEvent?.payload as { message?: unknown } | null;
+      const priorStopMessage =
+        typeof cancelPayload?.message === "string" ? cancelPayload.message : null;
+      const summary = buildCarryForwardSummary({
+        artifacts: priorCode,
+        tasks: parentTasks.filter((t) => isQaReviewTitle(t.title) || Boolean(t.output)),
+        runError: priorStopMessage,
+      });
+      const seedRows = seedCarryForwardArtifacts({
+        parentRunId,
+        priorCode,
+        summary,
+      });
+      await prisma.artifact.createMany({
+        data: seedRows.map((a) => ({
+          runId: run.id,
+          type: a.type as ArtifactType,
+          title: a.title,
+          content: a.content,
+          ...(a.filePath ? { filePath: a.filePath } : {}),
+        })),
+      });
       await prisma.artifact.create({
         data: {
           runId: run.id,
@@ -131,6 +173,8 @@ export async function POST(req: Request) {
           content: JSON.stringify({
             parentRunId,
             copiedFiles: priorCode.length,
+            carryForward: true,
+            summaryTitle: CARRY_FORWARD_SUMMARY_TITLE,
             at: new Date().toISOString(),
           }),
         },

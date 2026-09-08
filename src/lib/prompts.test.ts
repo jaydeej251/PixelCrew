@@ -84,7 +84,22 @@ describe("stage-slim system prompts", () => {
     const direct = qaFixSystemPrompt("Sam", "Senior Developer");
     assert.match(viaWorker, /surgical QA fix/);
     assert.match(viaWorker, /Do NOT re-emit unchanged files/);
-    assert.match(direct, /Do NOT rebuild the whole app/);
+    assert.match(direct, /Do NOT rebuild HTML\/CSS from scratch/);
+    assert.match(direct, /COMPLETE working/);
+    assert.match(direct, /Never leave a truncated/);
+  });
+
+  it("routes CRITICAL stub QA-fix to full app.js prompt", () => {
+    const prompt = workerSystemPrompt(
+      "Sam",
+      "Senior Developer",
+      "Architecture",
+      "tech_architect",
+      "Fix QA punch list (round 1)",
+      { qaFixFullAppJs: true },
+    );
+    assert.match(prompt, /UI-shell stub/);
+    assert.match(prompt, /COMPLETE working/);
   });
 
   it("keeps council-style worker prompt for senior review tasks", () => {
