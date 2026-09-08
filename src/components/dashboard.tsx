@@ -70,6 +70,11 @@ import {
 import { CHANGES_I_WANT_MARKER } from "@/lib/follow-up-goal";
 import { providerDisplayLabel } from "@/lib/run-brain";
 import { readResponseJson } from "@/lib/http-json";
+import {
+  buildCarryForwardSummary,
+  buildContinueCarryGoal,
+  defaultContinueChangesDraft,
+} from "@/lib/run-continue";
 
 /** Strip nested follow-up suffixes so Request changes stays on the original brief. */
 function baseGoalFromRunGoal(goal: string): string {
@@ -817,8 +822,8 @@ export function Dashboard() {
       return;
     }
 
-    // Request changes = same chat (Claude Code style). Does NOT use a monthly run.
-    if (deliverableAction === "follow-up") {
+    // Request changes (soft gate): same chat via iterate. Hard gate uses continue-carry below.
+    if (deliverableAction === "follow-up" && tokenSpendGate !== "hard") {
       if (!runId) {
         setDeliverableSheetError("Open a finished chat first, then request changes.");
         return;
@@ -889,7 +894,23 @@ export function Dashboard() {
       setSettingsOpen(true);
       return;
     }
-    const goalForRun = draftText.trim();
+    const prior = baseGoalFromRunGoal(ceoGoal);
+    const goalForRun =
+      deliverableAction === "follow-up"
+        ? buildContinueCarryGoal({
+            baseGoal: prior,
+            changes: draftText.trim(),
+            summary: buildCarryForwardSummary({
+              artifacts,
+              tasks,
+              runError:
+                runError.trim() ||
+                (tokenSpendGate === "hard"
+                  ? `Token spend limit reached (${TOKEN_HARD_GATE.toLocaleString()} tokens).`
+                  : null),
+            }),
+          })
+        : draftText.trim();
 
     setDeliverableSheetBusy(true);
     setDeliverableSheetError("");
@@ -902,6 +923,7 @@ export function Dashboard() {
         ceoGoal: goalForRun,
         provider: runProvider,
         model: runModel,
+        ...(deliverableAction === "follow-up" && runId ? { parentRunId: runId } : {}),
         ...(confirmAutoHire ? { confirmAutoHire: true } : {}),
       }),
     });
@@ -1367,6 +1389,65 @@ export function Dashboard() {
                     {runError && !(runOutcome === "failed" && !running) && (
                       <Alert variant="error">{runError}</Alert>
                     )}
+
+                    {runOutcome === "failed" && runId && !running && tokenSpendGate === "hard" && (
+                      <Alert variant="error">
+                        <p className="font-medium">Token spend limit reached</p>
+                        <p className="mt-1 text-sm">
+                          This chat hit {TOKEN_HARD_GATE.toLocaleString()} tokens (used{" "}
+                          {runStats.totalTokens.toLocaleString()}). You can keep going in a{" "}
+                          <strong className="font-medium text-zinc-200">new chat</strong> that
+                          copies this app — fresh token budget, no redesign from scratch.
+                        </p>
+                        {hasPreviewableApp(artifacts, ceoGoal) && (
+                          <RunDeliverableActions
+                            runId={runId}
+                            artifacts={artifacts}
+                            ceoGoal={ceoGoal}
+                            runFinished
+                            variant="hud"
+                            onRequestChanges={startFollowUpChat}
+                            onRestart={startRedesignChat}
+                          />
+                        )}
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {hasPreviewableApp(artifacts, ceoGoal) ? (
+                            <>
+                              <Button
+                                type="button"
+                                variant="primary"
+                                className="!h-8 !px-3"
+                                onClick={startFollowUpChat}
+                              >
+                                Continue with this app
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                className="!h-8 !px-3"
+                                onClick={startRedesignChat}
+                              >
+                                Start over with a new brief
+                              </Button>
+                            </>
+                          ) : (
+                            <Button
+                              type="button"
+                              variant="primary"
+                              className="!h-8 !px-3"
+                              onClick={startRedesignChat}
+                            >
+                              Start a new chat
+                            </Button>
+                          )}
+                        </div>
+                        <p className="mt-2 text-[11px] text-zinc-500">
+                          Continue copies your current files into a new chat (uses one monthly run).
+                          Preview / ZIP on this chat stay available. BYOK hard cap — similar to
+                          Claude Code budget limits.
+                        </p>
+                      </Alert>
+                    )}
                     {runOutcome === "failed" && !running && tokenSpendGate === "soft" && (
                       <Alert variant="warning">
                         <p className="font-medium text-amber-50">Token spend check</p>
@@ -1409,40 +1490,6 @@ export function Dashboard() {
                         <p className="mt-2 text-[11px] text-zinc-500">
                           Continue stays on this chat and does not use another monthly run. Preview
                           keeps what was already built.
-                        </p>
-                      </Alert>
-                    )}
-                    {runOutcome === "failed" && !running && tokenSpendGate === "hard" && (
-                      <Alert variant="error">
-                        <p className="font-medium">Token spend limit reached</p>
-                        <p className="mt-1 text-sm">
-                          This chat hit {TOKEN_HARD_GATE.toLocaleString()} tokens (used{" "}
-                          {runStats.totalTokens.toLocaleString()}). Remaining work was not started.
-                        </p>
-                        {hasPreviewableApp(artifacts, ceoGoal) && (
-                          <RunDeliverableActions
-                            runId={runId}
-                            artifacts={artifacts}
-                            ceoGoal={ceoGoal}
-                            runFinished
-                            variant="hud"
-                            onRequestChanges={startFollowUpChat}
-                            onRestart={startRedesignChat}
-                          />
-                        )}
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          <Button
-                            type="button"
-                            variant="primary"
-                            className="!h-8 !px-3"
-                            onClick={startRedesignChat}
-                          >
-                            Start a new chat
-                          </Button>
-                        </div>
-                        <p className="mt-2 text-[11px] text-zinc-500">
-                          BYOK safeguard — similar to Claude Code budget caps. Narrow the goal or keep
-                          iterating in a fresh chat. Files already written stay available above.
                         </p>
                       </Alert>
                     )}
@@ -1812,8 +1859,21 @@ export function Dashboard() {
           open
           mode={deliverableAction}
           priorBrief={baseGoalFromRunGoal(ceoGoal)}
+          sameChatIterate={deliverableAction === "follow-up" && tokenSpendGate !== "hard"}
           initialDraft={
-            deliverableAction === "follow-up" ? "" : baseGoalFromRunGoal(ceoGoal)
+            deliverableAction === "follow-up"
+              ? tokenSpendGate === "hard" || isQaReworkExhaustedMessage(runError)
+                ? defaultContinueChangesDraft({
+                    artifacts,
+                    tasks,
+                    runError:
+                      runError.trim() ||
+                      (tokenSpendGate === "hard"
+                        ? `Token spend limit reached (${TOKEN_HARD_GATE.toLocaleString()} tokens).`
+                        : null),
+                  })
+                : ""
+              : baseGoalFromRunGoal(ceoGoal)
           }
           onClose={closeDeliverableSheet}
           onStart={(goalText) =>

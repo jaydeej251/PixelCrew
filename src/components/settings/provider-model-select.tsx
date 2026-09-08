@@ -130,7 +130,8 @@ export function ProviderModelSelect({
     });
   }, [provider, ollamaMode, fetched]);
 
-  // Coerce invalid models in an effect — never call parent setState during render.
+  // Coerce invalid/typo models onto the catalog in an effect — never call parent
+  // onModelChange during render (that updates Dashboard while we are still rendering).
   useEffect(() => {
     if (provider === "mock") {
       if (model !== "mock") onModelChange("mock");

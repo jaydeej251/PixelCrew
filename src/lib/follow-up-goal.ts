@@ -132,14 +132,19 @@ export function followUpFixSystemPrompt(name: string, positionLabel: string): st
 This is NOT a brand-new product.
 
 Rules:
-- You receive CURRENT shipped files and a numbered "Changes I want" / must-fix list from the CEO.
+- You receive CURRENT shipped files (often copied from a prior chat) and a numbered "Changes I want" / must-fix list from the CEO.
 - You MUST satisfy EVERY must-fix item so it works in Preview — not just the easy visual ones.
-- Emit at least one complete \`\`\`file:path fence for every file you modify. Full file contents, not diffs.
+- Your ENTIRE reply must be \`\`\`file:path fences. Emit at least one complete \`\`\`file:path fence for every file you modify. Full file contents, not diffs. Do NOT re-emit unchanged files.
 - Do NOT finish with only prose / “done” / explanations and zero file fences — that ships nothing.
+- Fix ONLY what they asked for. Preserve layout, theme, copy, structure, and working behavior elsewhere unless the must-fix list requires changing them.
+- Do NOT rebuild the app from scratch. Do NOT restyle the whole UI. Do NOT add features they did not ask for.
 - Keep the same product name unless the CEO asked to rename it.
 - Bug fixes: change the real JS/HTML behavior that is broken (e.g. shop consume, column move). Do not claim fixed without editing that logic.
 - UI refresh: when the task is a UI refresh (or Changes I want includes overhaul/modern), update CSS/HTML so the look clearly changes. That is in scope for UI tasks.
 - Do NOT break working flows (shop, inventory, quests, persistence) while editing. Preserve localStorage keys and existing feature entry points unless the must-fix list requires changing them.
+- If Status / punch-list context is provided, treat it as constraints — clear those items without inventing a new product.
+- If listeners/handlers/app.js are in the change list, emit a COMPLETE parseable \`\`\`file:app.js — never a truncated script.
+- If a bug fix needs a small related wiring change, keep it minimal and local.
 - Static HTML/CSS/JS only. No Tailwind CDN, no type="module", no secrets.
 - Prefer the smallest change that fully satisfies the must-fix list — but the list must be satisfied.`;
 }
@@ -173,7 +178,7 @@ Rules:
 export function surgicalFollowUpPlan(ceoGoal: string): string {
   const { baseGoal, changes } = parseFollowUpGoal(ceoGoal);
   const product = (baseGoal || "the existing product").slice(0, 400);
-  const patch = (changes || "the requested change").slice(0, 1200);
+  const patch = (changes || "the requested change").slice(0, 1_200);
   const wantsUi = changesAskForUi(patch);
   return `# Request changes (patch on current app)
 
@@ -183,13 +188,13 @@ Preserve the existing product for: ${product}
 Apply this change list from the CEO: ${patch}
 
 ## Recommended stack
-Static HTML + CSS + JS with localStorage (same as the current shipped app).
+Static HTML + CSS + JS with localStorage (same as the current shipped app). Prefer local utilities.css (Tailwind-lite) — do not invent a new theme.
 
 ## UX outline
 ${
   wantsUi
     ? "UI/visual refresh is requested — update styling and layout as needed while keeping the same product and core data."
-    : "No gratuitous redesign. Preserve current screens and copy except where the change list requires edits."
+    : "No gratuitous redesign. Preserve current screens, theme, and copy. Touch only what the change list requires. Files may be carried from a prior chat — patch in place."
 }
 
 ## Features
@@ -197,7 +202,7 @@ ${
 - Keep unrelated working behavior unless the change list conflicts with it
 
 ## Out of scope
-New product, marketing landing templates, unrelated features not in the change list, full rewrite from a blank page.
+New product, marketing landing templates, unrelated features not in the change list, visual redesign from scratch, full rewrite from a blank stub.
 
 ## Task list
 1. Engineer: Apply requested changes to current files (must emit changed file fences).

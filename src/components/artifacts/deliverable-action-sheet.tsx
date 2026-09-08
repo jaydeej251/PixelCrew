@@ -25,6 +25,8 @@ type DeliverableActionSheetProps = {
   canStartReason?: string | null;
   usageBlockedReason?: string | null;
   onOpenSettings?: () => void;
+  /** Same-chat iterate (soft gate). When false, opens a new carry-forward chat. */
+  sameChatIterate?: boolean;
 };
 
 export function DeliverableActionSheet({
@@ -42,20 +44,23 @@ export function DeliverableActionSheet({
   canStartReason = null,
   usageBlockedReason = null,
   onOpenSettings,
+  sameChatIterate = true,
 }: DeliverableActionSheetProps) {
   const titleId = useId();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [draft, setDraft] = useState(initialDraft);
 
   const isFollowUp = mode === "follow-up";
-  const title = isFollowUp ? "Request changes" : "Restart with a new brief";
+  const title = isFollowUp ? "Continue with this app" : "Restart with a new brief";
   const submitLabel = autoHireConfirm
     ? "Confirm & start"
     : isFollowUp
-      ? "Apply on this chat"
+      ? sameChatIterate
+        ? "Apply on this chat"
+        : "Start continue chat"
       : "Start redesign";
   const placeholder = isFollowUp
-    ? "What should change? e.g. fix inventory drawer — keep everything else the same…"
+    ? "What should change? e.g. finish QA punch items / wire create-node — keep everything else…"
     : "Rewrite what you want to build…";
 
   useEffect(() => {
@@ -110,7 +115,9 @@ export function DeliverableActionSheet({
             </h2>
             <p className="mt-1 text-[13px] leading-relaxed text-zinc-400">
               {isFollowUp
-                ? "Patches this chat’s current app in place (like Claude Code). Does not open a new chat and does not use another monthly run."
+                ? sameChatIterate
+                  ? "Patches this chat’s current app in place (like Claude Code). Does not open a new chat and does not use another monthly run."
+                  : "Opens a new chat with a fresh token budget. Copies your current app files and patches only what you ask — not a redesign. Uses one monthly run. This chat’s Preview / ZIP stay available."
                 : "Your current app stays until you start. Redesign opens a new chat and uses one monthly run."}
             </p>
           </div>

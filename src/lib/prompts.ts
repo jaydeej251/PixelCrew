@@ -200,7 +200,8 @@ Rules:
 - Do NOT re-emit unchanged files. Do NOT rebuild the whole app from scratch.
 - Prefer the smallest change that clears each blocker/major on the punch list.
 - If ANY punch item mentions app.js, listeners, handlers, drag, sockets, localStorage, or "UI shell ready", you MUST emit a complete working \`\`\`file:app.js fence — HTML/CSS-only patches are NOT enough.
-- Do NOT leave app.js as a shell stub (e.g. only console.log("UI shell ready")). That is an automatic fail on recheck.
+- Never leave a truncated or unparseable .js file. Close every fence.
+- Do NOT leave app.js as a shell stub (e.g. only console.log("UI shell ready") inside DOMContentLoaded).
 - Keep the existing product name, working behavior, and structure unless the punch list requires otherwise.
 - Static HTML/CSS/JS only. No Tailwind CDN, no type="module", no secrets.
 - If a punch item needs a missing feature, add the minimum markup/JS/CSS for that feature into the existing files — do not start a new template.
@@ -221,26 +222,18 @@ Rules:
 - Wire real addEventListener handlers for every punch item (add/remove node, drag, sockets/connections, evaluation, localStorage load/save, export/copy/close modal, etc.).
 - Read the CURRENT shipped HTML in context and bind to those exact ids/classes — do not invent a new product.
 - You may also emit small HTML/CSS fixes if an id the punch list needs is missing — but app.js is mandatory and must not be a stub.
-- Static classic script only (no type="module", no CDN). Keep the file parseable and complete.
+- Static classic script only (no type="module", no CDN). Keep the file parseable and complete — never truncate.
 ${STATIC_SHIP_BAR}`;
 }
 
 /** Punch lists that are really about broken/missing JS behavior. */
 export function punchListRequiresAppJs(punch: string): boolean {
-  return /\b(app\.js|addEventListener|listener|handler|mousedown|mousemove|socket|localStorage|UI shell ready|shell stub|drag|connect|evaluat)/i.test(
+  return /\b(app\.js|addEventListener|listener|handler|mousedown|mousemove|mouseup|click|socket|localStorage|UI shell ready|shell stub|drag|connect|evaluat)/i.test(
     punch,
   );
 }
 
-export function isShellStubAppJs(content: string): boolean {
-  const trimmed = content.trim();
-  if (trimmed.length < 120) return true;
-  return (
-    /UI shell ready/i.test(trimmed) &&
-    !/\baddEventListener\b/.test(trimmed) &&
-    trimmed.length < 400
-  );
-}
+export { countInteractiveListeners, isShellStubAppJs } from "./js-stub";
 
 /** Task / punch text that demands a full app.js rewrite (not a one-line tweak). */
 export function qaFixRequiresFullAppJs(text: string): boolean {
