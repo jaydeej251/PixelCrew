@@ -272,7 +272,7 @@ function HudMoreMenu({
               onRequestChanges();
             }}
           >
-            Request changes
+            Request changes (keep app)
           </button>
         )}
         {onRestart && (

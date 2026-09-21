@@ -18,10 +18,15 @@ type DeliverableActionSheetProps = {
   onStart: (goalText: string) => void;
   busy?: boolean;
   error?: string;
+  /** Empty-roster gate — Start will auto-hire with this brain. */
+  autoHireConfirm?: { providerLabel: string; model: string } | null;
+  onDismissAutoHire?: () => void;
   canStart?: boolean;
   canStartReason?: string | null;
   usageBlockedReason?: string | null;
   onOpenSettings?: () => void;
+  /** Same-chat iterate (soft gate). When false, opens a new carry-forward chat. */
+  sameChatIterate?: boolean;
 };
 
 export function DeliverableActionSheet({
@@ -33,20 +38,29 @@ export function DeliverableActionSheet({
   onStart,
   busy = false,
   error = "",
+  autoHireConfirm = null,
+  onDismissAutoHire,
   canStart = true,
   canStartReason = null,
   usageBlockedReason = null,
   onOpenSettings,
+  sameChatIterate = true,
 }: DeliverableActionSheetProps) {
   const titleId = useId();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [draft, setDraft] = useState(initialDraft);
 
   const isFollowUp = mode === "follow-up";
-  const title = isFollowUp ? "Request changes" : "Restart with a new brief";
-  const submitLabel = isFollowUp ? "Start changes" : "Start redesign";
+  const title = isFollowUp ? "Continue with this app" : "Restart with a new brief";
+  const submitLabel = autoHireConfirm
+    ? "Confirm & start"
+    : isFollowUp
+      ? sameChatIterate
+        ? "Apply on this chat"
+        : "Start continue chat"
+      : "Start redesign";
   const placeholder = isFollowUp
-    ? "What should change? e.g. fix inventory drawer — keep everything else the same…"
+    ? "What should change? e.g. finish QA punch items / wire create-node — keep everything else…"
     : "Rewrite what you want to build…";
 
   useEffect(() => {
@@ -101,7 +115,9 @@ export function DeliverableActionSheet({
             </h2>
             <p className="mt-1 text-[13px] leading-relaxed text-zinc-400">
               {isFollowUp
-                ? "Your current app stays until you start. Start opens a new chat that patches only what you ask (copies your current files) and uses one monthly run."
+                ? sameChatIterate
+                  ? "Patches this chat’s current app in place (like Claude Code). Does not open a new chat and does not use another monthly run."
+                  : "Opens a new chat with a fresh token budget. Copies your current app files and patches only what you ask — not a redesign. Uses one monthly run. This chat’s Preview / ZIP stay available."
                 : "Your current app stays until you start. Redesign opens a new chat and uses one monthly run."}
             </p>
           </div>
@@ -146,6 +162,27 @@ export function DeliverableActionSheet({
             />
           </label>
 
+          {autoHireConfirm && (
+            <div className="rounded-xl border border-amber-800/60 bg-amber-950/40 px-3 py-2">
+              <p className="text-sm font-medium text-amber-50">Confirm auto-hire</p>
+              <p className="mt-1 text-[13px] leading-relaxed text-amber-100/90">
+                Your team is empty. We’ll hire a starter crew with{" "}
+                {autoHireConfirm.providerLabel} ({autoHireConfirm.model}) — the AI from Which
+                AI to use.
+              </p>
+              {onDismissAutoHire && (
+                <button
+                  type="button"
+                  className="mt-2 text-[12px] text-amber-200/80 underline underline-offset-2 hover:text-amber-100"
+                  disabled={busy}
+                  onClick={onDismissAutoHire}
+                >
+                  Cancel confirm
+                </button>
+              )}
+            </div>
+          )}
+
           {blockedReason && (
             <p className="text-[12px] text-amber-400/90">
               {blockedReason}{" "}
@@ -161,7 +198,7 @@ export function DeliverableActionSheet({
             </p>
           )}
 
-          {error && <p className="text-[12px] text-red-300">{error}</p>}
+          {error && !autoHireConfirm && <p className="text-[12px] text-red-300">{error}</p>}
         </div>
 
         <div className="flex shrink-0 items-center justify-between gap-2 border-t border-zinc-800 px-4 py-3">
