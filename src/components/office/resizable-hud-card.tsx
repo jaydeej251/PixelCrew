@@ -2,15 +2,38 @@
 
 import {
   useCallback,
-  useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { cn } from "@/lib/utils";
 
 const FULL_HEIGHT_CSS = "calc(100dvh - 5.5rem)";
+
+function subscribeNever() {
+  return () => {};
+}
+
+function clientTrue() {
+  return true;
+}
+
+function serverFalse() {
+  return false;
+}
+
+function readStoredHeight(storageKey: string, minHeightPx: number): number | null {
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= minHeightPx ? n : null;
+  } catch {
+    return null;
+  }
+}
 
 export type ResizableHudDefault = "full" | "hug";
 
@@ -49,20 +72,13 @@ export function ResizableHudCard({
   const shellRef = useRef<HTMLDivElement>(null);
   /** null = use defaultMode (full CSS or hug). */
   const [heightPx, setHeightPx] = useState<number | null>(null);
-  const [hydrated, setHydrated] = useState(false);
-
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(storageKey);
-      if (raw) {
-        const n = Number(raw);
-        if (Number.isFinite(n) && n >= minHeightPx) setHeightPx(n);
-      }
-    } catch {
-      /* private mode / quota */
-    }
-    setHydrated(true);
-  }, [storageKey, minHeightPx]);
+  const isClient = useSyncExternalStore(subscribeNever, clientTrue, serverFalse);
+  const seedId = `${storageKey}:${minHeightPx}`;
+  const [seededId, setSeededId] = useState<string | null>(null);
+  if (isClient && seededId !== seedId) {
+    setSeededId(seedId);
+    setHeightPx(readStoredHeight(storageKey, minHeightPx));
+  }
 
   const persistHeight = useCallback(
     (px: number) => {
@@ -111,7 +127,7 @@ export function ResizableHudCard({
   }, [storageKey]);
 
   const hugging = forceHug || (heightPx == null && defaultMode === "hug");
-  const useStoredPx = !forceHug && hydrated && heightPx != null;
+  const useStoredPx = !forceHug && isClient && heightPx != null;
   const useFullDefault =
     !forceHug && !useStoredPx && defaultMode === "full";
 
