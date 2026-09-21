@@ -61,9 +61,13 @@ export function qaOnTeam<T extends { position: string }>(agents: T[]): T[] {
   return agents.filter((a) => a.position === "qa_engineer");
 }
 
+/** Product policy: every ship path must have a QA seat (LLM review + rework loop). */
+export const MANDATORY_QA_POSITION = "qa_engineer" as const;
+
 /**
  * Skip surprise engineer / FE / BE hires when a senior or generalist already
  * covers build (beta R004 / BR-10). Council and other roles pass through.
+ * QA is never filtered out — it is mandatory for ship review.
  */
 export function filterAutoHireRoles(
   existing: { position: string }[],
@@ -78,6 +82,7 @@ export function filterAutoHireRoles(
     have.has("frontend_engineer") || have.has("backend_engineer");
 
   return [...new Set(requested)].filter((pos) => {
+    if (pos === MANDATORY_QA_POSITION) return true;
     if (pos === "engineer") {
       if (have.has("engineer")) return true;
       if (seniorCovers) return false;

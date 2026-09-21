@@ -78,6 +78,12 @@ describe("qaReworkRoundLimit", () => {
       6,
     );
   });
+
+  it("caps continue / follow-up chats at one fix round before Resume", async () => {
+    const { QA_MAX_FOLLOW_UP_REWORK_ROUNDS, qaReworkRoundLimit } = await import("./qa-verdict");
+    assert.equal(qaReworkRoundLimit([], { followUp: true }), QA_MAX_FOLLOW_UP_REWORK_ROUNDS);
+    assert.equal(QA_MAX_FOLLOW_UP_REWORK_ROUNDS, 1);
+  });
 });
 
 describe("honest QA recheck helpers", () => {

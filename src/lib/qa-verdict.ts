@@ -4,6 +4,12 @@ export const INITIAL_QA_TITLE = "QA the delegated work";
 /** Max engineer fix + re-QA cycles after the first FAIL (per batch). */
 export const QA_MAX_REWORK_ROUNDS = 2;
 
+/**
+ * Continue / Request-changes chats already paid for a prior build.
+ * One fix+recheck is enough before asking the CEO — more rounds burn 40–100k fast.
+ */
+export const QA_MAX_FOLLOW_UP_REWORK_ROUNDS = 1;
+
 /** Artifact written on Resume after QA exhaust — grants another batch of fix rounds. */
 export const QA_REWORK_EXTENDED_TITLE = "QA rework extended";
 
@@ -75,10 +81,13 @@ export function nextQaReworkRound(tasks: Array<{ title: string }>): number {
   return max + 1;
 }
 
-/** Base 2 rounds + extras granted when the CEO Resumes after QA exhaust. */
+/** Base rounds + extras granted when the CEO Resumes after QA exhaust.
+ *  Follow-up / continue-carry chats start with a tighter cap (see QA_MAX_FOLLOW_UP_REWORK_ROUNDS). */
 export function qaReworkRoundLimit(
   artifacts?: Array<{ title: string; content?: string | null }> | null,
+  opts?: { followUp?: boolean },
 ): number {
+  const base = opts?.followUp ? QA_MAX_FOLLOW_UP_REWORK_ROUNDS : QA_MAX_REWORK_ROUNDS;
   let extra = 0;
   for (const a of artifacts ?? []) {
     if (a.title !== QA_REWORK_EXTENDED_TITLE) continue;
@@ -92,7 +101,7 @@ export function qaReworkRoundLimit(
       extra += QA_MAX_REWORK_ROUNDS;
     }
   }
-  return QA_MAX_REWORK_ROUNDS + extra;
+  return base + extra;
 }
 
 export function isQaReworkExhaustedMessage(message: string | null | undefined): boolean {

@@ -8,10 +8,12 @@ import {
   isPackagerFallbackHtml,
   isProjectPath,
   leftoverProse,
+  mergeProjectFiles,
   normalizePath,
   parseFileFences,
   toFileFences,
 } from "./project-files";
+import { evalShippedProject, formatShipReport } from "./ship-quality";
 
 describe("parseFileFences", () => {
   it("reads file: fences and skips language-only json", () => {
@@ -51,6 +53,78 @@ console.log(1)
     const parsed = parseFileFences(raw);
     assert.equal(parsed[0]?.path, "styles.css");
     assert.match(parsed[0]!.content, /body\{\}/);
+  });
+
+  it("merges rewrite fences onto the first emit so missing assets can recover", async () => {
+    const { MOCK_BUDGET_TRACKER } = await import("./mock-project");
+    const all = Object.entries(MOCK_BUDGET_TRACKER).map(([path, content]) => ({
+      path,
+      content,
+    }));
+    const first = all.filter((f) => f.path === "index.html");
+    const rewrite = all.filter((f) => f.path === "styles.css" || f.path === "app.js");
+    // Linked-but-missing CSS/JS are stubbed during eval so HTML-only can pass the asset gate.
+    assert.equal(
+      evalShippedProject(first, { ceoGoal: "personal budget tracker" }).passed,
+      true,
+      formatShipReport(evalShippedProject(first, { ceoGoal: "personal budget tracker" })),
+    );
+    const merged = mergeProjectFiles(first, rewrite);
+    assert.ok(merged.some((f) => f.path === "index.html"));
+    assert.ok(merged.some((f) => f.path === "styles.css"));
+    assert.ok(merged.some((f) => f.path === "app.js"));
+    // Partial rewrite alone still fails (no HTML); merged set is what orchestrator must eval.
+    assert.equal(
+      evalShippedProject(rewrite, { ceoGoal: "personal budget tracker" }).passed,
+      false,
+    );
+    const after = evalShippedProject(merged, { ceoGoal: "personal budget tracker" });
+    assert.equal(after.passed, true, formatShipReport(after));
+  });
+
+  it("does not let a thin rewrite wipe a contentful index.html", async () => {
+    const { MOCK_BUDGET_TRACKER } = await import("./mock-project");
+    const rich = {
+      path: "index.html",
+      content: MOCK_BUDGET_TRACKER["index.html"]!,
+    };
+    const stub = {
+      path: "index.html",
+      content: "<!doctype html><html><body><h1>App</h1></body></html>",
+    };
+    const css = {
+      path: "styles.css",
+      content: MOCK_BUDGET_TRACKER["styles.css"]!,
+    };
+    const merged = mergeProjectFiles([rich], [stub, css]);
+    assert.equal(merged.find((f) => f.path === "index.html")?.content, rich.content);
+    assert.ok(merged.some((f) => f.path === "styles.css"));
+  });
+
+  it("does not let a shell stub wipe a working app.js", () => {
+    const rich = {
+      path: "app.js",
+      content: `
+        const nodes = [];
+        document.getElementById("add-node").addEventListener("click", () => {
+          nodes.push({ id: crypto.randomUUID(), x: 40, y: 40 });
+          render();
+        });
+        function render() {
+          /* drag nodes, draw cables, pan/zoom */
+          for (const n of nodes) console.log(n.id);
+        }
+        `.repeat(3),
+    };
+    const stub = {
+      path: "app.js",
+      content: `document.addEventListener("DOMContentLoaded", () => {
+  console.log("UI shell ready");
+});
+`,
+    };
+    const merged = mergeProjectFiles([rich], [stub]);
+    assert.equal(merged.find((f) => f.path === "app.js")?.content, rich.content);
   });
 
   it("parses the mock budget tracker as a drop-in app", async () => {
