@@ -52,16 +52,19 @@ export function ResizableHudCard({
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(storageKey);
-      if (raw) {
-        const n = Number(raw);
-        if (Number.isFinite(n) && n >= minHeightPx) setHeightPx(n);
+    const frame = window.requestAnimationFrame(() => {
+      try {
+        const raw = window.localStorage.getItem(storageKey);
+        if (raw) {
+          const n = Number(raw);
+          if (Number.isFinite(n) && n >= minHeightPx) setHeightPx(n);
+        }
+      } catch {
+        /* private mode / quota */
       }
-    } catch {
-      /* private mode / quota */
-    }
-    setHydrated(true);
+      setHydrated(true);
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [storageKey, minHeightPx]);
 
   const persistHeight = useCallback(
