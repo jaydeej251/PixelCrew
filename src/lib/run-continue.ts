@@ -12,6 +12,39 @@ export const CARRY_FORWARD_SUMMARY_TITLE = "Carry-forward summary";
 export const CONTINUE_CARRY_HINT =
   "Preserve every copied file. Do NOT rebuild from scratch or redesign chrome/theme unless asked below.";
 
+/** Matches orchestrator truncation abort copy (unsafe emit not persisted). */
+export function isTruncationAbortMessage(message: string | null | undefined): boolean {
+  if (!message?.trim()) return false;
+  return /truncated twice|Nothing safe was saved/i.test(message);
+}
+
+/**
+ * When true, surface primary "Continue with this app" and use new-chat continue-carry
+ * (same path as the 256k hard gate) instead of same-chat iterate / Resume-only.
+ */
+export function shouldOfferContinueCarry(opts: {
+  runFailed: boolean;
+  tokenSpendGate: "soft" | "hard" | null;
+  /** Available for message-specific rules; failed + previewable already qualifies. */
+  runError?: string | null;
+  hasPreviewableApp: boolean;
+}): boolean {
+  if (!opts.runFailed) return false;
+  if (!opts.hasPreviewableApp) return false;
+  if (opts.tokenSpendGate === "soft") return false;
+  // Hard gate, truncation, QA exhausted, or any other failed stop that still has Preview files.
+  return true;
+}
+
+/** Prefer continue-carry (new chat) over same-chat iterate for this follow-up open. */
+export function shouldForceContinueCarry(opts: {
+  tokenSpendGate: "soft" | "hard" | null;
+  forceContinueCarry: boolean;
+}): boolean {
+  if (opts.tokenSpendGate === "soft") return false;
+  return opts.tokenSpendGate === "hard" || opts.forceContinueCarry;
+}
+
 export type CarryArtifactLike = {
   type?: string;
   title?: string;
@@ -103,6 +136,13 @@ export function defaultContinueChangesDraft(opts: {
     return (
       `Continue from the carried files. Fix whatever is still broken in Preview ` +
       `(especially dead buttons / missing listeners). Do not redesign the UI.`
+    );
+  }
+
+  if (isTruncationAbortMessage(opts.runError)) {
+    return (
+      `Prior chat stopped with a truncated/incomplete Engineering emit — nothing unsafe was saved. ` +
+      `Keep the carried files. Finish a narrow punch list only (listeners / broken controls). Do not redesign.`
     );
   }
 

@@ -648,8 +648,10 @@ export async function executeAgentTask(
       throw new RunAbortedError(
         isSurgicalPatch
           ? "Engineering fix was truncated twice (incomplete file fences / broken JavaScript). " +
-            "Nothing safe was saved — try Resume or Continue with a narrower punch list."
-          : "Engineering output was truncated twice. Try Resume with a narrower goal.",
+            "Nothing safe was saved — use Continue with this app (new chat, keeps files) " +
+            "with a narrower punch list, or Resume on this chat (may re-truncate)."
+          : "Engineering output was truncated twice. " +
+            "Use Continue with this app for a fresh chat with your files, or Resume with a narrower goal.",
       );
     }
   }

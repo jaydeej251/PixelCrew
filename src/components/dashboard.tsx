@@ -74,6 +74,8 @@ import {
   buildCarryForwardSummary,
   buildContinueCarryGoal,
   defaultContinueChangesDraft,
+  shouldForceContinueCarry,
+  shouldOfferContinueCarry,
 } from "@/lib/run-continue";
 
 /** Strip nested follow-up suffixes so Request changes stays on the original brief. */
@@ -174,6 +176,8 @@ export function Dashboard() {
   const [runModel, setRunModel] = useState("mock");
   const [runError, setRunError] = useState("");
   const [tokenSpendGate, setTokenSpendGate] = useState<"soft" | "hard" | null>(null);
+  /** When true, follow-up Start uses new-chat continue-carry (like hard gate). */
+  const [forceContinueCarry, setForceContinueCarry] = useState(false);
   const [autoHireConfirm, setAutoHireConfirm] = useState<{
     provider: string;
     model: string;
@@ -401,6 +405,7 @@ export function Dashboard() {
       setDeliverableAction(null);
       setDeliverableSheetBusy(false);
       setDeliverableSheetError("");
+      setForceContinueCarry(false);
       applyRunDetail(run);
       setMobilePane("work");
     },
@@ -415,6 +420,7 @@ export function Dashboard() {
     setDeliverableAction(null);
     setDeliverableSheetBusy(false);
     setDeliverableSheetError("");
+    setForceContinueCarry(false);
     setArtifacts([]);
     setTasks([]);
     setRunStats({ totalTokens: 0, estCostUsd: 0 });
@@ -433,6 +439,7 @@ export function Dashboard() {
     if (deliverableSheetBusy) return;
     setDeliverableAction(null);
     setDeliverableSheetError("");
+    setForceContinueCarry(false);
     setAutoHireConfirm(null);
   }, [deliverableSheetBusy]);
 
@@ -441,9 +448,16 @@ export function Dashboard() {
       setNewChatDialogOpen(true);
       return;
     }
+    const offerCarry = shouldOfferContinueCarry({
+      runFailed: runOutcome === "failed",
+      tokenSpendGate,
+      runError,
+      hasPreviewableApp: hasPreviewableApp(artifacts, ceoGoal),
+    });
+    setForceContinueCarry(offerCarry);
     setDeliverableSheetError("");
     setDeliverableAction("follow-up");
-  }, [running]);
+  }, [running, runOutcome, tokenSpendGate, runError, artifacts, ceoGoal]);
 
   const startRedesignChat = useCallback(() => {
     if (running) {
@@ -689,6 +703,7 @@ export function Dashboard() {
     setDeliverableAction(null);
     setDeliverableSheetBusy(false);
     setDeliverableSheetError("");
+    setForceContinueCarry(false);
     setAutoHireConfirm(null);
     setRunId(createdRunId);
     setStoredActiveRunId(createdRunId);
@@ -822,8 +837,12 @@ export function Dashboard() {
       return;
     }
 
-    // Request changes (soft gate): same chat via iterate. Hard gate uses continue-carry below.
-    if (deliverableAction === "follow-up" && tokenSpendGate !== "hard") {
+    // Request changes: same chat via iterate unless hard gate / continue-preferred force carry.
+    const useContinueCarry = shouldForceContinueCarry({
+      tokenSpendGate,
+      forceContinueCarry,
+    });
+    if (deliverableAction === "follow-up" && !useContinueCarry) {
       if (!runId) {
         setDeliverableSheetError("Open a finished chat first, then request changes.");
         return;
@@ -861,6 +880,7 @@ export function Dashboard() {
         return;
       }
       setDeliverableAction(null);
+      setForceContinueCarry(false);
       setDeliverableSheetBusy(false);
       setDeliverableSheetError("");
       if (typeof json.ceoGoal === "string" && json.ceoGoal) setCeoGoal(json.ceoGoal);
@@ -1514,7 +1534,8 @@ export function Dashboard() {
                             "Something went wrong before the team finished."}
                         </p>
                         {(isQaReworkExhaustedMessage(runError) ||
-                          hasPreviewableApp(artifacts, ceoGoal)) && (
+                          hasPreviewableApp(artifacts, ceoGoal)) &&
+                          runId && (
                           <RunDeliverableActions
                             runId={runId}
                             artifacts={artifacts}
@@ -1526,29 +1547,74 @@ export function Dashboard() {
                           />
                         )}
                         <div className="mt-2 flex flex-wrap gap-2">
-                          <Button
-                            type="button"
-                            variant="primary"
-                            className="!h-8 !px-3"
-                            onClick={() => void resumeRun()}
-                          >
-                            {isQaReworkExhaustedMessage(runError)
-                              ? "Resume (recheck QA first)"
-                              : "Resume"}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            className="!h-8 !px-3"
-                            onClick={startRedesignChat}
-                          >
-                            Restart
-                          </Button>
+                          {shouldOfferContinueCarry({
+                            runFailed: true,
+                            tokenSpendGate: null,
+                            runError,
+                            hasPreviewableApp: hasPreviewableApp(artifacts, ceoGoal),
+                          }) ? (
+                            <>
+                              <Button
+                                type="button"
+                                variant="primary"
+                                className="!h-8 !px-3"
+                                onClick={startFollowUpChat}
+                              >
+                                Continue with this app
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                className="!h-8 !px-3"
+                                onClick={() => void resumeRun()}
+                              >
+                                {isQaReworkExhaustedMessage(runError)
+                                  ? "Resume (recheck QA first)"
+                                  : "Resume"}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                className="!h-8 !px-3"
+                                onClick={startRedesignChat}
+                              >
+                                Restart
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <Button
+                                type="button"
+                                variant="primary"
+                                className="!h-8 !px-3"
+                                onClick={() => void resumeRun()}
+                              >
+                                {isQaReworkExhaustedMessage(runError)
+                                  ? "Resume (recheck QA first)"
+                                  : "Resume"}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                className="!h-8 !px-3"
+                                onClick={startRedesignChat}
+                              >
+                                Restart
+                              </Button>
+                            </>
+                          )}
                         </div>
                         <p className="mt-2 text-[11px] text-zinc-500">
-                          {isQaReworkExhaustedMessage(runError)
-                            ? "Preview keeps what was built. Resume first re-checks QA with full files (may PASS). If still FAIL, opens two more fix rounds. Restart opens a new brief."
-                            : "Resume continues this chat. Restart opens a new brief."}
+                          {shouldOfferContinueCarry({
+                            runFailed: true,
+                            tokenSpendGate: null,
+                            runError,
+                            hasPreviewableApp: hasPreviewableApp(artifacts, ceoGoal),
+                          })
+                            ? "Continue copies your current files into a new chat (uses one monthly run). Resume stays on this chat. Restart opens a new brief."
+                            : isQaReworkExhaustedMessage(runError)
+                              ? "Preview keeps what was built. Resume first re-checks QA with full files (may PASS). If still FAIL, opens two more fix rounds. Restart opens a new brief."
+                              : "Resume continues this chat. Restart opens a new brief."}
                         </p>
                       </Alert>
                     )}
@@ -1859,10 +1925,14 @@ export function Dashboard() {
           open
           mode={deliverableAction}
           priorBrief={baseGoalFromRunGoal(ceoGoal)}
-          sameChatIterate={deliverableAction === "follow-up" && tokenSpendGate !== "hard"}
+          sameChatIterate={
+            deliverableAction === "follow-up" &&
+            !shouldForceContinueCarry({ tokenSpendGate, forceContinueCarry })
+          }
           initialDraft={
             deliverableAction === "follow-up"
-              ? tokenSpendGate === "hard" || isQaReworkExhaustedMessage(runError)
+              ? shouldForceContinueCarry({ tokenSpendGate, forceContinueCarry }) ||
+                isQaReworkExhaustedMessage(runError)
                 ? defaultContinueChangesDraft({
                     artifacts,
                     tasks,

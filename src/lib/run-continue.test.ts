@@ -6,11 +6,14 @@ import {
   buildCarryForwardSummary,
   buildContinueCarryGoal,
   defaultContinueChangesDraft,
+  isTruncationAbortMessage,
   listShippedCodePaths,
   seedCarryForwardArtifacts,
+  shouldForceContinueCarry,
+  shouldOfferContinueCarry,
   CARRY_FORWARD_SUMMARY_TITLE,
 } from "./run-continue";
-import { INITIAL_QA_TITLE } from "./qa-verdict";
+import { INITIAL_QA_TITLE, qaReworkExhaustedMessage } from "./qa-verdict";
 
 describe("run-continue carry-forward", () => {
   it("lists shipped code paths only", () => {
@@ -76,6 +79,17 @@ describe("run-continue carry-forward", () => {
     assert.match(draft, /do not redesign/i);
   });
 
+  it("prefills truncation-aware draft when no QA punch list", () => {
+    const draft = defaultContinueChangesDraft({
+      artifacts: [{ type: "code", filePath: "app.js", content: "stub" }],
+      runError:
+        "Engineering fix was truncated twice (incomplete file fences / broken JavaScript). " +
+        "Nothing safe was saved — try Resume or Continue with this app.",
+    });
+    assert.match(draft, /truncated|carried/i);
+    assert.match(draft, /do not redesign/i);
+  });
+
   it("seeds code plus carry summary artifact rows", () => {
     const rows = seedCarryForwardArtifacts({
       parentRunId: "parent-1",
@@ -93,5 +107,94 @@ describe("run-continue carry-forward", () => {
     assert.equal(rows[0]!.filePath, "index.html");
     assert.equal(rows[1]!.title, CARRY_FORWARD_SUMMARY_TITLE);
     assert.match(rows[1]!.content, /index\.html/);
+  });
+});
+
+describe("continue-preferred / force continue-carry", () => {
+  it("detects truncation abort messages", () => {
+    assert.equal(
+      isTruncationAbortMessage(
+        "Engineering fix was truncated twice. Nothing safe was saved — try Resume.",
+      ),
+      true,
+    );
+    assert.equal(isTruncationAbortMessage("Network timeout"), false);
+    assert.equal(isTruncationAbortMessage(""), false);
+  });
+
+  it("offers Continue on hard gate and failed+previewable; not soft or no app", () => {
+    assert.equal(
+      shouldOfferContinueCarry({
+        runFailed: true,
+        tokenSpendGate: "hard",
+        hasPreviewableApp: true,
+        runError: "Token spend limit reached",
+      }),
+      true,
+    );
+    assert.equal(
+      shouldOfferContinueCarry({
+        runFailed: true,
+        tokenSpendGate: null,
+        hasPreviewableApp: true,
+        runError: "Engineering fix was truncated twice. Nothing safe was saved.",
+      }),
+      true,
+    );
+    assert.equal(
+      shouldOfferContinueCarry({
+        runFailed: true,
+        tokenSpendGate: null,
+        hasPreviewableApp: true,
+        runError: qaReworkExhaustedMessage(2),
+      }),
+      true,
+    );
+    assert.equal(
+      shouldOfferContinueCarry({
+        runFailed: true,
+        tokenSpendGate: "soft",
+        hasPreviewableApp: true,
+        runError: "soft pause",
+      }),
+      false,
+    );
+    assert.equal(
+      shouldOfferContinueCarry({
+        runFailed: true,
+        tokenSpendGate: null,
+        hasPreviewableApp: false,
+        runError: "truncated twice",
+      }),
+      false,
+    );
+    assert.equal(
+      shouldOfferContinueCarry({
+        runFailed: false,
+        tokenSpendGate: null,
+        hasPreviewableApp: true,
+        runError: "",
+      }),
+      false,
+    );
+  });
+
+  it("forces continue-carry for hard gate or explicit flag; never on soft", () => {
+    assert.equal(
+      shouldForceContinueCarry({ tokenSpendGate: "hard", forceContinueCarry: false }),
+      true,
+    );
+    assert.equal(
+      shouldForceContinueCarry({ tokenSpendGate: null, forceContinueCarry: true }),
+      true,
+    );
+    assert.equal(
+      shouldForceContinueCarry({ tokenSpendGate: null, forceContinueCarry: false }),
+      false,
+    );
+    assert.equal(
+      shouldForceContinueCarry({ tokenSpendGate: "soft", forceContinueCarry: true }),
+      false,
+    );
   });
 });
