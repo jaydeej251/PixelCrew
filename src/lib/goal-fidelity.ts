@@ -11,6 +11,18 @@ const GENERIC_HINTS = new Set([
   "UX",
   "JS",
   "MERN",
+  "JAVASCRIPT",
+  "TYPESCRIPT",
+  "NODEJS",
+  "NEXTJS",
+  "REACT",
+  "VUE",
+  "ANGULAR",
+  "PYTHON",
+  "LOCALSTORAGE",
+  "WEBASSEMBLY",
+  "GITHUB",
+  "OPENAI",
 ]);
 
 /** Pull likely product names from a CEO goal for plan and ship fidelity checks. */
@@ -21,6 +33,8 @@ export function productHintsFromGoal(goal: string): string[] {
     if (name.length < 3 || name.length > 48) return;
     if (GENERIC_HINTS.has(name.toUpperCase())) return;
     if (PLATFORM_BRAND.test(name)) return;
+    // Stack words often appear CamelCased in goals ("HTML/CSS/JavaScript").
+    if (/^(java|type|node|next|web|local|git|open)?script$/i.test(name)) return;
     hints.add(name);
   };
 

@@ -36,6 +36,16 @@ describe("filterAutoHireRoles", () => {
     assert.deepEqual(filtered, ["project_manager", "tech_architect", "designer"]);
   });
 
+  it("never drops mandatory QA from a staffing batch", () => {
+    const filtered = filterAutoHireRoles(
+      [{ position: "tech_architect" }],
+      ["engineer", "frontend_engineer", "qa_engineer"],
+    );
+    assert.ok(filtered.includes("qa_engineer"));
+    assert.ok(!filtered.includes("engineer"));
+    assert.ok(!filtered.includes("frontend_engineer"));
+  });
+
   it("does not re-hire engineer when senior already on roster", () => {
     const filtered = filterAutoHireRoles(
       [{ position: "tech_architect" }],

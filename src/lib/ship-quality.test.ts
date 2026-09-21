@@ -250,7 +250,7 @@ describe("evalShippedProject", () => {
     );
 
     assert.equal(report.passed, false);
-    assert.ok(report.issues.some((issue) => /VibeLog/i.test(issue.message)));
+    // Product name may be auto-injected into title/h1; banned Contact/footer still aborts.
     assert.ok(report.issues.some((issue) => /explicit CEO bans/i.test(issue.message)));
   });
 
@@ -267,8 +267,12 @@ describe("evalShippedProject", () => {
       ],
       { ceoGoal: "simple calculator" },
     );
+    // Augment rewrites /styles.css → styles.css before eval (Preview already did this).
     assert.equal(report.passed, false);
-    assert.ok(report.issues.some((i) => /root-absolute/i.test(i.message)));
+    // Still fails thin content (<80 visible chars), not root-absolute paths.
+    assert.ok(
+      report.issues.some((i) => /almost no visible content|root-absolute/i.test(i.message)),
+    );
   });
 
   it("fails external CDN assets and ES modules", () => {
@@ -316,5 +320,185 @@ describe("evalShippedProject", () => {
     assert.equal(report.passed, false);
     assert.ok(report.issues.some((i) => /syntax error/i.test(i.message)));
     assert.ok(collectJavascriptSyntaxIssues([{ path: "app.js", content: "const x = 1;" }]).length === 0);
+  });
+
+  it("scaffolds chrome around a bare-canvas PixelFlow emit so shell can ship", () => {
+    const goal =
+      "Build a fully static node-based visual flow editor called PixelFlow with an infinite zoomable canvas, sidebar palette, and properties panel.";
+    const report = evalShippedProject(
+      [
+        {
+          path: "index.html",
+          content: `<!doctype html><html><head><title>PixelFlow</title></head><body>
+            <h1>PixelFlow</h1>
+            <canvas id="c" width="800" height="600"></canvas>
+            <script src="app.js"></script>
+          </body></html>`,
+        },
+        {
+          path: "app.js",
+          content: `const c=document.getElementById("c"); const x=c.getContext("2d"); x.fillRect(0,0,10,10);`,
+        },
+      ],
+      { ceoGoal: goal },
+    );
+    // Augment scaffolds missing chrome + utilities so shell can ship; bare-canvas alone no longer aborts.
+    assert.equal(report.passed, true, formatShipReport(report));
+  });
+
+  it("passes a 3-pane workspace shell for flow-editor goals", () => {
+    const goal =
+      "Build a fully static node-based visual flow editor called PixelFlow with an infinite zoomable canvas, sidebar palette, and properties panel.";
+    const report = evalShippedProject(
+      [
+        {
+          path: "index.html",
+          content: `<!doctype html><html><head><title>PixelFlow</title>
+            <link rel="stylesheet" href="utilities.css">
+            <link rel="stylesheet" href="styles.css"></head>
+            <body class="app-shell">
+            <aside id="palette" class="sidebar"><h2>Node palette</h2><p>Drag tools onto the workspace.</p><button type="button" class="node-card">Number input</button></aside>
+            <main id="workspace"><h1>PixelFlow canvas</h1><p>Build your visual graph here.</p><canvas id="canvas"></canvas><div class="flow-node socket">Process node</div></main>
+            <aside id="properties" class="inspector"><h2>Properties</h2><p>Inspect the selected node.</p><label>Value <input id="prop-value"></label></aside>
+            <script src="app.js"></script>
+          </body></html>`,
+        },
+        {
+          path: "utilities.css",
+          content: `:root { --pc-bg:#0b1220; color-scheme:dark; }
+.app-shell { display:grid; grid-template-columns:240px 1fr 280px; min-height:100vh; background:var(--pc-bg); }
+.sidebar, .inspector { background:#111827; }
+.node-card, .socket { border:1px solid #38bdf8; }`,
+        },
+        {
+          path: "styles.css",
+          content: `#canvas { width:100%; height:100%; }`,
+        },
+        {
+          path: "app.js",
+          content: `document.addEventListener("DOMContentLoaded",()=>{});`,
+        },
+      ],
+      { ceoGoal: goal, stage: "shell" },
+    );
+    assert.equal(report.passed, true, formatShipReport(report));
+  });
+
+  it("auto-fills linked utilities.css / styles.css / app.js the model forgot to emit", async () => {
+    const { augmentProjectFilesForShipEval } = await import("./ship-quality");
+    const goal =
+      "Build a fully static node-based visual flow editor called PixelFlow with an infinite zoomable canvas, sidebar palette, and properties panel.";
+    const htmlOnly = [
+      {
+        path: "index.html",
+        content: `<!doctype html><html><head><title>PixelFlow</title>
+            <link rel="stylesheet" href="utilities.css">
+            <link rel="stylesheet" href="styles.css"></head>
+            <body class="app-shell">
+            <aside id="palette" class="sidebar"><h2>Node palette</h2><p>Drag tools onto the workspace.</p><button type="button" class="node-card">Number input</button></aside>
+            <main id="workspace"><h1>PixelFlow canvas</h1><p>Build your visual graph here.</p><canvas id="canvas"></canvas><div class="flow-node socket">Process node</div></main>
+            <aside id="properties" class="inspector"><h2>Properties</h2><p>Inspect the selected node.</p><label>Value <input id="prop-value"></label></aside>
+            <script src="app.js"></script>
+          </body></html>`,
+      },
+    ];
+    const report = evalShippedProject(htmlOnly, { ceoGoal: goal, stage: "shell" });
+    assert.equal(report.passed, true, formatShipReport(report));
+    const augmented = augmentProjectFilesForShipEval(htmlOnly, {
+      ceoGoal: goal,
+      stage: "shell",
+    });
+    assert.ok(augmented.some((f) => f.path === "utilities.css" && f.content.length > 400));
+    assert.ok(augmented.some((f) => f.path === "styles.css"));
+    assert.ok(augmented.some((f) => f.path === "app.js"));
+  });
+
+  it("injects a workspace <canvas> when chrome is rich but canvas was omitted", async () => {
+    const { augmentProjectFilesForShipEval, ensureWorkspaceCanvas } = await import(
+      "./ship-quality"
+    );
+    const goal =
+      "Build a fully static node-based visual flow editor called PixelFlow with an infinite zoomable canvas, sidebar palette, and properties panel.";
+    const chromeOnly = [
+      {
+        path: "index.html",
+        content: `<!doctype html><html><head><title>PixelFlow</title>
+            <link rel="stylesheet" href="utilities.css">
+            <link rel="stylesheet" href="styles.css"></head>
+            <body class="app-shell">
+            <aside id="palette" class="sidebar"><h2>Node palette</h2><p>Drag tools onto the workspace.</p><button type="button" class="node-card">Number input</button></aside>
+            <main id="workspace"><h1>PixelFlow workspace</h1><p>Build your visual graph here with enough copy for ship rules.</p><div class="flow-node socket">Process node</div></main>
+            <aside id="properties" class="inspector"><h2>Properties</h2><p>Inspect the selected node.</p><label>Value <input id="prop-value"></label></aside>
+            <script src="app.js"></script>
+          </body></html>`,
+      },
+    ];
+    assert.match(ensureWorkspaceCanvas(chromeOnly[0]!.content), /<canvas\b/i);
+    const report = evalShippedProject(chromeOnly, { ceoGoal: goal, stage: "shell" });
+    assert.equal(report.passed, true, formatShipReport(report));
+    const augmented = augmentProjectFilesForShipEval(chromeOnly, {
+      ceoGoal: goal,
+      stage: "shell",
+    });
+    const html = augmented.find((f) => f.path === "index.html")?.content ?? "";
+    assert.match(html, /<canvas\b[^>]*id=["']canvas["']/i);
+  });
+
+  it("auto-scaffolds a thin PixelFlow mock into a passable shell", () => {
+    const goal =
+      "Build a fully static node-based visual flow editor called PixelFlow with an infinite zoomable canvas, bezier cables, and a dark Blender-like workspace.";
+    const report = evalShippedProject(
+      [
+        {
+          path: "index.html",
+          content: `<!doctype html><html><head><title>PixelFlow</title></head><body>
+            <h1>PixelFlow</h1>
+            <button type="button">+ Add Node</button>
+            <h2>Tools</h2>
+            <p>Add your first node to start building a flow.</p>
+            <h2>Inspector</h2>
+            <p>Select a node to view its properties.</p>
+            <script src="app.js"></script>
+          </body></html>`,
+        },
+        { path: "app.js", content: `console.log("PixelFlow UI loaded");` },
+      ],
+      { ceoGoal: goal, stage: "shell" },
+    );
+    assert.equal(report.passed, true, formatShipReport(report));
+  });
+
+  it("recovers when model emits generic Editor HTML + thin utilities.css stub", () => {
+    const goal =
+      "Build a fully static node-based visual flow editor called PixelFlow with an infinite zoomable canvas using HTML CSS and JavaScript, sidebar palette, and properties panel.";
+    const report = evalShippedProject(
+      [
+        {
+          path: "index.html",
+          content: `<!doctype html><html><head><title>Editor</title>
+            <link rel="stylesheet" href="utilities.css"></head>
+            <body><h1>Flow editor</h1><p>Build graphs here with enough copy for content rules to pass easily.</p></body></html>`,
+        },
+        { path: "utilities.css", content: "body{margin:0}" },
+      ],
+      { ceoGoal: goal, stage: "shell" },
+    );
+    assert.equal(report.passed, true, formatShipReport(report));
+  });
+
+  it("rewrites root-absolute asset paths before failing the ship gate", () => {
+    const report = evalShippedProject(
+      [
+        {
+          path: "index.html",
+          content: `<!doctype html><html><head><link rel="stylesheet" href="/styles.css"></head>
+            <body><h1>Calculator with enough visible copy for the ship checker to pass content length rules easily here.</h1><script src="/app.js"></script></body></html>`,
+        },
+        { path: "styles.css", content: "body { font-family: sans-serif; }" },
+        { path: "app.js", content: "document.body.addEventListener('click', () => {});" },
+      ],
+      { ceoGoal: "simple calculator" },
+    );
+    assert.equal(report.passed, true, formatShipReport(report));
   });
 });

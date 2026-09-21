@@ -1,6 +1,10 @@
 import { injectBaseHref } from "./project-files";
 import { inlineLinkedProjectAssets } from "./preview-inline";
 import { injectPreviewShim } from "./preview-shim";
+import {
+  ensureHtmlLinksUtilitiesCss,
+  UTILITIES_CSS_PATH,
+} from "./pixel-utilities-css";
 
 /** Convert a project-root absolute path (/styles.css) to a path relative to filePath. */
 export function projectPathToRelative(absolutePath: string, filePath: string): string {
@@ -57,6 +61,11 @@ export function preparePreviewHtml(
   files: Map<string, string>,
 ): string {
   let out = rewriteRootAbsoluteAssetUrls(html, filePath);
+  // If the pack exists in the project but HTML forgot the <link>, Preview would look
+  // like unstyled default browser chrome (white Times New Roman). Fix at serve time.
+  if (files.has(UTILITIES_CSS_PATH)) {
+    out = ensureHtmlLinksUtilitiesCss(out);
+  }
   out = inlineLinkedProjectAssets(out, filePath, files);
   out = injectBaseHref(out, runId, filePath, baseRoot);
   out = injectPreviewShim(out);

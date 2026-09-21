@@ -6,6 +6,12 @@
 export const TOKEN_SOFT_GATE = 100_000;
 
 /**
+ * Continue / Request-changes chats already paid for a prior build.
+ * Soft-pause earlier so a non-converging punch loop cannot silently hit 100k.
+ */
+export const TOKEN_SOFT_GATE_FOLLOW_UP = 48_000;
+
+/**
  * Hard stop after soft confirm.
  * Pattern: Claude Code / agent CLIs warn then hard-cap spend; Cursor shows usage
  * continuously. PixelCrew is BYOK — two gates beat a silent hard fail.
@@ -18,12 +24,34 @@ export const TOKEN_HARD_GATE = 256_000;
 export const TOKEN_SOFT_GATE_TITLE = "Token spend soft gate";
 export const TOKEN_SPEND_CONFIRMED_TITLE = "Token spend confirmed";
 
+/** Titles that mark a run as continue-carry / Request-changes (tighter soft gate). */
+export const FOLLOW_UP_TOKEN_ARTIFACT_TITLES = new Set([
+  "Follow-up from prior run",
+  "Carry-forward summary",
+]);
+
 export type TokenSpendGateKind = "soft" | "hard";
 
 export type TokenSpendDecision =
   | { action: "allow" }
   | { action: "soft_gate"; tokens: number }
   | { action: "hard_gate"; tokens: number };
+
+export function isFollowUpTokenBudget(
+  artifacts?: Array<{ title: string }> | null,
+): boolean {
+  return Boolean(
+    artifacts?.some((a) => FOLLOW_UP_TOKEN_ARTIFACT_TITLES.has(a.title)),
+  );
+}
+
+export function softGateThreshold(
+  artifacts?: Array<{ title: string }> | null,
+): number {
+  return isFollowUpTokenBudget(artifacts)
+    ? TOKEN_SOFT_GATE_FOLLOW_UP
+    : TOKEN_SOFT_GATE;
+}
 
 export function hasConfirmedSoftTokenSpend(
   artifacts?: Array<{ title: string }> | null,
@@ -40,8 +68,8 @@ export function hasOpenSoftTokenGate(
 }
 
 /**
- * Soft gate at TOKEN_SOFT_GATE until the CEO confirms; hard stop at TOKEN_HARD_GATE
- * even after confirm.
+ * Soft gate until the CEO confirms; hard stop at TOKEN_HARD_GATE even after confirm.
+ * Continue chats soft-gate earlier (TOKEN_SOFT_GATE_FOLLOW_UP).
  */
 export function decideTokenSpendGate(
   totalTokens: number,
@@ -50,7 +78,8 @@ export function decideTokenSpendGate(
   if (totalTokens >= TOKEN_HARD_GATE) {
     return { action: "hard_gate", tokens: totalTokens };
   }
-  if (totalTokens >= TOKEN_SOFT_GATE && !hasConfirmedSoftTokenSpend(artifacts)) {
+  const soft = softGateThreshold(artifacts);
+  if (totalTokens >= soft && !hasConfirmedSoftTokenSpend(artifacts)) {
     return { action: "soft_gate", tokens: totalTokens };
   }
   return { action: "allow" };

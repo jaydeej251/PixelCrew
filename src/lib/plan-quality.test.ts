@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { evalPlanQuality, formatPlanReport } from "./plan-quality";
+import {
+  ensurePlanPassesRoleAssignments,
+  evalPlanQuality,
+  formatPlanReport,
+  repairPlanRoleAssignments,
+} from "./plan-quality";
 import { synthesizerSystemPrompt } from "./prompts";
 
 const GOOD_PLAN = `# Goal
@@ -53,6 +58,32 @@ describe("evalPlanQuality", () => {
     assert.equal(report.passed, true, formatPlanReport(report));
   });
 
+  it("allows Product to own hero/footer copy without treating it as HTML work", () => {
+    const plan = `# Goal
+Build TaskQuest, a retro RPG task app with enough plan body for the checker.
+
+# Stack
+Static HTML + CSS + JS with localStorage.
+
+# UX
+Dashboard and quest board.
+
+# Features
+Quests, XP, inventory.
+
+# Out of scope
+No native apps.
+
+# Task list
+- Product Manager: finalize hero section copy and footer legal wording.
+- UI/UX Designer: tokens and layout.
+- Senior Developer: file shape.
+- Engineer: build and test the static files.
+`;
+    const report = evalPlanQuality(plan);
+    assert.equal(report.passed, true, formatPlanReport(report));
+  });
+
   it("fails the inflated 7-day agency plan from the review", () => {
     const report = evalPlanQuality(AGENCY_PLAN);
     assert.equal(report.passed, false);
@@ -61,6 +92,44 @@ describe("evalPlanQuality", () => {
     assert.ok(report.issues.some((i) => /product/i.test(i.message)));
     assert.ok(report.issues.some((i) => /localStorage/i.test(i.message)));
     assert.ok(report.issues.some((i) => /inline js/i.test(i.message)));
+  });
+
+  it("repairs Product-builds-HTML task lines so the run can continue", () => {
+    const plan = `# Goal
+Build PulseBoard analytics with enough text for plan quality length checks to pass here.
+
+# Stack
+Static HTML + CSS + JS with localStorage.
+
+# UX
+Dashboard charts.
+
+# Features
+Metrics cards.
+
+# Out of scope
+No backend.
+
+# Task list
+- Product Manager: Build Hero Section in HTML
+- UI/UX Designer: tokens.
+- Senior Developer: file shape.
+`;
+    const before = evalPlanQuality(plan);
+    assert.equal(before.passed, false);
+    assert.ok(before.issues.some((i) => /product/i.test(i.message)));
+
+    const fixed = ensurePlanPassesRoleAssignments(plan);
+    assert.equal(fixed.repaired, true);
+    assert.equal(fixed.report.passed, true, formatPlanReport(fixed.report));
+    assert.match(fixed.plan, /Engineer: build and test/i);
+    assert.doesNotMatch(fixed.plan, /Product Manager: Build Hero Section in HTML/i);
+  });
+
+  it("repairPlanRoleAssignments rewrites clear mis-assignments", () => {
+    const out = repairPlanRoleAssignments(AGENCY_PLAN);
+    assert.match(out, /Product Manager: audience/i);
+    assert.match(out, /Senior Developer: stack/i);
   });
 
   it("fails when a named product goal is merged into a portfolio plan", () => {

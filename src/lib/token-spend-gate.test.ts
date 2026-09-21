@@ -6,6 +6,7 @@ import {
   hasOpenSoftTokenGate,
   TOKEN_HARD_GATE,
   TOKEN_SOFT_GATE,
+  TOKEN_SOFT_GATE_FOLLOW_UP,
   TOKEN_SOFT_GATE_TITLE,
   TOKEN_SPEND_CONFIRMED_TITLE,
 } from "./token-spend-gate";
@@ -22,6 +23,21 @@ describe("token spend gates", () => {
     });
     assert.deepEqual(
       decideTokenSpendGate(TOKEN_SOFT_GATE, [{ title: TOKEN_SPEND_CONFIRMED_TITLE }]),
+      { action: "allow" },
+    );
+  });
+
+  it("soft-gates continue chats earlier", () => {
+    assert.deepEqual(
+      decideTokenSpendGate(TOKEN_SOFT_GATE_FOLLOW_UP, [
+        { title: "Follow-up from prior run" },
+      ]),
+      { action: "soft_gate", tokens: TOKEN_SOFT_GATE_FOLLOW_UP },
+    );
+    assert.deepEqual(
+      decideTokenSpendGate(TOKEN_SOFT_GATE_FOLLOW_UP - 1, [
+        { title: "Carry-forward summary" },
+      ]),
       { action: "allow" },
     );
   });
@@ -47,8 +63,10 @@ describe("token spend gates", () => {
 
   it("uses Claude-style warn-then-cap spacing", () => {
     assert.equal(TOKEN_SOFT_GATE, 100_000);
+    assert.equal(TOKEN_SOFT_GATE_FOLLOW_UP, 48_000);
     assert.equal(TOKEN_HARD_GATE, 256_000);
     assert.ok(TOKEN_HARD_GATE > TOKEN_SOFT_GATE);
+    assert.ok(TOKEN_SOFT_GATE > TOKEN_SOFT_GATE_FOLLOW_UP);
     // Room for a full office + several QA fix rounds before hard stop.
     assert.ok(TOKEN_HARD_GATE - TOKEN_SOFT_GATE >= 100_000);
   });

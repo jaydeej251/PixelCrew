@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import type { ProviderType } from "@prisma/client";
+import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
 import { runOrchestrator } from "@/lib/orchestrator";
 import { prepareWorkspaceBrainsForRun } from "@/lib/run-setup";
-import { isResumable, prepareRunForResume, resumePhase } from "@/lib/run-resume";
 import { assertRunAccess, requireProductSession } from "@/lib/auth";
 import { apiErrorResponse } from "@/lib/api-error";
 import {
@@ -13,17 +13,24 @@ import {
   TOKEN_SPEND_CONFIRMED_TITLE,
 } from "@/lib/token-spend-gate";
 import {
-  countQaReworkRounds,
-  QA_MAX_REWORK_ROUNDS,
-  QA_REWORK_EXTENDED_TITLE,
-  qaReworkRoundLimit,
-} from "@/lib/qa-verdict";
-import {
   parseRunBrain,
   RUN_BRAIN_TITLE,
   serializeRunBrain,
 } from "@/lib/run-brain";
+import { canIterateOnRun, prepareRunForIterate } from "@/lib/run-iterate";
 
+const iterateSchema = z
+  .object({
+    changes: z.string().trim().min(1).max(8_000),
+    provider: z.string().optional(),
+    model: z.string().trim().min(1).max(200).optional(),
+    confirmTokenSpend: z.boolean().optional(),
+  })
+  .strict();
+
+/**
+ * Same-chat Request changes — patches the current run's app (no new monthly run).
+ */
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ runId: string }> },
@@ -33,45 +40,45 @@ export async function POST(
     const { runId } = await params;
     await assertRunAccess(runId, session);
 
+    const parsed = iterateSchema.safeParse(await req.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: "Describe what you want changed." },
+        { status: 400 },
+      );
+    }
+
     const run = await prisma.run.findUnique({
       where: { id: runId },
       include: {
-        tasks: { select: { status: true, title: true } },
-        artifacts: { select: { id: true, title: true, content: true } },
+        artifacts: {
+          select: { id: true, type: true, title: true, content: true, filePath: true },
+        },
       },
     });
     if (!run || run.archivedAt) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    if (run.status === "paused") {
-      return NextResponse.json(
-        { error: "Plan is in review. Publish it to continue building." },
-        { status: 400 },
-      );
-    }
-
     if (run.status === "running" || run.status === "pending") {
       return NextResponse.json({ error: "This chat is already running" }, { status: 409 });
     }
 
-    if (!isResumable(run)) {
-      return NextResponse.json({ error: "This chat cannot be resumed" }, { status: 400 });
+    if (run.status === "paused") {
+      return NextResponse.json(
+        { error: "Plan is in review. Publish it before requesting changes." },
+        { status: 400 },
+      );
     }
 
-    let provider: ProviderType | undefined;
-    let model: string | undefined;
-    let confirmTokenSpend = false;
-    try {
-      const body = await req.json();
-      if (typeof body.provider === "string") provider = body.provider as ProviderType;
-      if (typeof body.model === "string") model = body.model;
-      if (body.confirmTokenSpend === true) confirmTokenSpend = true;
-    } catch {
-      // empty body is fine — fall back to the workspace's current agent settings
+    if (!canIterateOnRun(run)) {
+      return NextResponse.json(
+        { error: "Request changes needs a finished app on this chat. Finish a build first." },
+        { status: 400 },
+      );
     }
 
-    if (hasOpenSoftTokenGate(run.artifacts) && !confirmTokenSpend) {
+    if (hasOpenSoftTokenGate(run.artifacts) && parsed.data.confirmTokenSpend !== true) {
       return NextResponse.json(
         {
           error:
@@ -82,6 +89,8 @@ export async function POST(
       );
     }
 
+    let provider = parsed.data.provider as ProviderType | undefined;
+    let model = parsed.data.model;
     if (!provider) {
       const stored = parseRunBrain(
         run.artifacts.find((a) => a.title === RUN_BRAIN_TITLE)?.content,
@@ -102,6 +111,21 @@ export async function POST(
     const brains = await prepareWorkspaceBrainsForRun(run.workspaceId, provider, model);
     if (!brains.ok) {
       return NextResponse.json({ error: brains.error }, { status: 400 });
+    }
+
+    if (parsed.data.confirmTokenSpend === true && hasOpenSoftTokenGate(run.artifacts)) {
+      await prisma.artifact.create({
+        data: {
+          runId,
+          type: "other",
+          title: TOKEN_SPEND_CONFIRMED_TITLE,
+          content: JSON.stringify({
+            confirmedThrough: TOKEN_HARD_GATE,
+            at: new Date().toISOString(),
+            tokensAtConfirm: run.totalTokens,
+          }),
+        },
+      });
     }
 
     const existingBrain = run.artifacts.find((a) => a.title === RUN_BRAIN_TITLE);
@@ -125,42 +149,14 @@ export async function POST(
       });
     }
 
-    if (confirmTokenSpend && hasOpenSoftTokenGate(run.artifacts)) {
-      await prisma.artifact.create({
-        data: {
-          runId,
-          type: "other",
-          title: TOKEN_SPEND_CONFIRMED_TITLE,
-          content: JSON.stringify({
-            confirmedThrough: TOKEN_HARD_GATE,
-            at: new Date().toISOString(),
-            tokensAtConfirm: run.totalTokens,
-          }),
-        },
-      });
-    }
-
-    // Resume after QA exhaust = CEO wants more fix rounds (not a token issue).
-    const usedRounds = countQaReworkRounds(run.tasks);
-    const roundLimit = qaReworkRoundLimit(run.artifacts);
-    if (usedRounds >= roundLimit) {
-      await prisma.artifact.create({
-        data: {
-          runId,
-          type: "other",
-          title: QA_REWORK_EXTENDED_TITLE,
-          content: JSON.stringify({
-            extraRounds: QA_MAX_REWORK_ROUNDS,
-            previousLimit: roundLimit,
-            honestRecheckPending: true,
-            at: new Date().toISOString(),
-          }),
-        },
-      });
-    }
-
-    // Same run row — does not create a Run, so checkPlanLimits (runs/month) is not charged.
-    await prepareRunForResume(runId, run.workspaceId, provider, model);
+    const { mergedGoal } = await prepareRunForIterate({
+      runId,
+      workspaceId: run.workspaceId,
+      existingGoal: run.ceoGoal,
+      changes: parsed.data.changes,
+      provider: brains.provider,
+      model: brains.model,
+    });
 
     if (process.env.INNGEST_EVENT_KEY) {
       await inngest.send({ name: "run/started", data: { runId } });
@@ -170,10 +166,10 @@ export async function POST(
 
     return NextResponse.json({
       runId,
-      phase: resumePhase(run.artifacts),
+      sameChat: true,
+      ceoGoal: mergedGoal,
       provider: brains.provider,
       model: brains.model,
-      qaReworkExtended: usedRounds >= roundLimit,
     });
   } catch (err) {
     return apiErrorResponse(err);

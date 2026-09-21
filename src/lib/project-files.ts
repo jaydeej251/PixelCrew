@@ -158,6 +158,49 @@ export function toFileFences(files: Record<string, string> | ProjectFile[]): str
     .join("\n\n");
 }
 
+/** Overlay rewrite fences onto a prior emit (path → last write wins).
+ *  Protects HTML: a thin stub rewrite must not wipe a contentful first page
+ *  (common when the model was told “emit ONLY failing files” after a missing-asset FAIL).
+ *  Protects JS: a shell stub / tiny rewrite must not wipe a working app.js
+ *  (Request-changes often re-emits HTML+CSS and a placeholder script). */
+export function mergeProjectFiles(
+  base: ProjectFile[],
+  overlay: ProjectFile[],
+): ProjectFile[] {
+  const visibleLen = (html: string) =>
+    html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().length;
+  const isTinyJsStub = (js: string) => {
+    const trimmed = js.trim();
+    if (trimmed.length < 120) return true;
+    return (
+      /UI shell ready/i.test(trimmed) &&
+      !/\baddEventListener\b/.test(trimmed) &&
+      trimmed.length < 400
+    );
+  };
+
+  const map = new Map<string, string>();
+  for (const f of base) map.set(f.path, f.content);
+  for (const f of overlay) {
+    const prev = map.get(f.path);
+    if (prev && /\.html?$/i.test(f.path)) {
+      const prevLen = visibleLen(prev);
+      const nextLen = visibleLen(f.content);
+      if (prevLen > 80 && nextLen < Math.max(80, prevLen * 0.5)) {
+        continue;
+      }
+    }
+    if (prev && /\.m?js$/i.test(f.path)) {
+      if (isTinyJsStub(f.content) && !isTinyJsStub(prev)) continue;
+      if (prev.length > 400 && f.content.length < Math.max(120, prev.length * 0.25)) {
+        continue;
+      }
+    }
+    map.set(f.path, f.content);
+  }
+  return [...map.entries()].map(([path, content]) => ({ path, content }));
+}
+
 export function contentTypeFor(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   const map: Record<string, string> = {
@@ -430,7 +473,9 @@ export function hasPreviewableApp(artifacts: ArtifactLike[], ceoGoal = ""): bool
   );
 }
 
-/** README / package.json / index.html the packager must add because agents omitted them. */
+import { utilitiesCssFile, UTILITIES_CSS_PATH } from "./pixel-utilities-css";
+
+/** README / package.json / index.html / utilities.css the packager must add because agents omitted them. */
 export function scaffoldGaps(opts: {
   ceoGoal: string;
   artifacts: ArtifactLike[];
@@ -445,6 +490,12 @@ export function scaffoldGaps(opts: {
     if (!prior || (key === "index.html" && isPackagerFallbackHtml(prior))) {
       gaps.push({ path: key, content: next });
     }
+  }
+  // Always ensure the local Tailwind-lite pack exists when any HTML shipped.
+  const hasHtml = [...existing.keys()].some((p) => /\.html?$/i.test(p)) ||
+    gaps.some((g) => /\.html?$/i.test(g.path));
+  if (hasHtml && !existing.has(UTILITIES_CSS_PATH)) {
+    gaps.push(utilitiesCssFile());
   }
   return gaps;
 }
